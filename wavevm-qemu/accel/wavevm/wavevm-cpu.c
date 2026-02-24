@@ -167,14 +167,6 @@ static int remote_rpc_policy(int cpu_index) {
 
 static struct wavevm_policy_ops ops = { .schedule_policy = remote_rpc_policy };
 
-static uint32_t wavevm_pick_target_slave(const CPUState *cpu)
-{
-    if (g_wvm_local_split > 0 && cpu->cpu_index >= g_wvm_local_split) {
-        return 1;
-    }
-    return 0;
-}
-
 static bool wavevm_valid_io_exit(const struct kvm_run *run)
 {
     if (run->io.size != 1 && run->io.size != 2 &&
@@ -247,7 +239,7 @@ static void wavevm_remote_exec(CPUState *cpu) {
         struct wvm_ipc_cpu_run_ack ack;
         memset(&req, 0, sizeof(req));
         
-        req.slave_id = wavevm_pick_target_slave(cpu);
+        req.slave_id = WVM_NODE_AUTO_ROUTE;
         req.vcpu_index = cpu->cpu_index;
 
         // 2. 序列化 CPU 状态
@@ -357,7 +349,7 @@ static void wavevm_remote_exec(CPUState *cpu) {
     struct wvm_ipc_cpu_run_ack ack;
     memset(&req, 0, sizeof(req));
 
-    req.slave_id = wavevm_pick_target_slave(cpu);
+    req.slave_id = WVM_NODE_AUTO_ROUTE;
     req.vcpu_index = cpu->cpu_index;
 
     // 1. 序列化 CPU 状态 (Serialization)
