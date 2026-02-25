@@ -7602,6 +7602,13 @@ void* client_handler(void *socket_desc) {
                 break;
             }
             case WVM_IPC_TYPE_BLOCK_IO: {
+                // 结构体必须与 QEMU 端严格对齐 (Packed 13 Bytes)
+                struct wvm_ipc_block_req {
+                    uint64_t lba;
+                    uint32_t len;
+                    uint8_t  is_write;
+                    uint8_t  data[0];
+                } __attribute__((packed));
                 struct wvm_ipc_block_req *req = (void*)payload_buf;
                 uint32_t target = wvm_get_storage_node_id(req->lba);
                 
