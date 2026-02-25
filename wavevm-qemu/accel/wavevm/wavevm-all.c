@@ -858,3 +858,91 @@ int wvm_send_rpc_sync(uint16_t msg_type, void *payload, size_t len) {
     if (needs_close) close(fd);
     return -1; // Fail/Timeout
 }
+
+// -----------------------------------------------------------
+// [V30 BLOCK IO FINAL] 分布式存储 IPC 发送实现 (Thread-Safe)
+// -----------------------------------------------------------
+
+// 结构体必须与 Daemon 端严格对齐 (Packed 13 Bytes)
+struct wvm_ipc_block_req {
+    uint64_t lba;
+    uint32_t len;
+    uint8_t  is_write;
+    uint8_t  data[0];
+} __attribute__((packed));
+
+/*
+ * [物理意图] 将 virtio-blk 的 IO 请求序列化并通过 IPC 管道发送给 Master Daemon。
+ * [关键逻辑] 封装 WVM_IPC_TYPE_BLOCK_IO 消息头，如果是写操作则携带 Payload。
+ * [后果] 这是存储拦截的"出口"。没有它，wavevm-block-hook.c 拦截下来的 IO 请求就烂在肚子里了。
+ */
+int wvm_send_ipc_block_io(uint64_t lba, void *buf, uint32_t len, int is_write) {
+    WaveVMAccelState *s = WAVEVM_ACCEL(current_machine->accelerator);
+    
+    // 1. 建立独立连接 (Thread-Safe)
+    int fd = -1;
+    char *role = getenv("WVM_ROLE");
+    
+    // 如果是 Slave 模式，master_sock 是继承来的 UDP socket，不能用于 IPC
+    // Slave 模式下 Block IO 应该走本地转发，但目前架构主要支持 Master 发起 Block IO
+    if (role && strcmp(role, "SLAVE") == 0) {
+        return -1; // Slave 不直接发起存储请求
+    } else {
+        // Master 模式：建立临时 IPC 连接
+        fd = connect_to_master_helper();
+    }
+
+    if (fd < 0) return -1;
+
+    // 2. 计算包大小
+    size_t meta_size = sizeof(struct wvm_ipc_block_req);
+    size_t payload_len = meta_size + (is_write ? len : 0);
+    size_t total_size = sizeof(struct wvm_ipc_header_t) + payload_len;
+
+    // 3. 分配缓冲区
+    uint8_t *buffer = g_malloc(total_size);
+    if (!buffer) {
+        close(fd);
+        return -1;
+    }
+
+    // 4. 填充头部
+    struct wvm_ipc_header_t *ipc_hdr = (struct wvm_ipc_header_t *)buffer;
+    ipc_hdr->type = WVM_IPC_TYPE_BLOCK_IO; // Type 7
+    ipc_hdr->len = payload_len;
+
+    // 5. 填充请求体
+    struct wvm_ipc_block_req *req = (struct wvm_ipc_block_req *)(buffer + sizeof(struct wvm_ipc_header_t));
+    req->lba = lba;
+    req->len = len;
+    req->is_write = (uint8_t)is_write;
+
+    if (is_write && buf) {
+        memcpy(req->data, buf, len);
+    }
+
+    // 6. 原子发送
+    int ret = 0;
+    if (write_all(fd, buffer, total_size) < 0) {
+        ret = -1;
+    }
+
+    // 7. [关键修复] 等待 Daemon 的同步确认与数据回传
+    // 之前这里被漏掉了，或者是逻辑写错了导致死锁
+    uint8_t ack_byte;
+    if (read_all(fd, &ack_byte, 1) < 0 || ack_byte == 0) { 
+        // 读不到 ACK 或者 ACK 为 0 (失败)
+        ret = -1;
+    } else if (!is_write && buf && len > 0) {
+        // [FIX] 如果是读盘，真正的磁盘数据是由 Daemon 顺着 IPC 发回来的，必须收！
+        // 如果这里不收，QEMU 里的 buffer 就是空的，Guest 读到的全是 0
+        if (read_all(fd, buf, len) < 0) {
+            ret = -1;
+        }
+    }
+    
+    g_free(buffer);
+    close(fd);
+    
+    return ret; 
+}

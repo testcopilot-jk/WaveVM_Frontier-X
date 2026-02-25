@@ -703,34 +703,29 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
     uint32_t data_len = count * 512;
     
     uint64_t chunk_id = (lba << 9) >> WVM_STORAGE_CHUNK_SHIFT;
-    // 计算 64MB 块内偏移
     off_t offset = (lba << 9) & ((1UL << WVM_STORAGE_CHUNK_SHIFT) - 1);
     
     int fd = get_chunk_fd_safe(chunk_id);
-    if (fd < 0) return; // IO Error
+    if (fd < 0) return; 
 
-    /* O_DIRECT 对齐缓冲区 */
     void *aligned_buf = NULL;
-    
     if (ntohs(hdr->msg_type) == MSG_BLOCK_WRITE || ntohs(hdr->msg_type) == MSG_BLOCK_READ) {
         if (posix_memalign(&aligned_buf, 4096, data_len) != 0) return;
     }
 
     if (ntohs(hdr->msg_type) == MSG_BLOCK_WRITE) {
         memcpy(aligned_buf, blk->data, data_len);
-        // [FIX] 检查 pwrite 返回值，防止静默丢数据
         ssize_t written = pwrite(fd, aligned_buf, data_len, offset);
         
-        // ACK
         hdr->msg_type = htons(MSG_BLOCK_ACK);
         hdr->payload_len = 0;
-        
-        // [FIX] 如果写入失败，设置错误标志
         if (written != data_len) {
             hdr->flags |= WVM_FLAG_ERROR;
-            fprintf(stderr, "[Storage] Write fail chunk %lu: %s\n", chunk_id, strerror(errno));
         }
-
+        
+        // [FIX] 发送前必须重算 CRC32
+        hdr->crc32 = 0;
+        hdr->crc32 = htonl(calculate_crc32(hdr, sizeof(*hdr)));
         sendto(sockfd, hdr, sizeof(*hdr), 0, (struct sockaddr*)client, sizeof(*client));
     
     } else if (ntohs(hdr->msg_type) == MSG_BLOCK_READ) {
@@ -738,7 +733,7 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
         uint8_t *tx = malloc(resp_len);
         if (tx) {
             struct wvm_header *rh = (struct wvm_header*)tx;
-            *rh = *hdr; // Copy base headers
+            *rh = *hdr; 
             rh->msg_type = htons(MSG_BLOCK_ACK);
             rh->payload_len = htons(sizeof(struct wvm_block_payload) + data_len);
             
@@ -749,17 +744,21 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
             ssize_t r = pread(fd, aligned_buf, data_len, offset);
             if (r > 0) memcpy(rp->data, aligned_buf, r);
             
+            // [FIX] 发送前必须重算 CRC32
+            rh->crc32 = 0;
+            rh->crc32 = htonl(calculate_crc32(tx, resp_len));
             robust_sendto(sockfd, tx, resp_len, client);
             free(tx);
         }
     } else if (ntohs(hdr->msg_type) == MSG_BLOCK_FLUSH) {
-        // [FIX] 处理 FLUSH 指令，强制落盘
         int ret = fdatasync(fd);
-        
         hdr->msg_type = htons(MSG_BLOCK_ACK);
         hdr->payload_len = 0;
         if (ret < 0) hdr->flags |= WVM_FLAG_ERROR;
         
+        // [FIX] 发送前必须重算 CRC32
+        hdr->crc32 = 0;
+        hdr->crc32 = htonl(calculate_crc32(hdr, sizeof(*hdr)));
         sendto(sockfd, hdr, sizeof(*hdr), 0, (struct sockaddr*)client, sizeof(*client));
     }
     

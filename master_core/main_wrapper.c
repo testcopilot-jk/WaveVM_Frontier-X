@@ -281,40 +281,74 @@ void* client_handler(void *socket_desc) {
                 break;
             }
             case WVM_IPC_TYPE_BLOCK_IO: {
-                // 解析自定义的 IPC Block 结构
-                struct wvm_ipc_block_req {
-                    uint64_t lba;
-                    uint32_t len;
-                    uint8_t  is_write;
-                    uint8_t  data[0];
-                } *req = (void*)payload_buf;
-                
-                // 1. 计算目标节点
+                struct wvm_ipc_block_req *req = (void*)payload_buf;
                 uint32_t target = wvm_get_storage_node_id(req->lba);
                 
-                // 2. 构造网络包
-                size_t blk_size = sizeof(struct wvm_block_payload) + req->len;
+                size_t blk_size = sizeof(struct wvm_block_payload) + (req->is_write ? req->len : 0);
                 size_t pkt_len = sizeof(struct wvm_header) + blk_size;
                 
-                // 申请 Packet (使用 u_ops)
+                // [FIX] 1. 分配 RX Buffer 接收远端真实数据
+                size_t rx_buf_size = sizeof(struct wvm_block_payload) + req->len;
+                uint8_t *rx_buf = malloc(rx_buf_size);
+                uint64_t rid = u_ops.alloc_req_id(rx_buf);
+                
                 uint8_t *pkt = u_ops.alloc_packet(pkt_len, 0);
-                if (pkt) {
+                if (pkt && rid != (uint64_t)-1) {
                     struct wvm_header *h = (struct wvm_header *)pkt;
                     h->magic = htonl(WVM_MAGIC);
                     h->msg_type = htons(req->is_write ? MSG_BLOCK_WRITE : MSG_BLOCK_READ);
                     h->payload_len = htons(blk_size);
                     h->slave_id = htonl(g_my_node_id);
-                    h->qos_level = 1; // 存储 IO 优先级高
+                    h->req_id = WVM_HTONLL(rid); // [FIX] 必须赋予请求ID才能收到ACK
+                    h->qos_level = 1; 
                     
                     struct wvm_block_payload *p = (void*)(pkt + sizeof(*h));
                     p->lba = WVM_HTONLL(req->lba);
                     p->count = htonl(req->len / 512);
                     if (req->is_write) memcpy(p->data, req->data, req->len);
                     
-                    // 发送
+                    h->crc32 = 0;
+                    h->crc32 = htonl(calculate_crc32(pkt, pkt_len));
+                    
+                    // 2. 发送请求
                     u_ops.send_packet(pkt, pkt_len, target);
-                    u_ops.free_packet(pkt);
+                    
+                    // [FIX] 3. 阻塞等待远端存储节点回包
+                    uint64_t t_start = u_ops.get_time_us();
+                    int success = 0;
+                    while (u_ops.time_diff_us(t_start) < 5000000) { // 5秒超时
+                        if (u_ops.check_req_status(rid) == 1) {
+                            // --- 完美闭环：检查硬件级坏道/写入错误 ---
+                            struct wvm_header *rx_hdr = (struct wvm_header *)rx_buf;
+                            if (rx_hdr->flags & WVM_FLAG_ERROR) {
+                                u_log("[Storage] Remote Slave reported physical IO error on LBA!");
+                                success = 0; // 物理落盘失败，向 QEMU 报告错误
+                            } else {
+                                success = 1; // 真正意义上的安全落盘
+                            }
+                            break;
+                        }
+                        usleep(100);
+                    }
+                    
+                    // [FIX] 4. 向 QEMU 发送 ACK 唤醒 vCPU
+                    uint8_t ack_byte = success ? 1 : 0;
+                    write(qemu_fd, &ack_byte, 1);
+                    
+                    // 如果是读操作，把远端拿回来的数据塞回给 QEMU
+                    if (success && !req->is_write) {
+                        struct wvm_block_payload *rx_p = (struct wvm_block_payload *)rx_buf;
+                        write(qemu_fd, rx_p->data, req->len);
+                    }
+                } else {
+                    // 内存不足，直接回复失败，防止 QEMU 死锁
+                    uint8_t ack_byte = 0;
+                    write(qemu_fd, &ack_byte, 1);
                 }
+                
+                if (pkt) u_ops.free_packet(pkt);
+                if (rid != (uint64_t)-1) u_ops.free_req_id(rid);
+                free(rx_buf);
                 break;
             }
             default:
