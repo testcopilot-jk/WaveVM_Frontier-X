@@ -372,24 +372,53 @@ static void *wavevm_slave_net_thread(void *arg) {
                     struct wvm_ipc_cpu_run_req *req = (struct wvm_ipc_cpu_run_req *)payload;
                     qemu_mutex_lock_iothread(); // TCG 必须持有 BQL
                     
-                    // A. 恢复上下文
-                    if (hdr->mode_tcg) {
-                        // TCG 模式：直接写入 env
-                        wvm_tcg_set_state(cpu, &req->ctx.tcg);
-                    } else if (kvm_enabled()) {
-                        // KVM 模式：ioctl 设置
-                        struct kvm_regs kregs; struct kvm_sregs ksregs;
-                        wvm_kvm_context_t *kctx = &req->ctx.kvm;
-                        kregs.rax = kctx->rax; kregs.rbx = kctx->rbx; kregs.rcx = kctx->rcx;
-                        kregs.rdx = kctx->rdx; kregs.rsi = kctx->rsi; kregs.rdi = kctx->rdi;
-                        kregs.rsp = kctx->rsp; kregs.rbp = kctx->rbp;
-                        kregs.r8  = kctx->r8;  kregs.r9  = kctx->r9;  kregs.r10 = kctx->r10;
-                        kregs.r11 = kctx->r11; kregs.r12 = kctx->r12; kregs.r13 = kctx->r13;
-                        kregs.r14 = kctx->r14; kregs.r15 = kctx->r15;
-                        kregs.rip = kctx->rip; kregs.rflags = kctx->rflags;
-                        memcpy(&ksregs, kctx->sregs_data, sizeof(ksregs));
-                        kvm_vcpu_ioctl(cpu, KVM_SET_SREGS, &ksregs);
-                        kvm_vcpu_ioctl(cpu, KVM_SET_REGS, &kregs);
+                    bool local_is_tcg = !kvm_enabled(); // 判定本地引擎
+                    
+                    // A. 恢复上下文：只有不一样的时候才转换
+                    if (hdr->mode_tcg == local_is_tcg) {
+                        // 同态：零转换
+                        if (local_is_tcg) {
+                            wvm_tcg_set_state(cpu, &req->ctx.tcg);
+                        } else {
+                            // KVM 模式：ioctl 设置
+                            struct kvm_regs kregs; struct kvm_sregs ksregs;
+                            wvm_kvm_context_t *kctx = &req->ctx.kvm;
+                            kregs.rax = kctx->rax; kregs.rbx = kctx->rbx; kregs.rcx = kctx->rcx;
+                            kregs.rdx = kctx->rdx; kregs.rsi = kctx->rsi; kregs.rdi = kctx->rdi;
+                            kregs.rsp = kctx->rsp; kregs.rbp = kctx->rbp;
+                            kregs.r8  = kctx->r8;  kregs.r9  = kctx->r9;  kregs.r10 = kctx->r10;
+                            kregs.r11 = kctx->r11; kregs.r12 = kctx->r12; kregs.r13 = kctx->r13;
+                            kregs.r14 = kctx->r14; kregs.r15 = kctx->r15;
+                            kregs.rip = kctx->rip; kregs.rflags = kctx->rflags;
+                            memcpy(&ksregs, kctx->sregs_data, sizeof(ksregs));
+                            kvm_vcpu_ioctl(cpu, KVM_SET_SREGS, &ksregs);
+                            kvm_vcpu_ioctl(cpu, KVM_SET_REGS, &kregs);
+                        }
+                    } else {
+                        // 异构：转换计算
+                        if (local_is_tcg) { // 远端 KVM，本地 TCG
+                            wvm_tcg_context_t t_ctx;
+                            struct kvm_regs kregs; struct kvm_sregs ksregs;
+                            // 1. 从 req 取出 kvm 格式
+                            kregs.rax = req->ctx.kvm.rax; kregs.rbx = req->ctx.kvm.rbx; kregs.rcx = req->ctx.kvm.rcx;
+                            kregs.rdx = req->ctx.kvm.rdx; kregs.rsi = req->ctx.kvm.rsi; kregs.rdi = req->ctx.kvm.rdi;
+                            kregs.rsp = req->ctx.kvm.rsp; kregs.rbp = req->ctx.kvm.rbp;
+                            kregs.r8  = req->ctx.kvm.r8;  kregs.r9  = req->ctx.kvm.r9;  kregs.r10 = req->ctx.kvm.r10;
+                            kregs.r11 = req->ctx.kvm.r11; kregs.r12 = req->ctx.kvm.r12; kregs.r13 = req->ctx.kvm.r13;
+                            kregs.r14 = req->ctx.kvm.r14; kregs.r15 = req->ctx.kvm.r15;
+                            kregs.rip = req->ctx.kvm.rip; kregs.rflags = req->ctx.kvm.rflags;
+                            memcpy(&ksregs, req->ctx.kvm.sregs_data, sizeof(ksregs));
+                            // 2. 换成本地格式
+                            wvm_translate_kvm_to_tcg(&kregs, &ksregs, &t_ctx);
+                            wvm_tcg_set_state(cpu, &t_ctx);
+                        } else { // 远端 TCG，本地 KVM
+                            struct kvm_regs kregs; struct kvm_sregs ksregs;
+                            kvm_vcpu_ioctl(cpu, KVM_GET_SREGS, &ksregs); // 取底版
+                            // 换成本地格式
+                            wvm_translate_tcg_to_kvm(&req->ctx.tcg, &kregs, &ksregs);
+                            kvm_vcpu_ioctl(cpu, KVM_SET_SREGS, &ksregs);
+                            kvm_vcpu_ioctl(cpu, KVM_SET_REGS, &kregs);
+                        }
                     }
 
                     // B. 执行循环
@@ -414,45 +443,71 @@ static void *wavevm_slave_net_thread(void *arg) {
 
                     // C. 导出上下文并回包
                     struct wvm_ipc_cpu_run_ack *ack = (struct wvm_ipc_cpu_run_ack *)payload;
-                    if (hdr->mode_tcg) {
-                        ack->mode_tcg = 1;
-                        wvm_tcg_get_state(cpu, &ack->ctx.tcg);
-                    } else if (kvm_enabled()) {
-                        ack->mode_tcg = 0;
-                        struct kvm_regs kregs; struct kvm_sregs ksregs;
-                        wvm_kvm_context_t *kctx = &ack->ctx.kvm;
-                        kvm_vcpu_ioctl(cpu, KVM_GET_REGS, &kregs);
-                        kvm_vcpu_ioctl(cpu, KVM_GET_SREGS, &ksregs);
-                        kctx->rax = kregs.rax; kctx->rbx = kregs.rbx; kctx->rcx = kregs.rcx;
-                        kctx->rdx = kregs.rdx; kctx->rsi = kregs.rsi; kctx->rdi = kregs.rdi;
-                        kctx->rsp = kregs.rsp; kctx->rbp = kregs.rbp;
-                        kctx->r8  = kregs.r8;  kctx->r9  = kregs.r9;  kctx->r10 = kregs.r10;
-                        kctx->r11 = kregs.r11; kctx->r12 = kregs.r12; kctx->r13 = kregs.r13;
-                        kctx->r14 = kregs.r14; kctx->r15 = kregs.r15;
-                        kctx->rip = kregs.rip; kctx->rflags = kregs.rflags;
-                        memcpy(kctx->sregs_data, &ksregs, sizeof(ksregs));
+                    ack->mode_tcg = hdr->mode_tcg; 
+                    
+                    if (hdr->mode_tcg == local_is_tcg) {
+                        // 同态返回
+                        if (local_is_tcg) wvm_tcg_get_state(cpu, &ack->ctx.tcg);
+                        else {
+                            struct kvm_regs kregs; struct kvm_sregs ksregs;
+                            wvm_kvm_context_t *kctx = &ack->ctx.kvm;
+                            kvm_vcpu_ioctl(cpu, KVM_GET_REGS, &kregs);
+                            kvm_vcpu_ioctl(cpu, KVM_GET_SREGS, &ksregs);
+                            kctx->rax = kregs.rax; kctx->rbx = kregs.rbx; kctx->rcx = kregs.rcx;
+                            kctx->rdx = kregs.rdx; kctx->rsi = kregs.rsi; kctx->rdi = kregs.rdi;
+                            kctx->rsp = kregs.rsp; kctx->rbp = kregs.rbp;
+                            kctx->r8  = kregs.r8;  kctx->r9  = kregs.r9;  kctx->r10 = kregs.r10;
+                            kctx->r11 = kregs.r11; kctx->r12 = kregs.r12; kctx->r13 = kregs.r13;
+                            kctx->r14 = kregs.r14; kctx->r15 = kregs.r15;
+                            kctx->rip = kregs.rip; kctx->rflags = kregs.rflags;
+                            memcpy(kctx->sregs_data, &ksregs, sizeof(ksregs));
                         
-                        struct kvm_run *run = cpu->kvm_run;
-                        kctx->exit_reason = run->exit_reason;
-                        if (run->exit_reason == KVM_EXIT_IO) {
-                            kctx->io.direction = run->io.direction;
-                            kctx->io.size      = run->io.size;
-                            kctx->io.port      = run->io.port;
-                            kctx->io.count     = run->io.count;
-                            if (run->io.direction == KVM_EXIT_IO_OUT) {
-                                size_t io_bytes = run->io.size * run->io.count;
-                                if (io_bytes > sizeof(kctx->io.data)) {
-                                    io_bytes = sizeof(kctx->io.data);
+                            struct kvm_run *run = cpu->kvm_run;
+                            kctx->exit_reason = run->exit_reason;
+                            if (run->exit_reason == KVM_EXIT_IO) {
+                                kctx->io.direction = run->io.direction;
+                                kctx->io.size      = run->io.size;
+                                kctx->io.port      = run->io.port;
+                                kctx->io.count     = run->io.count;
+                                if (run->io.direction == KVM_EXIT_IO_OUT) {
+                                    size_t io_bytes = run->io.size * run->io.count;
+                                    if (io_bytes > sizeof(kctx->io.data)) {
+                                        io_bytes = sizeof(kctx->io.data);
+                                    }
+                                    memcpy(kctx->io.data,
+                                           (uint8_t *)run + run->io.data_offset,
+                                           io_bytes);
                                 }
-                                memcpy(kctx->io.data,
-                                       (uint8_t *)run + run->io.data_offset,
-                                       io_bytes);
+                            } else if (run->exit_reason == KVM_EXIT_MMIO) {
+                                kctx->mmio.phys_addr = run->mmio.phys_addr;
+                                kctx->mmio.len       = run->mmio.len;
+                                kctx->mmio.is_write  = run->mmio.is_write;
+                                memcpy(kctx->mmio.data, run->mmio.data, 8);
                             }
-                        } else if (run->exit_reason == KVM_EXIT_MMIO) {
-                            kctx->mmio.phys_addr = run->mmio.phys_addr;
-                            kctx->mmio.len       = run->mmio.len;
-                            kctx->mmio.is_write  = run->mmio.is_write;
-                            memcpy(kctx->mmio.data, run->mmio.data, 8);
+                    } else {
+                        // 异构转换返回
+                        if (local_is_tcg) { // 本地 TCG 跑完，要还回 KVM
+                            wvm_tcg_context_t t_ctx;
+                            wvm_tcg_get_state(cpu, &t_ctx);
+                            struct kvm_regs kregs; struct kvm_sregs ksregs;
+                            
+                            // 因为 TCG 不修改隐藏段，直接把原来的 sregs 抄过来，再用 translate 覆盖可见部分
+                            memcpy(&ksregs, req->ctx.kvm.sregs_data, sizeof(ksregs));
+                            wvm_translate_tcg_to_kvm(&t_ctx, &kregs, &ksregs);
+                            ack->ctx.kvm.rax = kregs.rax; ack->ctx.kvm.rbx = kregs.rbx; ack->ctx.kvm.rcx = kregs.rcx;
+                            ack->ctx.kvm.rdx = kregs.rdx; ack->ctx.kvm.rsi = kregs.rsi; ack->ctx.kvm.rdi = kregs.rdi;
+                            ack->ctx.kvm.rsp = kregs.rsp; ack->ctx.kvm.rbp = kregs.rbp;
+                            ack->ctx.kvm.r8  = kregs.r8;  ack->ctx.kvm.r9  = kregs.r9;  ack->ctx.kvm.r10 = kregs.r10;
+                            ack->ctx.kvm.r11 = kregs.r11; ack->ctx.kvm.r12 = kregs.r12; ack->ctx.kvm.r13 = kregs.r13;
+                            ack->ctx.kvm.r14 = kregs.r14; ack->ctx.kvm.r15 = kregs.r15;
+                            ack->ctx.kvm.rip = kregs.rip; ack->ctx.kvm.rflags = kregs.rflags;
+                            ack->ctx.kvm.exit_reason = t_ctx.exit_reason;
+                            memcpy(ack->ctx.kvm.sregs_data, &ksregs, sizeof(ksregs));
+                        } else { // 本地 KVM 跑完，要还回 TCG
+                            struct kvm_regs kregs; struct kvm_sregs ksregs;
+                            kvm_vcpu_ioctl(cpu, KVM_GET_REGS, &kregs);
+                            kvm_vcpu_ioctl(cpu, KVM_GET_SREGS, &ksregs);
+                            wvm_translate_kvm_to_tcg(&kregs, &ksregs, &ack->ctx.tcg);
                         }
                     }
                     qemu_mutex_unlock_iothread();

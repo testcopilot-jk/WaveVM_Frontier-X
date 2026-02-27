@@ -291,4 +291,31 @@ extern int g_ctrl_port;
 
 #include "crc32.h"
 
+//[V30 异构适配器] 提取并转换 TCG 与 KVM 之间的寄存器状态（含关键段寄存器）
+static void wvm_translate_tcg_to_kvm(wvm_tcg_context_t *t, struct kvm_regs *k, struct kvm_sregs *s) {
+    k->rax = t->regs[0]; k->rcx = t->regs[1]; k->rdx = t->regs[2]; k->rbx = t->regs[3];
+    k->rsp = t->regs[4]; k->rbp = t->regs[5]; k->rsi = t->regs[6]; k->rdi = t->regs[7];
+    k->r8  = t->regs[8]; k->r9  = t->regs[9]; k->r10 = t->regs[10];k->r11 = t->regs[11];
+    k->r12 = t->regs[12];k->r13 = t->regs[13];k->r14 = t->regs[14];k->r15 = t->regs[15];
+    k->rip = t->eip; k->rflags = t->eflags;
+    // 关键段寄存器与控制寄存器映射
+    s->cr0 = t->cr[0]; s->cr2 = t->cr[2]; s->cr3 = t->cr[3]; s->cr4 = t->cr[4];
+    s->fs.base = t->fs_base; s->gs.base = t->gs_base;
+    s->gdt.base = t->gdt_base; s->gdt.limit = t->gdt_limit;
+    s->idt.base = t->idt_base; s->idt.limit = t->idt_limit;
+}
+
+static void wvm_translate_kvm_to_tcg(struct kvm_regs *k, struct kvm_sregs *s, wvm_tcg_context_t *t) {
+    t->regs[0] = k->rax; t->regs[1] = k->rcx; t->regs[2] = k->rdx; t->regs[3] = k->rbx;
+    t->regs[4] = k->rsp; t->regs[5] = k->rbp; t->regs[6] = k->rsi; t->regs[7] = k->rdi;
+    t->regs[8] = k->r8;  t->regs[9] = k->r9;  t->regs[10]= k->r10; t->regs[11]= k->r11;
+    t->regs[12]= k->r12; t->regs[13]= k->r13; t->regs[14]= k->r14; t->regs[15]= k->r15;
+    t->eip = k->rip; t->eflags = k->rflags;
+    // 关键段寄存器与控制寄存器映射
+    t->cr[0] = s->cr0; t->cr[2] = s->cr2; t->cr[3] = s->cr3; t->cr[4] = s->cr4;
+    t->fs_base = s->fs.base; t->gs_base = s->gs.base;
+    t->gdt_base = s->gdt.base; t->gdt_limit = s->gdt.limit;
+    t->idt_base = s->idt.base; t->idt_limit = s->idt.limit;
+}
+
 #endif // WAVEVM_PROTOCOL_H

@@ -1189,10 +1189,10 @@ static void *mem_push_listener_thread(void *arg) {
 void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
     g_ram_base = ram_ptr;
     g_ram_size = ram_size;
-    bool enable_fault_hook = false;
+    bool enable_fault_hook = true;
     const char *hook_env = getenv("WVM_ENABLE_FAULT_HOOK");
-    if (hook_env && atoi(hook_env) != 0) {
-        enable_fault_hook = true;
+    if (hook_env && atoi(hook_env) == 0) {
+        enable_fault_hook = false;
     }
     g_fault_hook_enabled = enable_fault_hook;
     g_fault_hook_checked = true;

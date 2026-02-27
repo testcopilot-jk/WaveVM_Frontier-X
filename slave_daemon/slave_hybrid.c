@@ -439,16 +439,26 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
 
     if (t_vcpu_fd < 0) init_thread_local_vcpu(vcpu_id);
     struct kvm_regs kregs; struct kvm_sregs ksregs;
-    wvm_kvm_context_t *ctx = &req->ctx.kvm;
+    // 1. 获取本地底版（保留不可见的隐藏段状态）
+    ioctl(t_vcpu_fd, KVM_GET_SREGS, &ksregs); 
 
-    kregs.rax = ctx->rax; kregs.rbx = ctx->rbx; kregs.rcx = ctx->rcx; kregs.rdx = ctx->rdx;
-    kregs.rsi = ctx->rsi; kregs.rdi = ctx->rdi; kregs.rsp = ctx->rsp; kregs.rbp = ctx->rbp;
-    kregs.r8  = ctx->r8;  kregs.r9  = ctx->r9;  kregs.r10 = ctx->r10; kregs.r11 = ctx->r11;
-    kregs.r12 = ctx->r12; kregs.r13 = ctx->r13; kregs.r14 = ctx->r14; kregs.r15 = ctx->r15;
-    kregs.rip = ctx->rip; kregs.rflags = ctx->rflags;
-    memcpy(&ksregs, ctx->sregs_data, sizeof(ksregs));
+    // 2. 只有不一样的时候才转换！
+    if (req->mode_tcg) {
+        // TCG 对 KVM：转换计算
+        wvm_translate_tcg_to_kvm(&req->ctx.tcg, &kregs, &ksregs);
+    } else {
+        // KVM 对 KVM：零转换直通
+        wvm_kvm_context_t *ctx = &req->ctx.kvm;
+        kregs.rax = ctx->rax; kregs.rbx = ctx->rbx; kregs.rcx = ctx->rcx; kregs.rdx = ctx->rdx;
+        kregs.rsi = ctx->rsi; kregs.rdi = ctx->rdi; kregs.rsp = ctx->rsp; kregs.rbp = ctx->rbp;
+        kregs.r8  = ctx->r8;  kregs.r9  = ctx->r9;  kregs.r10 = ctx->r10; kregs.r11 = ctx->r11;
+        kregs.r12 = ctx->r12; kregs.r13 = ctx->r13; kregs.r14 = ctx->r14; kregs.r15 = ctx->r15;
+        kregs.rip = ctx->rip; kregs.rflags = ctx->rflags;
+        memcpy(&ksregs, ctx->sregs_data, sizeof(ksregs));
+    }
 
-    ioctl(t_vcpu_fd, KVM_SET_SREGS, &ksregs); ioctl(t_vcpu_fd, KVM_SET_REGS, &kregs);
+    ioctl(t_vcpu_fd, KVM_SET_SREGS, &ksregs); 
+    ioctl(t_vcpu_fd, KVM_SET_REGS, &kregs);
     
     int ret;
     do {
@@ -550,28 +560,33 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     ack_hdr.req_id = WVM_HTONLL(hdr->req_id);      
     
     struct wvm_ipc_cpu_run_ack *ack = (struct wvm_ipc_cpu_run_ack *)payload;
-    ack->mode_tcg = 0;
-    wvm_kvm_context_t *ack_kctx = &ack->ctx.kvm;
-    ack_kctx->rax = kregs.rax; ack_kctx->rbx = kregs.rbx; ack_kctx->rcx = kregs.rcx; ack_kctx->rdx = kregs.rdx;
-    ack_kctx->rsi = kregs.rsi; ack_kctx->rdi = kregs.rdi; ack_kctx->rsp = kregs.rsp; ack_kctx->rbp = kregs.rbp;
-    ack_kctx->r8  = kregs.r8;  ack_kctx->r9  = kregs.r9;  ack_kctx->r10 = kregs.r10; ack_kctx->r11 = kregs.r11;
-    ack_kctx->r12 = kregs.r12; ack_kctx->r13 = kregs.r13; ack_kctx->r14 = kregs.r14; ack_kctx->r15 = kregs.r15;
-    ack_kctx->rip = kregs.rip; ack_kctx->rflags = kregs.rflags;
-    memcpy(ack_kctx->sregs_data, &ksregs, sizeof(ksregs));
-    ack_kctx->exit_reason = t_kvm_run->exit_reason;
+    ack->mode_tcg = req->mode_tcg;
+    if (req->mode_tcg) {
+        wvm_translate_kvm_to_tcg(&kregs, &ksregs, &ack->ctx.tcg);
+        ack->ctx.tcg.exit_reason = t_kvm_run->exit_reason;
+    } else {
+        wvm_kvm_context_t *ack_kctx = &ack->ctx.kvm;
+        ack_kctx->rax = kregs.rax; ack_kctx->rbx = kregs.rbx; ack_kctx->rcx = kregs.rcx; ack_kctx->rdx = kregs.rdx;
+        ack_kctx->rsi = kregs.rsi; ack_kctx->rdi = kregs.rdi; ack_kctx->rsp = kregs.rsp; ack_kctx->rbp = kregs.rbp;
+        ack_kctx->r8  = kregs.r8;  ack_kctx->r9  = kregs.r9;  ack_kctx->r10 = kregs.r10; ack_kctx->r11 = kregs.r11;
+        ack_kctx->r12 = kregs.r12; ack_kctx->r13 = kregs.r13; ack_kctx->r14 = kregs.r14; ack_kctx->r15 = kregs.r15;
+        ack_kctx->rip = kregs.rip; ack_kctx->rflags = kregs.rflags;
+        memcpy(ack_kctx->sregs_data, &ksregs, sizeof(ksregs));
+        ack_kctx->exit_reason = t_kvm_run->exit_reason;
 
-    if (t_kvm_run->exit_reason == KVM_EXIT_IO) {
-        ack_kctx->io.direction = t_kvm_run->io.direction;
-        ack_kctx->io.size = t_kvm_run->io.size;
-        ack_kctx->io.port = t_kvm_run->io.port;
-        ack_kctx->io.count = t_kvm_run->io.count;
-        if (t_kvm_run->io.direction == KVM_EXIT_IO_OUT) 
-            memcpy(ack_kctx->io.data, (uint8_t*)t_kvm_run + t_kvm_run->io.data_offset, t_kvm_run->io.size * t_kvm_run->io.count);
-    } else if (t_kvm_run->exit_reason == KVM_EXIT_MMIO) {
-        ack_kctx->mmio.phys_addr = t_kvm_run->mmio.phys_addr;
-        ack_kctx->mmio.len = t_kvm_run->mmio.len;
-        ack_kctx->mmio.is_write = t_kvm_run->mmio.is_write;
-        memcpy(ack_kctx->mmio.data, t_kvm_run->mmio.data, 8);
+        if (t_kvm_run->exit_reason == KVM_EXIT_IO) {
+            ack_kctx->io.direction = t_kvm_run->io.direction;
+            ack_kctx->io.size = t_kvm_run->io.size;
+            ack_kctx->io.port = t_kvm_run->io.port;
+            ack_kctx->io.count = t_kvm_run->io.count;
+            if (t_kvm_run->io.direction == KVM_EXIT_IO_OUT) 
+                memcpy(ack_kctx->io.data, (uint8_t*)t_kvm_run + t_kvm_run->io.data_offset, t_kvm_run->io.size * t_kvm_run->io.count);
+        } else if (t_kvm_run->exit_reason == KVM_EXIT_MMIO) {
+            ack_kctx->mmio.phys_addr = t_kvm_run->mmio.phys_addr;
+            ack_kctx->mmio.len = t_kvm_run->mmio.len;
+            ack_kctx->mmio.is_write = t_kvm_run->mmio.is_write;
+            memcpy(ack_kctx->mmio.data, t_kvm_run->mmio.data, 8);
+        }
     }
 
     uint8_t tx[sizeof(ack_hdr) + sizeof(*ack)];
