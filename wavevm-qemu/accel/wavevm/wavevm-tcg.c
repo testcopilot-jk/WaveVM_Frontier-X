@@ -4,6 +4,8 @@
 #include "exec/exec-all.h"
 #include "../../../common_include/wavevm_protocol.h"
 
+#if defined(TARGET_I386) || defined(TARGET_X86_64)
+
 // Export QEMU TCG state to network packet
 void wvm_tcg_get_state(CPUState *cpu, wvm_tcg_context_t *ctx) {
     X86CPU *x86_cpu = X86_CPU(cpu);
@@ -73,3 +75,17 @@ void wvm_tcg_set_state(CPUState *cpu, wvm_tcg_context_t *ctx) {
     env->idt.base = ctx->idt_base;
     env->idt.limit = ctx->idt_limit;
 }
+
+#else
+
+void wvm_tcg_get_state(CPUState *cpu, wvm_tcg_context_t *ctx) {
+    (void)cpu;
+    memset(ctx, 0, sizeof(*ctx));
+}
+
+void wvm_tcg_set_state(CPUState *cpu, wvm_tcg_context_t *ctx) {
+    (void)cpu;
+    (void)ctx;
+}
+
+#endif

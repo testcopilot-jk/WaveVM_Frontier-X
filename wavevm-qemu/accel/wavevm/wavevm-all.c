@@ -484,6 +484,7 @@ static void *wavevm_slave_net_thread(void *arg) {
                                 kctx->mmio.is_write  = run->mmio.is_write;
                                 memcpy(kctx->mmio.data, run->mmio.data, 8);
                             }
+                        }
                     } else {
                         // 异构转换返回
                         if (local_is_tcg) { // 本地 TCG 跑完，要还回 KVM
