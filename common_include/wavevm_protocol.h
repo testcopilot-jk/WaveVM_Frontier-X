@@ -17,6 +17,7 @@
 
 #include "wavevm_config.h"
 #include "platform_defs.h"
+#include <linux/kvm.h>
 
 /*
  * WaveVM V29.5 "Wavelet" Protocol Definition (FINAL FIXED)

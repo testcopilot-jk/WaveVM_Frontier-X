@@ -1267,6 +1267,7 @@ echo "[SUCCESS] Kernel parameters are tuned for V29 'Wavelet' deployment."
 
 #include "wavevm_config.h"
 #include "platform_defs.h"
+#include <linux/kvm.h>
 
 /*
  * WaveVM V29.5 "Wavelet" Protocol Definition (FINAL FIXED)
@@ -8643,7 +8644,7 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     ssize_t sret = sendto(sockfd, tx, sizeof(tx), 0, (struct sockaddr*)client, sizeof(*client));
     fprintf(stderr, "[Slave Ack] ret=%zd errno=%d req=%llu dst=%s:%u exit=%u\n",
             sret, (sret < 0) ? errno : 0, (unsigned long long)hdr->req_id,
-            inet_ntoa(client->sin_addr), ntohs(client->sin_port), ack_kctx->exit_reason);
+            inet_ntoa(client->sin_addr), ntohs(client->sin_port), t_kvm_run->exit_reason);
 }
 
 /* 
