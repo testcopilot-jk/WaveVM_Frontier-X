@@ -424,10 +424,10 @@ static void *wavevm_slave_net_thread(void *arg) {
                     // B. 执行循环
                     cpu->stop = false; cpu->halted = 0; cpu->exception_index = -1;
                     
-                    if (hdr->mode_tcg) {
+                    if (local_is_tcg) {
                         // [TCG 关键] 使用 cpu_exec 运行直到退出/中断/异常
                         cpu_exec(cpu);
-                    } else if (kvm_enabled()) {
+                    } else {
                         // [KVM 关键]
                         int ret;
                         do {
