@@ -850,10 +850,17 @@ static void* rx_thread_loop(void *arg) {
                     int from_local_slave = (ntohs(src_addrs[i].sin_port) == (uint16_t)g_slave_forward_port);
 
                     // 本地 Slave 的执行结果需要回传给真正发起方（跨节点请求场景）。
-                    // 回包目标放在 hdr->slave_id（请求源 ID）里。
+                    // 新协议下回包目标在 hdr->target_id；旧包可回退到 hdr->slave_id。
                     if (from_local_slave &&
                         (msg_type == MSG_VCPU_EXIT || msg_type == MSG_BLOCK_ACK)) {
-                        uint32_t return_target = ntohl(hdr->slave_id);
+                        uint32_t return_target = ntohl(hdr->target_id);
+                        if (return_target == (uint32_t)g_my_node_id) {
+                            uint32_t legacy_target = ntohl(hdr->slave_id);
+                            if (legacy_target < WVM_MAX_GATEWAYS &&
+                                legacy_target != (uint32_t)g_my_node_id) {
+                                return_target = legacy_target;
+                            }
+                        }
                         u_log("[Slave Return] msg=%u src_port=%u rid=%llu return_target=%u",
                               (unsigned)msg_type, (unsigned)ntohs(src_addrs[i].sin_port),
                               (unsigned long long)rid, (unsigned)return_target);

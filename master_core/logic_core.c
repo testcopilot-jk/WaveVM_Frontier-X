@@ -1122,6 +1122,8 @@ int wvm_rpc_call(uint16_t msg_type, void *payload, int len, uint32_t target_id, 
     hdr->msg_type = htons(msg_type);
     hdr->payload_len = htons(len);
     hdr->slave_id = htonl(g_my_node_id); // Source ID
+    // Preserve logical destination so fractal gateways can route correctly.
+    hdr->target_id = htonl(target_id);
     hdr->req_id = WVM_HTONLL(rid);
     hdr->qos_level = 1; // Control messages are fast lane
     if (msg_type == MSG_VCPU_RUN) {

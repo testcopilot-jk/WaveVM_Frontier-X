@@ -258,6 +258,7 @@ static __thread int t_vcpu_fd = -1;
 static __thread struct kvm_run *t_kvm_run = NULL;
 static pthread_spinlock_t g_master_lock;
 static int g_wvm_dev_fd = -1;
+static int g_base_id = 0;
 
 /* 
  * [物理意图] 在远程节点初始化硬件虚拟化容器（KVM），为“算力托管”圈定物理内存边界。
@@ -410,7 +411,8 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         ack_hdr.magic = htonl(WVM_MAGIC);
         ack_hdr.msg_type = htons(MSG_VCPU_EXIT);
         ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
-        ack_hdr.slave_id = htonl(hdr->slave_id);
+        /* ACK must originate from this slave node and target the requester. */
+        ack_hdr.slave_id = htonl((uint32_t)g_base_id);
         ack_hdr.target_id = htonl(hdr->slave_id);
         ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
 
@@ -555,7 +557,8 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     ack_hdr.magic = htonl(WVM_MAGIC);              
     ack_hdr.msg_type = htons(MSG_VCPU_EXIT);       
     ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
-    ack_hdr.slave_id = htonl(hdr->slave_id);       
+    /* ACK must originate from this slave node and target the requester. */
+    ack_hdr.slave_id = htonl((uint32_t)g_base_id);
     ack_hdr.target_id = htonl(hdr->slave_id);
     ack_hdr.req_id = WVM_HTONLL(hdr->req_id);      
     
@@ -880,7 +883,6 @@ static slave_endpoint_t *tcg_endpoints = NULL;
 static struct sockaddr_in g_upstream_gateway = {0};
 static volatile int g_gateway_init_done = 0;
 static volatile int g_gateway_known = 0;
-static int g_base_id = 0; 
 
 /* 
  * [物理意图] 在不支持 KVM 的环境下，通过多进程模拟实现“多核算力聚合”。

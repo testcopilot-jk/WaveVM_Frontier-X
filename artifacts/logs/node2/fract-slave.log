@@ -1,0 +1,7 @@
+[Hybrid] Using Physical Cores: 6
+[Init] WaveVM Hybrid Slave V28.0 (Swarm Edition)
+[Init] Config: Port=16125, Cores=6, RAM=4096 MB, BaseID=1
+[Hybrid] KVM: Using Anonymous RAM.
+[Hybrid] KVM Hardware Acceleration Active (RAM: 4096 MB).
+[Hybrid] Mode: KVM FAST PATH. Listening on 0.0.0.0:16125
+[SenderThread] KVM Dirty Page Sender is running.

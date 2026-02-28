@@ -1,0 +1,21 @@
+make: Entering directory '/root/wvmtest/src/ctl_tool'
+rm -f wvm_ctl
+gcc -Wall -O2 -I../common_include -o wvm_ctl main.c
+In file included from ../common_include/wavevm_ioctl.h:5,
+                 from main.c:8:
+../common_include/../common_include/wavevm_protocol.h:309:13: warning: ‘wvm_translate_kvm_to_tcg’ defined but not used [-Wunused-function]
+  309 | static void wvm_translate_kvm_to_tcg(struct kvm_regs *k, struct kvm_sregs *s, wvm_tcg_context_t *t) {
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/../common_include/wavevm_protocol.h:296:13: warning: ‘wvm_translate_tcg_to_kvm’ defined but not used [-Wunused-function]
+  296 | static void wvm_translate_tcg_to_kvm(wvm_tcg_context_t *t, struct kvm_regs *k, struct kvm_sregs *s) {
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~
+In file included from /usr/include/string.h:535,
+                 from main.c:3:
+In function ‘strncpy’,
+    inlined from ‘main’ at main.c:142:13:
+/usr/include/x86_64-linux-gnu/bits/string_fortified.h:95:10: warning: ‘__builtin_strncpy’ output may be truncated copying 63 bytes from a string of length 63 [-Wstringop-truncation]
+   95 |   return __builtin___strncpy_chk (__dest, __src, __len,
+      |          ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+   96 |                                   __glibc_objsize (__dest));
+      |                                   ~~~~~~~~~~~~~~~~~~~~~~~~~
+make: Leaving directory '/root/wvmtest/src/ctl_tool'

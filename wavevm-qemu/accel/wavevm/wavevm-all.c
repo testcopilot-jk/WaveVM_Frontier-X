@@ -602,6 +602,14 @@ static int wavevm_init_machine_user(WaveVMAccelState *s, MachineState *ms) {
 
 static struct wvm_ioctl_mem_layout global_layout;
 
+static bool wavevm_user_mode_enabled(void)
+{
+    if (!current_machine || !current_machine->accelerator) {
+        return false;
+    }
+    return WAVEVM_ACCEL(current_machine->accelerator)->mode == WVM_MODE_USER;
+}
+
 static void wavevm_region_add(MemoryListener *listener, MemoryRegionSection *section) {
     if (!memory_region_is_ram(section->mr)) return;
 
@@ -616,15 +624,18 @@ static void wavevm_region_add(MemoryListener *listener, MemoryRegionSection *sec
         global_layout.slots[global_layout.count].size = size;
         global_layout.count++;
         
-        // 同时通知 User-Mem 映射表
         void *hva = memory_region_get_ram_ptr(section->mr) + section->offset_within_region;
-        extern void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa);
-        wavevm_register_ram_block(hva, size, start_gpa);
+
+        /* User-mem fault hook is only valid in user mode. */
+        if (wavevm_user_mode_enabled()) {
+            extern void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa);
+            wavevm_register_ram_block(hva, size, start_gpa);
+        }
         if (start_gpa == 0 && !g_primary_ram_hva) {
             g_primary_ram_hva = hva;
             g_primary_ram_size = size;
         }
-        if (start_gpa == 0 && !g_user_mem_inited) {
+        if (wavevm_user_mode_enabled() && start_gpa == 0 && !g_user_mem_inited) {
             wavevm_user_mem_init(hva, g_user_ram_size_hint ? g_user_ram_size_hint : size);
             g_user_mem_inited = true;
         }

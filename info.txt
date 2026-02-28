@@ -1,0 +1,8 @@
+1：用户名：root
+  ssh地址：111.6.167.245:8039
+  密码：GYFVe9BHk52YJWbasMGHbSB8uPbftcVF
+  公网端口范围：13800-13899
+2：用户名：root
+  ssh地址：111.6.167.245:8062
+  密码：sE8FoDpCYEI6l5Hq77r9HuBi0S73AsPD
+  公网端口范围：16100-16199

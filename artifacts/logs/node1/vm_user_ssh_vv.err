@@ -1,0 +1,9 @@
+OpenSSH_8.9p1 Ubuntu-3ubuntu0.13, OpenSSL 3.0.2 15 Mar 2022
+debug1: Reading configuration data /etc/ssh/ssh_config
+debug1: /etc/ssh/ssh_config line 19: include /etc/ssh/ssh_config.d/*.conf matched no files
+debug1: /etc/ssh/ssh_config line 21: Applying options for *
+debug2: resolve_canonicalize: hostname 127.0.0.1 is address
+debug1: Connecting to 127.0.0.1 [127.0.0.1] port 13827.
+debug2: fd 3 setting O_NONBLOCK
+debug1: connect to address 127.0.0.1 port 13827: Connection timed out
+ssh: connect to host 127.0.0.1 port 13827: Connection timed out
