@@ -1666,6 +1666,10 @@ static int crc32_table_inited = 0;
 
 // 运行时生成表，比硬编码几千个 hex 优雅且不易错
 static void init_crc32_table(void) {
+    /*
+     * Keep software fallback aligned with SSE4.2 _mm_crc32_u* instructions,
+     * which implement CRC32C (Castagnoli), not IEEE CRC32.
+     */
     uint32_t polynomial = 0xEDB88320;
     for (uint32_t i = 0; i < 256; i++) {
         uint32_t c = i;
@@ -4079,6 +4083,8 @@ int wvm_rpc_call(uint16_t msg_type, void *payload, int len, uint32_t target_id, 
     hdr->msg_type = htons(msg_type);
     hdr->payload_len = htons(len);
     hdr->slave_id = htonl(g_my_node_id); // Source ID
+    // Preserve logical destination so fractal gateways can route correctly.
+    hdr->target_id = htonl(target_id);
     hdr->req_id = WVM_HTONLL(rid);
     hdr->qos_level = 1; // Control messages are fast lane
     if (msg_type == MSG_VCPU_RUN) {
@@ -7112,10 +7118,17 @@ static void* rx_thread_loop(void *arg) {
                     int from_local_slave = (ntohs(src_addrs[i].sin_port) == (uint16_t)g_slave_forward_port);
 
                     // 本地 Slave 的执行结果需要回传给真正发起方（跨节点请求场景）。
-                    // 回包目标放在 hdr->slave_id（请求源 ID）里。
+                    // 新协议下回包目标在 hdr->target_id；旧包可回退到 hdr->slave_id。
                     if (from_local_slave &&
                         (msg_type == MSG_VCPU_EXIT || msg_type == MSG_BLOCK_ACK)) {
-                        uint32_t return_target = ntohl(hdr->slave_id);
+                        uint32_t return_target = ntohl(hdr->target_id);
+                        if (return_target == (uint32_t)g_my_node_id) {
+                            uint32_t legacy_target = ntohl(hdr->slave_id);
+                            if (legacy_target < WVM_MAX_GATEWAYS &&
+                                legacy_target != (uint32_t)g_my_node_id) {
+                                return_target = legacy_target;
+                            }
+                        }
                         u_log("[Slave Return] msg=%u src_port=%u rid=%llu return_target=%u",
                               (unsigned)msg_type, (unsigned)ntohs(src_addrs[i].sin_port),
                               (unsigned long long)rid, (unsigned)return_target);
@@ -8304,6 +8317,7 @@ static __thread int t_vcpu_fd = -1;
 static __thread struct kvm_run *t_kvm_run = NULL;
 static pthread_spinlock_t g_master_lock;
 static int g_wvm_dev_fd = -1;
+static int g_base_id = 0;
 
 /* 
  * [物理意图] 在远程节点初始化硬件虚拟化容器（KVM），为“算力托管”圈定物理内存边界。
@@ -8456,7 +8470,8 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         ack_hdr.magic = htonl(WVM_MAGIC);
         ack_hdr.msg_type = htons(MSG_VCPU_EXIT);
         ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
-        ack_hdr.slave_id = htonl(hdr->slave_id);
+        /* ACK must originate from this slave node and target the requester. */
+        ack_hdr.slave_id = htonl((uint32_t)g_base_id);
         ack_hdr.target_id = htonl(hdr->slave_id);
         ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
 
@@ -8601,7 +8616,8 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     ack_hdr.magic = htonl(WVM_MAGIC);              
     ack_hdr.msg_type = htons(MSG_VCPU_EXIT);       
     ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
-    ack_hdr.slave_id = htonl(hdr->slave_id);       
+    /* ACK must originate from this slave node and target the requester. */
+    ack_hdr.slave_id = htonl((uint32_t)g_base_id);
     ack_hdr.target_id = htonl(hdr->slave_id);
     ack_hdr.req_id = WVM_HTONLL(hdr->req_id);      
     
@@ -8926,7 +8942,6 @@ static slave_endpoint_t *tcg_endpoints = NULL;
 static struct sockaddr_in g_upstream_gateway = {0};
 static volatile int g_gateway_init_done = 0;
 static volatile int g_gateway_known = 0;
-static int g_base_id = 0; 
 
 /* 
  * [物理意图] 在不支持 KVM 的环境下，通过多进程模拟实现“多核算力聚合”。
@@ -10595,6 +10610,14 @@ static int wavevm_init_machine_user(WaveVMAccelState *s, MachineState *ms) {
 
 static struct wvm_ioctl_mem_layout global_layout;
 
+static bool wavevm_user_mode_enabled(void)
+{
+    if (!current_machine || !current_machine->accelerator) {
+        return false;
+    }
+    return WAVEVM_ACCEL(current_machine->accelerator)->mode == WVM_MODE_USER;
+}
+
 static void wavevm_region_add(MemoryListener *listener, MemoryRegionSection *section) {
     if (!memory_region_is_ram(section->mr)) return;
 
@@ -10609,15 +10632,18 @@ static void wavevm_region_add(MemoryListener *listener, MemoryRegionSection *sec
         global_layout.slots[global_layout.count].size = size;
         global_layout.count++;
         
-        // 同时通知 User-Mem 映射表
         void *hva = memory_region_get_ram_ptr(section->mr) + section->offset_within_region;
-        extern void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa);
-        wavevm_register_ram_block(hva, size, start_gpa);
+
+        /* User-mem fault hook is only valid in user mode. */
+        if (wavevm_user_mode_enabled()) {
+            extern void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa);
+            wavevm_register_ram_block(hva, size, start_gpa);
+        }
         if (start_gpa == 0 && !g_primary_ram_hva) {
             g_primary_ram_hva = hva;
             g_primary_ram_size = size;
         }
-        if (start_gpa == 0 && !g_user_mem_inited) {
+        if (wavevm_user_mode_enabled() && start_gpa == 0 && !g_user_mem_inited) {
             wavevm_user_mem_init(hva, g_user_ram_size_hint ? g_user_ram_size_hint : size);
             g_user_mem_inited = true;
         }
@@ -13521,6 +13547,7 @@ void flush_all_buffers(void);
 typedef struct {
     uint32_t id;                    // Key for the hash table (slave_id)
     struct sockaddr_in addr;        // Slave's network address, pre-filled
+    uint8_t static_pinned;          // 1 when seeded by config/control plane; don't auto-learn overwrite
     slave_buffer_t *buffer;         // Pointer to the aggregation buffer, LAZILY ALLOCATED
     pthread_mutex_t lock;           // Per-node lock for buffer access
     UT_hash_handle hh;              // Makes this structure hashable by uthash
@@ -13624,6 +13651,7 @@ static int load_slave_config(const char *path) {
                         node->addr.sin_family = AF_INET;
                         node->addr.sin_addr.s_addr = inet_addr(ip_str);
                         node->addr.sin_port = htons(port);
+                        node->static_pinned = 1;
                     }
                 }
                 routes_loaded++;
@@ -13806,11 +13834,16 @@ static void learn_route(uint32_t slave_id, struct sockaddr_in *addr) {
     gateway_node_t *node = NULL;
     pthread_rwlock_rdlock(&g_map_lock);
     HASH_FIND_INT(g_node_map, &slave_id, node);
-    if (node && 
-        node->addr.sin_addr.s_addr == addr->sin_addr.s_addr &&
-        node->addr.sin_port == addr->sin_port) {
-        pthread_rwlock_unlock(&g_map_lock);
-        return; // 路由稳定，无需更新
+    if (node) {
+        if (node->static_pinned) {
+            pthread_rwlock_unlock(&g_map_lock);
+            return; // 静态路由不允许被自学习覆盖
+        }
+        if (node->addr.sin_addr.s_addr == addr->sin_addr.s_addr &&
+            node->addr.sin_port == addr->sin_port) {
+            pthread_rwlock_unlock(&g_map_lock);
+            return; // 路由稳定，无需更新
+        }
     }
     pthread_rwlock_unlock(&g_map_lock);
 
@@ -13828,7 +13861,7 @@ static void learn_route(uint32_t slave_id, struct sockaddr_in *addr) {
         }
     }
     
-    if (node) {
+    if (node && !node->static_pinned) {
         node->addr = *addr;
         // printf("[Gateway-Auto] Updated Route Node: %u\n", slave_id);
     }
@@ -13913,21 +13946,20 @@ static void* gateway_worker(void *arg) {
                 learn_route(source_id, &src_addrs[i]);
             }
 
-            // Classify upstream packets by source IP to tolerate NAT/ephemeral source port changes.
-            if (src->sin_addr.s_addr == g_upstream_addr.sin_addr.s_addr) {
-                uint32_t route_id = source_id; // 兼容旧包：没有目标信息时按旧字段转发
-                if (target_id < WVM_MAX_SLAVES) {
-                    route_id = target_id;
-                } else if (target_id == WVM_NODE_AUTO_ROUTE) {
-                    route_id = source_id;
-                }
-                int r = internal_push(local_fd, route_id, ptr, pkt_len);
-                if (r < 0 && msg_type == MSG_VCPU_RUN) {
-                    fprintf(stderr, "[Gateway] upstream->route failed msg=%u route=%u err=%d\n",
-                            (unsigned)msg_type, route_id, r);
-                }
-            } else {
-                // Packets from anywhere else are considered upstream.
+            /*
+             * Route by logical destination first. This avoids source-IP based
+             * misclassification loops in multi-hop or same-host multi-instance
+             * deployments. Fallback to upstream only when no local route exists.
+             */
+            uint32_t route_id = source_id; // 兼容旧包：没有目标信息时按旧字段转发
+            if (target_id < WVM_MAX_SLAVES) {
+                route_id = target_id;
+            } else if (target_id == WVM_NODE_AUTO_ROUTE) {
+                route_id = source_id;
+            }
+
+            int r = internal_push(local_fd, route_id, ptr, pkt_len);
+            if (r < 0) {
                 int tx_fd = (g_upstream_tx_socket >= 0) ? g_upstream_tx_socket : local_fd;
                 ssize_t sret = sendto(tx_fd, ptr, pkt_len, MSG_DONTWAIT,
                                       (struct sockaddr*)&g_upstream_addr, sizeof(g_upstream_addr));
@@ -13942,6 +13974,18 @@ static void* gateway_worker(void *arg) {
                             up_ip, (unsigned)ntohs(g_upstream_addr.sin_port),
                             sret, (sret < 0) ? errno : 0);
                 }
+            } else if (msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT) {
+                gateway_node_t *dst = find_node(route_id);
+                char dst_ip[INET_ADDRSTRLEN] = {0};
+                unsigned dst_port = 0;
+                if (dst) {
+                    inet_ntop(AF_INET, &dst->addr.sin_addr, dst_ip, sizeof(dst_ip));
+                    dst_port = (unsigned)ntohs(dst->addr.sin_port);
+                }
+                fprintf(stderr, "[Gateway] route->local msg=%u route=%u src=%s:%u dst=%s:%u\n",
+                        (unsigned)msg_type, route_id,
+                        inet_ntoa(src->sin_addr), (unsigned)ntohs(src->sin_port),
+                        dst_ip[0] ? dst_ip : "0.0.0.0", dst_port);
             }
         }
     }
@@ -13974,6 +14018,7 @@ void dynamic_add_route(uint32_t node_id, uint32_t ip, uint16_t port) {
         node = (gateway_node_t*)calloc(1, sizeof(gateway_node_t));
         if (node) {
             node->id = node_id;
+            node->static_pinned = 1;
             pthread_mutex_init(&node->lock, NULL); // 节点内部的Buffer锁保持Mutex
             node->buffer = NULL; 
             HASH_ADD_INT(g_node_map, id, node);
@@ -13981,6 +14026,7 @@ void dynamic_add_route(uint32_t node_id, uint32_t ip, uint16_t port) {
     }
     
     if (node) {
+        node->static_pinned = 1;
         node->addr.sin_family = AF_INET;
         node->addr.sin_addr.s_addr = ip;
         node->addr.sin_port = port;
