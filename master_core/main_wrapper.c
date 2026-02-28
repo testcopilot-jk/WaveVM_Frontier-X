@@ -328,7 +328,7 @@ void* client_handler(void *socket_desc) {
                             // --- 完美闭环：检查硬件级坏道/写入错误 ---
                             struct wvm_header *rx_hdr = (struct wvm_header *)rx_buf;
                             if (rx_hdr->flags & WVM_FLAG_ERROR) {
-                                u_log("[Storage] Remote Slave reported physical IO error on LBA!");
+                                fprintf(stderr, "[Storage] Remote Slave reported physical IO error on LBA!\n");
                                 success = 0; // 物理落盘失败，向 QEMU 报告错误
                             } else {
                                 success = 1; // 真正意义上的安全落盘
