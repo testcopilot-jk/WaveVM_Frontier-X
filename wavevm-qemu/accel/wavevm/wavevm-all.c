@@ -302,7 +302,6 @@ static void *wavevm_kernel_irq_thread(void *arg) {
 // Slave 网络处理线程 (支持 KVM 和 TCG 双模)
 static void *wavevm_slave_net_thread(void *arg) {
     WaveVMAccelState *s = (WaveVMAccelState *)arg;
-    CPUState *cpu = first_cpu; 
     #define BATCH_SIZE 64
     #define MAX_PKT_SIZE 4096 
 
@@ -371,6 +370,12 @@ static void *wavevm_slave_net_thread(void *arg) {
                 else if (hdr->msg_type == MSG_VCPU_RUN) {
                     struct wvm_ipc_cpu_run_req *req = (struct wvm_ipc_cpu_run_req *)payload;
                     qemu_mutex_lock_iothread(); // TCG 必须持有 BQL
+                    CPUState *cpu = first_cpu;
+                    if (!cpu) {
+                        qemu_mutex_unlock_iothread();
+                        fprintf(stderr, "[WaveVM-Slave] CPU not ready, skip MSG_VCPU_RUN.\n");
+                        continue;
+                    }
                     
                     bool local_is_tcg = !kvm_enabled(); // 判定本地引擎
                     
@@ -447,7 +452,10 @@ static void *wavevm_slave_net_thread(void *arg) {
                     
                     if (hdr->mode_tcg == local_is_tcg) {
                         // 同态返回
-                        if (local_is_tcg) wvm_tcg_get_state(cpu, &ack->ctx.tcg);
+                        if (local_is_tcg) {
+                            wvm_tcg_get_state(cpu, &ack->ctx.tcg);
+                            ack->ctx.tcg.exit_reason = cpu->exception_index;
+                        }
                         else {
                             struct kvm_regs kregs; struct kvm_sregs ksregs;
                             wvm_kvm_context_t *kctx = &ack->ctx.kvm;
@@ -509,6 +517,7 @@ static void *wavevm_slave_net_thread(void *arg) {
                             kvm_vcpu_ioctl(cpu, KVM_GET_REGS, &kregs);
                             kvm_vcpu_ioctl(cpu, KVM_GET_SREGS, &ksregs);
                             wvm_translate_kvm_to_tcg(&kregs, &ksregs, &ack->ctx.tcg);
+                            ack->ctx.tcg.exit_reason = cpu->kvm_run->exit_reason;
                         }
                     }
                     qemu_mutex_unlock_iothread();

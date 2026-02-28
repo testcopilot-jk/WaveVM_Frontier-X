@@ -1,0 +1,184 @@
+让我系统对比一下这两个版本的所有差异：好的，让我给你完整的对比分析：
+
+## 📊 版本对比总结
+
+### ✅ **已修复的问题**
+
+**1. 执行判断逻辑（第 10435-10450 行）**
+- **旧版错误：** `if (hdr->mode_tcg)` 导致异构场景不执行
+- **新版修复：** `if (local_is_tcg)` ✅
+
+---
+
+### ❌ **新引入的严重问题**
+
+**问题1：CPU 指针未检查 NULL（致命）**
+- **位置：** 第 10313 行
+- **问题：** `CPUState *cpu = first_cpu;` 可能是 NULL
+- **影响：** Slave 启动时如果还没创建 vCPU，会立即段错误崩溃
+
+**修复方案：**
+```c
+// 在 MSG_VCPU_RUN 处理前加检查
+else if (hdr->msg_type == MSG_VCPU_RUN) {
+    if (!cpu) {
+        fprintf(stderr, "[WaveVM-Slave] ERROR: CPU not ready\n");
+        continue;
+    }
+    struct wvm_ipc_cpu_run_req *req = ...
+```
+
+---
+
+### ❌ **已存在但未修复的问题**
+
+**问题2：TCG 同态返回时 exit_reason 丢失（严重）**
+- **位置：** 第 10458 行
+- **问题代码：**
+```c
+if (local_is_tcg) wvm_tcg_get_state(cpu, &ack->ctx.tcg);
+// ← 缺少设置 exit_reason
+```
+
+- **原因：** `wvm_tcg_get_state` 函数在第 9947 行将 `exit_reason` 硬编码为 0
+- **影响：** TCG Master → TCG Slave 时，Master 收到的 exit_reason 永远是 0
+
+**修复方案（方案A - 推荐）：**
+```c
+if (local_is_tcg) {
+    wvm_tcg_get_state(cpu, &ack->ctx.tcg);
+    // TCG 的 exit_reason 需要从 cpu->exception_index 推导
+    if (cpu->exception_index >= 0) {
+        ack->ctx.tcg.exit_reason = cpu->exception_index;
+    } else if (cpu->halted) {
+        ack->ctx.tcg.exit_reason = EXCP_HLT;
+    } else {
+        ack->ctx.tcg.exit_reason = 0;
+    }
+}
+```
+
+**修复方案（方案B - 更简单）：**
+```c
+if (local_is_tcg) {
+    wvm_tcg_get_state(cpu, &ack->ctx.tcg);
+    ack->ctx.tcg.exit_reason = cpu->exception_index;  // 直接使用
+}
+```
+
+---
+
+**问题3：KVM→TCG 异构返回时 exit_reason 丢失（中等）**
+- **位置：** 第 10519 行
+- **问题代码：**
+```c
+} else { // 本地 KVM 跑完，要还回 TCG
+    struct kvm_regs kregs; struct kvm_sregs ksregs;
+    kvm_vcpu_ioctl(cpu, KVM_GET_REGS, &kregs);
+    kvm_vcpu_ioctl(cpu, KVM_GET_SREGS, &ksregs);
+    wvm_translate_kvm_to_tcg(&kregs, &ksregs, &ack->ctx.tcg);
+    // ← 缺少：ack->ctx.tcg.exit_reason = cpu->kvm_run->exit_reason;
+}
+```
+
+**修复：**
+```c
+} else { // 本地 KVM 跑完，要还回 TCG
+    struct kvm_regs kregs; struct kvm_sregs ksregs;
+    kvm_vcpu_ioctl(cpu, KVM_GET_REGS, &kregs);
+    kvm_vcpu_ioctl(cpu, KVM_GET_SREGS, &ksregs);
+    wvm_translate_kvm_to_tcg(&kregs, &ksregs, &ack->ctx.tcg);
+    ack->ctx.tcg.exit_reason = cpu->kvm_run->exit_reason;  // ← 添加这行
+}
+```
+
+---
+
+## 🔍 **逻辑正确性验证**
+
+### ✅ Bare-metal Slave（第 8625-8652 行）
+```c
+ack->mode_tcg = req->mode_tcg;  // 镜像 ✅
+if (req->mode_tcg) {
+    wvm_translate_kvm_to_tcg(&kregs, &ksregs, &ack->ctx.tcg);  // 转换 ✅
+    ack->ctx.tcg.exit_reason = t_kvm_run->exit_reason;  // 设置 exit_reason ✅
+} else {
+    // 直接填充 KVM 格式 ✅
+    ack_kctx->exit_reason = t_kvm_run->exit_reason;  // 设置 exit_reason ✅
+}
+```
+**结论：逻辑完全正确 ✅**
+
+---
+
+### ⚠️ QEMU Slave（第 10454-10520 行）
+
+**接收逻辑（✅ 正确）：**
+```c
+if (hdr->mode_tcg == local_is_tcg) {
+    // 同态：零转换 ✅
+} else {
+    // 异构：转换 ✅
+}
+```
+
+**执行逻辑（✅ 已修复）：**
+```c
+if (local_is_tcg) {
+    cpu_exec(cpu);
+} else {
+    kvm_vcpu_ioctl(cpu, KVM_RUN, 0);
+}
+```
+
+**回包逻辑（❌ 有问题）：**
+```c
+ack->mode_tcg = hdr->mode_tcg;  // 镜像 ✅
+
+if (hdr->mode_tcg == local_is_tcg) {
+    // 同态返回
+    if (local_is_tcg) {
+        wvm_tcg_get_state(cpu, &ack->ctx.tcg);
+        // ❌ 缺少设置 exit_reason
+    } else {
+        // KVM 同态 - 正确 ✅
+    }
+} else {
+    // 异构转换返回
+    if (local_is_tcg) {
+        // TCG→KVM - 正确 ✅
+        ack->ctx.kvm.exit_reason = t_ctx.exit_reason;  ✅
+    } else {
+        // KVM→TCG
+        wvm_translate_kvm_to_tcg(&kregs, &ksregs, &ack->ctx.tcg);
+        // ❌ 缺少设置 exit_reason
+    }
+}
+```
+
+---
+
+## 📋 修复优先级
+
+| 优先级 | 问题 | 严重度 | 影响 |
+|--------|------|--------|------|
+| **P0** | CPU NULL 检查 | 致命 | Slave 启动即崩溃 |
+| **P1** | TCG 同态 exit_reason | 严重 | 功能错误 |
+| **P2** | KVM→TCG exit_reason | 中等 | 功能错误 |
+
+---
+
+## 总结
+
+**Codex 改对的：**
+- ✅ 执行判断从 `hdr->mode_tcg` 改成 `local_is_tcg`
+
+**Codex 没改但应该改的：**
+- ❌ 没加 CPU NULL 检查（导致崩溃）
+- ❌ 没修复两处 exit_reason 丢失问题
+
+**建议：**
+1. 先修复 CPU NULL 检查，让 slave 能跑起来
+2. 再修复两处 exit_reason 问题，保证功能正确
+
+你需要我生成完整的 patch 吗？

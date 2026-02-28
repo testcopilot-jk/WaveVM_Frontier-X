@@ -31,6 +31,7 @@
 #include <poll.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <stdbool.h>
 #include "uthash.h"
 #include "slave_vfio.h"
 
@@ -256,9 +257,12 @@ static int g_vm_fd = -1;
 static uint8_t *g_phy_ram = NULL;
 static __thread int t_vcpu_fd = -1;
 static __thread struct kvm_run *t_kvm_run = NULL;
+static int g_boot_vcpu_fd = -1;
+static struct kvm_run *g_boot_kvm_run = NULL;
 static pthread_spinlock_t g_master_lock;
 static int g_wvm_dev_fd = -1;
 static int g_base_id = 0;
+static int g_vcpu_init_debug_once = 0;
 
 /* 
  * [物理意图] 在远程节点初始化硬件虚拟化容器（KVM），为“算力托管”圈定物理内存边界。
@@ -266,6 +270,13 @@ static int g_base_id = 0;
  * [后果] 确立了远程执行的基石。若初始化失败，Slave 将无法使用硬件加速，只能回退到慢速的 TCG 模拟模式。
  */
 void init_kvm_global() {
+    const char *force_tcg = getenv("WVM_FORCE_TCG");
+    if (force_tcg && atoi(force_tcg) == 1) {
+        fprintf(stderr, "[Hybrid] WVM_FORCE_TCG=1, skip KVM init.\n");
+        g_kvm_available = 0;
+        return;
+    }
+
     g_kvm_fd = open("/dev/kvm", O_RDWR);
     if (g_kvm_fd < 0) return; 
 
@@ -320,16 +331,97 @@ void init_kvm_global() {
 
     g_kvm_available = 1;
     pthread_spin_init(&g_master_lock, 0);
+
+    errno = 0;
+    g_boot_vcpu_fd = ioctl(g_vm_fd, KVM_CREATE_VCPU, 0);
+    fprintf(stderr, "[Slave BootVCPU] create fd=%d errno=%d vm=%d kvm=%d\n",
+            g_boot_vcpu_fd, errno, g_vm_fd, g_kvm_fd);
+    if (g_boot_vcpu_fd >= 0) {
+        int mmap_size = ioctl(g_kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
+        fprintf(stderr, "[Slave BootVCPU] mmap_size=%d errno=%d\n", mmap_size, errno);
+        if (mmap_size > 0) {
+            g_boot_kvm_run = mmap(NULL, mmap_size, PROT_READ|PROT_WRITE, MAP_SHARED, g_boot_vcpu_fd, 0);
+            if (g_boot_kvm_run == MAP_FAILED) {
+                fprintf(stderr, "[Slave BootVCPU] mmap failed errno=%d\n", errno);
+                g_boot_kvm_run = NULL;
+            }
+        }
+    }
+
     printf("[Hybrid] KVM Hardware Acceleration Active (RAM: %d MB).\n", g_ram_mb);
 }
 
 void init_thread_local_vcpu(int vcpu_id) {
     if (t_vcpu_fd >= 0) return;
+    if (__sync_bool_compare_and_swap(&g_vcpu_init_debug_once, 0, 1)) {
+        fprintf(stderr, "[Slave VCPU Init] enter vm=%d kvm=%d boot_fd=%d boot_run=%p req_vcpu=%d\n",
+                g_vm_fd, g_kvm_fd, g_boot_vcpu_fd, (void*)g_boot_kvm_run, vcpu_id);
+    }
+    if (g_vm_fd < 0 || g_kvm_fd < 0) {
+        fprintf(stderr, "[Slave VCPU Init] invalid fds vm=%d kvm=%d vcpu=%d\n",
+                g_vm_fd, g_kvm_fd, vcpu_id);
+        return;
+    }
+
+    /* Preferred fast path: reuse boot vCPU 0 that was pre-created at init. */
+    if (g_boot_vcpu_fd >= 0) {
+        if (!g_boot_kvm_run) {
+            int mmap_size = ioctl(g_kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
+            if (mmap_size > 0) {
+                g_boot_kvm_run = mmap(NULL, mmap_size, PROT_READ|PROT_WRITE, MAP_SHARED, g_boot_vcpu_fd, 0);
+                if (g_boot_kvm_run == MAP_FAILED) {
+                    g_boot_kvm_run = NULL;
+                }
+            }
+        }
+        if (g_boot_kvm_run) {
+            t_vcpu_fd = g_boot_vcpu_fd;
+            t_kvm_run = g_boot_kvm_run;
+            return;
+        }
+    }
+
+    int chosen_vcpu_id = vcpu_id;
     t_vcpu_fd = ioctl(g_vm_fd, KVM_CREATE_VCPU, vcpu_id);
-    if (t_vcpu_fd < 0) return; 
+    if (t_vcpu_fd < 0 && errno == EEXIST) {
+        /* Some hosts reserve vcpu0 in-kernel. Probe a small contiguous range. */
+        for (int try_id = 1; try_id < 64; try_id++) {
+            t_vcpu_fd = ioctl(g_vm_fd, KVM_CREATE_VCPU, try_id);
+            if (t_vcpu_fd >= 0) {
+                chosen_vcpu_id = try_id;
+                break;
+            }
+            if (errno != EEXIST) break;
+        }
+    }
+    if (t_vcpu_fd < 0 && errno == EEXIST && g_boot_vcpu_fd >= 0) {
+        chosen_vcpu_id = 0;
+        t_vcpu_fd = g_boot_vcpu_fd;
+    }
+    if (t_vcpu_fd < 0) {
+        fprintf(stderr, "[Slave VCPU Init] KVM_CREATE_VCPU failed vcpu=%d errno=%d\n",
+                vcpu_id, errno);
+        return;
+    }
+    if (chosen_vcpu_id != vcpu_id) {
+        fprintf(stderr, "[Slave VCPU Init] fallback vcpu=%d (requested %d)\n",
+                chosen_vcpu_id, vcpu_id);
+    }
     int mmap_size = ioctl(g_kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
+    if (mmap_size <= 0) {
+        fprintf(stderr, "[Slave VCPU Init] KVM_GET_VCPU_MMAP_SIZE failed errno=%d\n", errno);
+        if (t_vcpu_fd != g_boot_vcpu_fd) close(t_vcpu_fd);
+        t_vcpu_fd = -1;
+        return;
+    }
     t_kvm_run = mmap(NULL, mmap_size, PROT_READ|PROT_WRITE, MAP_SHARED, t_vcpu_fd, 0);
-    if (t_kvm_run == MAP_FAILED) exit(1);
+    if (t_kvm_run == MAP_FAILED) {
+        fprintf(stderr, "[Slave VCPU Init] vcpu mmap failed errno=%d\n", errno);
+        if (t_vcpu_fd != g_boot_vcpu_fd) close(t_vcpu_fd);
+        t_vcpu_fd = -1;
+        t_kvm_run = NULL;
+        return;
+    }
 }
 
 // [FIX] Thread-Local 缓存，避免高频 malloc/free
@@ -404,8 +496,10 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
 
     // 对“空上下文探针”走快速 ACK，避免在 KVM_RUN 中无意义阻塞。
     // 仅匹配明显空输入，不影响真实执行上下文。
-    if ((req->mode_tcg && req->ctx.tcg.eip == 0) ||
-        (!req->mode_tcg && req->ctx.kvm.rip == 0 && req->ctx.kvm.rflags == 0)) {
+    const wvm_kvm_context_t zero_kvm = {0};
+    bool kvm_empty = !req->mode_tcg &&
+                     memcmp(&req->ctx.kvm, &zero_kvm, sizeof(zero_kvm)) == 0;
+    if (kvm_empty) {
         struct wvm_header ack_hdr;
         memset(&ack_hdr, 0, sizeof(ack_hdr));
         ack_hdr.magic = htonl(WVM_MAGIC);
@@ -439,15 +533,53 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         return;
     }
 
-    if (t_vcpu_fd < 0) init_thread_local_vcpu(vcpu_id);
+    if (t_vcpu_fd < 0) {
+        init_thread_local_vcpu(vcpu_id);
+    }
+    if (t_vcpu_fd < 0 || !t_kvm_run || t_kvm_run == MAP_FAILED) {
+        struct wvm_header ack_hdr;
+        memset(&ack_hdr, 0, sizeof(ack_hdr));
+        ack_hdr.magic = htonl(WVM_MAGIC);
+        ack_hdr.msg_type = htons(MSG_VCPU_EXIT);
+        ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
+        /* ACK must originate from this slave node and target the requester. */
+        ack_hdr.slave_id = htonl((uint32_t)g_base_id);
+        ack_hdr.target_id = htonl(hdr->slave_id);
+        ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
+
+        struct wvm_ipc_cpu_run_ack ack;
+        memset(&ack, 0, sizeof(ack));
+        ack.status = -1;
+        ack.mode_tcg = req->mode_tcg;
+        if (req->mode_tcg) {
+            memcpy(&ack.ctx.tcg, &req->ctx.tcg, sizeof(req->ctx.tcg));
+        } else {
+            memcpy(&ack.ctx.kvm, &req->ctx.kvm, sizeof(req->ctx.kvm));
+        }
+
+        uint8_t tx[sizeof(ack_hdr) + sizeof(ack)];
+        memcpy(tx, &ack_hdr, sizeof(ack_hdr));
+        memcpy(tx + sizeof(ack_hdr), &ack, sizeof(ack));
+        struct wvm_header *tx_hdr = (struct wvm_header *)tx;
+        tx_hdr->crc32 = 0;
+        tx_hdr->crc32 = htonl(calculate_crc32(tx, sizeof(tx)));
+        ssize_t sret = sendto(sockfd, tx, sizeof(tx), 0, (struct sockaddr*)client, sizeof(*client));
+        fprintf(stderr, "[Slave ErrorAck] vcpu init failed ret=%zd errno=%d req=%llu dst=%s:%u\n",
+                sret, (sret < 0) ? errno : 0,
+                (unsigned long long)hdr->req_id, inet_ntoa(client->sin_addr), ntohs(client->sin_port));
+        return;
+    }
     struct kvm_regs kregs; struct kvm_sregs ksregs;
     // 1. 获取本地底版（保留不可见的隐藏段状态）
     ioctl(t_vcpu_fd, KVM_GET_SREGS, &ksregs); 
+    struct kvm_sregs base_ksregs = ksregs;
 
     // 2. 只有不一样的时候才转换！
     if (req->mode_tcg) {
         // TCG 对 KVM：转换计算
         wvm_translate_tcg_to_kvm(&req->ctx.tcg, &kregs, &ksregs);
+        /* Keep host-native segment/control state to avoid invalid mixed state. */
+        ksregs = base_ksregs;
     } else {
         // KVM 对 KVM：零转换直通
         wvm_kvm_context_t *ctx = &req->ctx.kvm;
@@ -563,6 +695,7 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     ack_hdr.req_id = WVM_HTONLL(hdr->req_id);      
     
     struct wvm_ipc_cpu_run_ack *ack = (struct wvm_ipc_cpu_run_ack *)payload;
+    ack->status = 0;
     ack->mode_tcg = req->mode_tcg;
     if (req->mode_tcg) {
         wvm_translate_kvm_to_tcg(&kregs, &ksregs, &ack->ctx.tcg);
@@ -1105,7 +1238,8 @@ int main(int argc, char **argv) {
             pthread_t irq_th;
             pthread_create(&irq_th, NULL, vfio_irq_thread_adapter, NULL);
         }
-        int total_threads = g_num_cores + 4;
+        /* Keep a single KVM worker to avoid vCPU create races on shared VM fd. */
+        int total_threads = 1;
         pthread_t *threads = malloc(sizeof(pthread_t) * total_threads);
         
         for(long i=0; i<total_threads; i++) pthread_create(&threads[i], NULL, kvm_worker_thread, (void*)i);

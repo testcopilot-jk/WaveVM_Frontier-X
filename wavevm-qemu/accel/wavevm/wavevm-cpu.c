@@ -477,8 +477,25 @@ static void *wavevm_cpu_thread_fn(void *arg) {
         qemu_mutex_unlock_iothread();
     }
 
+    /*
+     * WaveVM user path may run with kvm_enabled()==false while x86 CPU only
+     * has a single address space entry initialized. Local cpu_exec() will hit
+     * SMM MMU index and crash very early. In this fallback, route vCPU to the
+     * remote executor path and avoid local TCG execution.
+     */
+    if (!kvm_enabled() && cpu->num_ases < 2 && g_wvm_local_split > 0) {
+        g_wvm_local_split = 0;
+    }
+
     while (1) {
         if (cpu->unplug || cpu->stop) break;
+
+        // Guard against early execution before CPU address spaces are initialized.
+        // Without this, TCG may dereference a NULL memory dispatch table at boot.
+        if (!cpu_get_address_space(cpu, 0)) {
+            g_usleep(1000);
+            continue;
+        }
 
         if (ops.schedule_policy(cpu->cpu_index) == 1) {
             wavevm_remote_exec(cpu);

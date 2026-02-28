@@ -1670,7 +1670,7 @@ static void init_crc32_table(void) {
      * Keep software fallback aligned with SSE4.2 _mm_crc32_u* instructions,
      * which implement CRC32C (Castagnoli), not IEEE CRC32.
      */
-    uint32_t polynomial = 0xEDB88320;
+    uint32_t polynomial = 0x82F63B78;
     for (uint32_t i = 0; i < 256; i++) {
         uint32_t c = i;
         for (int j = 0; j < 8; j++) {
@@ -1698,6 +1698,7 @@ static inline uint32_t calculate_crc32(const void* data, size_t length) {
 
 #endif // CRC32_H
 #endif // __SSE4_2__
+
 ```
 
 **文件**: `common_include/uthash.h`
@@ -8090,6 +8091,7 @@ clean:
 #include <poll.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <stdbool.h>
 #include "uthash.h"
 #include "slave_vfio.h"
 
@@ -8315,9 +8317,12 @@ static int g_vm_fd = -1;
 static uint8_t *g_phy_ram = NULL;
 static __thread int t_vcpu_fd = -1;
 static __thread struct kvm_run *t_kvm_run = NULL;
+static int g_boot_vcpu_fd = -1;
+static struct kvm_run *g_boot_kvm_run = NULL;
 static pthread_spinlock_t g_master_lock;
 static int g_wvm_dev_fd = -1;
 static int g_base_id = 0;
+static int g_vcpu_init_debug_once = 0;
 
 /* 
  * [物理意图] 在远程节点初始化硬件虚拟化容器（KVM），为“算力托管”圈定物理内存边界。
@@ -8325,6 +8330,13 @@ static int g_base_id = 0;
  * [后果] 确立了远程执行的基石。若初始化失败，Slave 将无法使用硬件加速，只能回退到慢速的 TCG 模拟模式。
  */
 void init_kvm_global() {
+    const char *force_tcg = getenv("WVM_FORCE_TCG");
+    if (force_tcg && atoi(force_tcg) == 1) {
+        fprintf(stderr, "[Hybrid] WVM_FORCE_TCG=1, skip KVM init.\n");
+        g_kvm_available = 0;
+        return;
+    }
+
     g_kvm_fd = open("/dev/kvm", O_RDWR);
     if (g_kvm_fd < 0) return; 
 
@@ -8379,16 +8391,97 @@ void init_kvm_global() {
 
     g_kvm_available = 1;
     pthread_spin_init(&g_master_lock, 0);
+
+    errno = 0;
+    g_boot_vcpu_fd = ioctl(g_vm_fd, KVM_CREATE_VCPU, 0);
+    fprintf(stderr, "[Slave BootVCPU] create fd=%d errno=%d vm=%d kvm=%d\n",
+            g_boot_vcpu_fd, errno, g_vm_fd, g_kvm_fd);
+    if (g_boot_vcpu_fd >= 0) {
+        int mmap_size = ioctl(g_kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
+        fprintf(stderr, "[Slave BootVCPU] mmap_size=%d errno=%d\n", mmap_size, errno);
+        if (mmap_size > 0) {
+            g_boot_kvm_run = mmap(NULL, mmap_size, PROT_READ|PROT_WRITE, MAP_SHARED, g_boot_vcpu_fd, 0);
+            if (g_boot_kvm_run == MAP_FAILED) {
+                fprintf(stderr, "[Slave BootVCPU] mmap failed errno=%d\n", errno);
+                g_boot_kvm_run = NULL;
+            }
+        }
+    }
+
     printf("[Hybrid] KVM Hardware Acceleration Active (RAM: %d MB).\n", g_ram_mb);
 }
 
 void init_thread_local_vcpu(int vcpu_id) {
     if (t_vcpu_fd >= 0) return;
+    if (__sync_bool_compare_and_swap(&g_vcpu_init_debug_once, 0, 1)) {
+        fprintf(stderr, "[Slave VCPU Init] enter vm=%d kvm=%d boot_fd=%d boot_run=%p req_vcpu=%d\n",
+                g_vm_fd, g_kvm_fd, g_boot_vcpu_fd, (void*)g_boot_kvm_run, vcpu_id);
+    }
+    if (g_vm_fd < 0 || g_kvm_fd < 0) {
+        fprintf(stderr, "[Slave VCPU Init] invalid fds vm=%d kvm=%d vcpu=%d\n",
+                g_vm_fd, g_kvm_fd, vcpu_id);
+        return;
+    }
+
+    /* Preferred fast path: reuse boot vCPU 0 that was pre-created at init. */
+    if (g_boot_vcpu_fd >= 0) {
+        if (!g_boot_kvm_run) {
+            int mmap_size = ioctl(g_kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
+            if (mmap_size > 0) {
+                g_boot_kvm_run = mmap(NULL, mmap_size, PROT_READ|PROT_WRITE, MAP_SHARED, g_boot_vcpu_fd, 0);
+                if (g_boot_kvm_run == MAP_FAILED) {
+                    g_boot_kvm_run = NULL;
+                }
+            }
+        }
+        if (g_boot_kvm_run) {
+            t_vcpu_fd = g_boot_vcpu_fd;
+            t_kvm_run = g_boot_kvm_run;
+            return;
+        }
+    }
+
+    int chosen_vcpu_id = vcpu_id;
     t_vcpu_fd = ioctl(g_vm_fd, KVM_CREATE_VCPU, vcpu_id);
-    if (t_vcpu_fd < 0) return; 
+    if (t_vcpu_fd < 0 && errno == EEXIST) {
+        /* Some hosts reserve vcpu0 in-kernel. Probe a small contiguous range. */
+        for (int try_id = 1; try_id < 64; try_id++) {
+            t_vcpu_fd = ioctl(g_vm_fd, KVM_CREATE_VCPU, try_id);
+            if (t_vcpu_fd >= 0) {
+                chosen_vcpu_id = try_id;
+                break;
+            }
+            if (errno != EEXIST) break;
+        }
+    }
+    if (t_vcpu_fd < 0 && errno == EEXIST && g_boot_vcpu_fd >= 0) {
+        chosen_vcpu_id = 0;
+        t_vcpu_fd = g_boot_vcpu_fd;
+    }
+    if (t_vcpu_fd < 0) {
+        fprintf(stderr, "[Slave VCPU Init] KVM_CREATE_VCPU failed vcpu=%d errno=%d\n",
+                vcpu_id, errno);
+        return;
+    }
+    if (chosen_vcpu_id != vcpu_id) {
+        fprintf(stderr, "[Slave VCPU Init] fallback vcpu=%d (requested %d)\n",
+                chosen_vcpu_id, vcpu_id);
+    }
     int mmap_size = ioctl(g_kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
+    if (mmap_size <= 0) {
+        fprintf(stderr, "[Slave VCPU Init] KVM_GET_VCPU_MMAP_SIZE failed errno=%d\n", errno);
+        if (t_vcpu_fd != g_boot_vcpu_fd) close(t_vcpu_fd);
+        t_vcpu_fd = -1;
+        return;
+    }
     t_kvm_run = mmap(NULL, mmap_size, PROT_READ|PROT_WRITE, MAP_SHARED, t_vcpu_fd, 0);
-    if (t_kvm_run == MAP_FAILED) exit(1);
+    if (t_kvm_run == MAP_FAILED) {
+        fprintf(stderr, "[Slave VCPU Init] vcpu mmap failed errno=%d\n", errno);
+        if (t_vcpu_fd != g_boot_vcpu_fd) close(t_vcpu_fd);
+        t_vcpu_fd = -1;
+        t_kvm_run = NULL;
+        return;
+    }
 }
 
 // [FIX] Thread-Local 缓存，避免高频 malloc/free
@@ -8463,8 +8556,10 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
 
     // 对“空上下文探针”走快速 ACK，避免在 KVM_RUN 中无意义阻塞。
     // 仅匹配明显空输入，不影响真实执行上下文。
-    if ((req->mode_tcg && req->ctx.tcg.eip == 0) ||
-        (!req->mode_tcg && req->ctx.kvm.rip == 0 && req->ctx.kvm.rflags == 0)) {
+    const wvm_kvm_context_t zero_kvm = {0};
+    bool kvm_empty = !req->mode_tcg &&
+                     memcmp(&req->ctx.kvm, &zero_kvm, sizeof(zero_kvm)) == 0;
+    if (kvm_empty) {
         struct wvm_header ack_hdr;
         memset(&ack_hdr, 0, sizeof(ack_hdr));
         ack_hdr.magic = htonl(WVM_MAGIC);
@@ -8498,15 +8593,53 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         return;
     }
 
-    if (t_vcpu_fd < 0) init_thread_local_vcpu(vcpu_id);
+    if (t_vcpu_fd < 0) {
+        init_thread_local_vcpu(vcpu_id);
+    }
+    if (t_vcpu_fd < 0 || !t_kvm_run || t_kvm_run == MAP_FAILED) {
+        struct wvm_header ack_hdr;
+        memset(&ack_hdr, 0, sizeof(ack_hdr));
+        ack_hdr.magic = htonl(WVM_MAGIC);
+        ack_hdr.msg_type = htons(MSG_VCPU_EXIT);
+        ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
+        /* ACK must originate from this slave node and target the requester. */
+        ack_hdr.slave_id = htonl((uint32_t)g_base_id);
+        ack_hdr.target_id = htonl(hdr->slave_id);
+        ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
+
+        struct wvm_ipc_cpu_run_ack ack;
+        memset(&ack, 0, sizeof(ack));
+        ack.status = -1;
+        ack.mode_tcg = req->mode_tcg;
+        if (req->mode_tcg) {
+            memcpy(&ack.ctx.tcg, &req->ctx.tcg, sizeof(req->ctx.tcg));
+        } else {
+            memcpy(&ack.ctx.kvm, &req->ctx.kvm, sizeof(req->ctx.kvm));
+        }
+
+        uint8_t tx[sizeof(ack_hdr) + sizeof(ack)];
+        memcpy(tx, &ack_hdr, sizeof(ack_hdr));
+        memcpy(tx + sizeof(ack_hdr), &ack, sizeof(ack));
+        struct wvm_header *tx_hdr = (struct wvm_header *)tx;
+        tx_hdr->crc32 = 0;
+        tx_hdr->crc32 = htonl(calculate_crc32(tx, sizeof(tx)));
+        ssize_t sret = sendto(sockfd, tx, sizeof(tx), 0, (struct sockaddr*)client, sizeof(*client));
+        fprintf(stderr, "[Slave ErrorAck] vcpu init failed ret=%zd errno=%d req=%llu dst=%s:%u\n",
+                sret, (sret < 0) ? errno : 0,
+                (unsigned long long)hdr->req_id, inet_ntoa(client->sin_addr), ntohs(client->sin_port));
+        return;
+    }
     struct kvm_regs kregs; struct kvm_sregs ksregs;
     // 1. 获取本地底版（保留不可见的隐藏段状态）
     ioctl(t_vcpu_fd, KVM_GET_SREGS, &ksregs); 
+    struct kvm_sregs base_ksregs = ksregs;
 
     // 2. 只有不一样的时候才转换！
     if (req->mode_tcg) {
         // TCG 对 KVM：转换计算
         wvm_translate_tcg_to_kvm(&req->ctx.tcg, &kregs, &ksregs);
+        /* Keep host-native segment/control state to avoid invalid mixed state. */
+        ksregs = base_ksregs;
     } else {
         // KVM 对 KVM：零转换直通
         wvm_kvm_context_t *ctx = &req->ctx.kvm;
@@ -8622,6 +8755,7 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     ack_hdr.req_id = WVM_HTONLL(hdr->req_id);      
     
     struct wvm_ipc_cpu_run_ack *ack = (struct wvm_ipc_cpu_run_ack *)payload;
+    ack->status = 0;
     ack->mode_tcg = req->mode_tcg;
     if (req->mode_tcg) {
         wvm_translate_kvm_to_tcg(&kregs, &ksregs, &ack->ctx.tcg);
@@ -9164,7 +9298,8 @@ int main(int argc, char **argv) {
             pthread_t irq_th;
             pthread_create(&irq_th, NULL, vfio_irq_thread_adapter, NULL);
         }
-        int total_threads = g_num_cores + 4;
+        /* Keep a single KVM worker to avoid vCPU create races on shared VM fd. */
+        int total_threads = 1;
         pthread_t *threads = malloc(sizeof(pthread_t) * total_threads);
         
         for(long i=0; i<total_threads; i++) pthread_create(&threads[i], NULL, kvm_worker_thread, (void*)i);
@@ -9181,6 +9316,7 @@ int main(int argc, char **argv) {
     }
     return 0;
 }
+
 ```
 
 **文件**: `slave_daemon/slave_vfio.h`
@@ -10310,7 +10446,6 @@ static void *wavevm_kernel_irq_thread(void *arg) {
 // Slave 网络处理线程 (支持 KVM 和 TCG 双模)
 static void *wavevm_slave_net_thread(void *arg) {
     WaveVMAccelState *s = (WaveVMAccelState *)arg;
-    CPUState *cpu = first_cpu; 
     #define BATCH_SIZE 64
     #define MAX_PKT_SIZE 4096 
 
@@ -10379,6 +10514,12 @@ static void *wavevm_slave_net_thread(void *arg) {
                 else if (hdr->msg_type == MSG_VCPU_RUN) {
                     struct wvm_ipc_cpu_run_req *req = (struct wvm_ipc_cpu_run_req *)payload;
                     qemu_mutex_lock_iothread(); // TCG 必须持有 BQL
+                    CPUState *cpu = first_cpu;
+                    if (!cpu) {
+                        qemu_mutex_unlock_iothread();
+                        fprintf(stderr, "[WaveVM-Slave] CPU not ready, skip MSG_VCPU_RUN.\n");
+                        continue;
+                    }
                     
                     bool local_is_tcg = !kvm_enabled(); // 判定本地引擎
                     
@@ -10455,7 +10596,10 @@ static void *wavevm_slave_net_thread(void *arg) {
                     
                     if (hdr->mode_tcg == local_is_tcg) {
                         // 同态返回
-                        if (local_is_tcg) wvm_tcg_get_state(cpu, &ack->ctx.tcg);
+                        if (local_is_tcg) {
+                            wvm_tcg_get_state(cpu, &ack->ctx.tcg);
+                            ack->ctx.tcg.exit_reason = cpu->exception_index;
+                        }
                         else {
                             struct kvm_regs kregs; struct kvm_sregs ksregs;
                             wvm_kvm_context_t *kctx = &ack->ctx.kvm;
@@ -10517,6 +10661,7 @@ static void *wavevm_slave_net_thread(void *arg) {
                             kvm_vcpu_ioctl(cpu, KVM_GET_REGS, &kregs);
                             kvm_vcpu_ioctl(cpu, KVM_GET_SREGS, &ksregs);
                             wvm_translate_kvm_to_tcg(&kregs, &ksregs, &ack->ctx.tcg);
+                            ack->ctx.tcg.exit_reason = cpu->kvm_run->exit_reason;
                         }
                     }
                     qemu_mutex_unlock_iothread();
@@ -11021,6 +11166,7 @@ int wvm_send_ipc_block_io(uint64_t lba, void *buf, uint32_t len, int is_write) {
     
     return ret; 
 }
+
 ```
 
 **文件**: `wavevm-qemu/accel/wavevm/wavevm-cpu.c`
@@ -11505,8 +11651,25 @@ static void *wavevm_cpu_thread_fn(void *arg) {
         qemu_mutex_unlock_iothread();
     }
 
+    /*
+     * WaveVM user path may run with kvm_enabled()==false while x86 CPU only
+     * has a single address space entry initialized. Local cpu_exec() will hit
+     * SMM MMU index and crash very early. In this fallback, route vCPU to the
+     * remote executor path and avoid local TCG execution.
+     */
+    if (!kvm_enabled() && cpu->num_ases < 2 && g_wvm_local_split > 0) {
+        g_wvm_local_split = 0;
+    }
+
     while (1) {
         if (cpu->unplug || cpu->stop) break;
+
+        // Guard against early execution before CPU address spaces are initialized.
+        // Without this, TCG may dereference a NULL memory dispatch table at boot.
+        if (!cpu_get_address_space(cpu, 0)) {
+            g_usleep(1000);
+            continue;
+        }
 
         if (ops.schedule_policy(cpu->cpu_index) == 1) {
             wavevm_remote_exec(cpu);
@@ -11604,6 +11767,7 @@ void wavevm_start_vcpu_thread(CPUState *cpu) {
     
     qemu_thread_create(cpu->thread, thread_name, wavevm_cpu_thread_fn, cpu, QEMU_THREAD_JOINABLE);
 }
+
 ```
 
 **文件**: `wavevm-qemu/accel/wavevm/wavevm-user-mem.c`
@@ -14820,3 +14984,154 @@ git push origin HEAD:main
 
 补充说明：
 - 前文相关代码块已同步为仓库对应文件内容，无需再额外附加差异片段。
+
+## 15. 最后一次尝试完整记录（2026-02-28，收尾版）
+
+本节仅记录“最后一次连续尝试”的实际配置、命令、观测与结论，便于下次直接续跑。
+
+#### 15.1 本次目标与约束
+
+目标：
+- 不启用分布式存储（仅算力/内存链路）
+- 双节点服务可运行，VM 可交互（可 SSH 登录）
+
+约束：
+- 最小修复原则，不做架构级重构
+- 启动参数不使用测试开关（不带 HOOK/mode/split）
+- 通过 `ssh -p` + `tmux` 保活
+
+#### 15.2 节点与端口信息（本次实际使用）
+
+Node1：
+- SSH：`root@111.6.167.245:8033`
+- 内网 IP：`172.30.0.133`
+- 公网端口段：`13200-13299`
+
+Node2：
+- SSH：`root@111.6.167.245:8028`
+- 内网 IP：`172.30.0.128`
+- 公网端口段：`12700-12799`
+
+#### 15.3 本次实际配置文件（两端一致）
+
+文件：`/root/wvmtest/conf/flat_routes_pub.conf`
+
+```conf
+ROUTE 0 1 172.30.0.133 13210
+ROUTE 1 1 172.30.0.128 12710
+```
+
+文件：`/root/wvmtest/conf/flat_topo_pub.conf`
+
+```conf
+NODE 0 172.30.0.133 13220 6 4
+NODE 1 172.30.0.128 12720 6 4
+```
+
+说明：
+- 名称仍为 `*_pub.conf`，但实际内容走内网地址（`172.30.x.x`）。
+
+#### 15.4 本次实际启动命令（最后一次干净重启）
+
+Node1（8033）：
+
+```bash
+./gateway_service/wavevm_gateway 13220 172.30.0.133 13210 conf/flat_routes_pub.conf 13221
+./master_core/wavevm_node_master 4096 13210 conf/flat_topo_pub.conf 0 13221 13225 64
+./slave_daemon/wavevm_node_slave 13225 6 3072 0 13221
+```
+
+Node2（8028）：
+
+```bash
+./gateway_service/wavevm_gateway 12720 172.30.0.128 12710 conf/flat_routes_pub.conf 12721
+./master_core/wavevm_node_master 4096 12710 conf/flat_topo_pub.conf 1 12721 12725 64
+./slave_daemon/wavevm_node_slave 12725 6 3072 1 12721
+```
+
+Node2 VM（最后成功拉起的命令）：
+
+```bash
+WVM_INSTANCE_ID=0 ./src/wavevm-qemu/build-native/qemu-system-x86_64 \
+  -accel wavevm -machine q35 -m 1024 -smp 1 \
+  -drive file=/root/wvmtest/images/cirros-default.img,if=virtio,format=qcow2 \
+  -netdev user,id=ne,hostfwd=tcp::12726-:22 -device e1000,netdev=ne \
+  -display none -vga none \
+  -serial file:/root/wvmtest/logs/flat-vm-serial.log -monitor none
+```
+
+说明：
+- 本轮明确校正了实例 socket：重启后 Node2 master 监听为 `/tmp/wvm_user_0.sock`，因此 VM 使用 `WVM_INSTANCE_ID=0`。
+- 使用 `WVM_INSTANCE_ID=1` 会出现：`vCPU 0 failed to connect master!`。
+
+#### 15.5 本次关键代码改动（工作区）
+
+文件：`slave_daemon/slave_hybrid.c`
+
+本轮相关最小改动点：
+1. `init_thread_local_vcpu()` 增强与兜底：
+   - 首选复用 boot vCPU；
+   - 创建失败时增加有限 fallback 探测；
+   - 增加初始化失败保护日志。
+2. `handle_kvm_run_stateless()`：
+   - 成功回包路径显式 `ack->status = 0`；
+   - `TCG -> KVM` 转换时保留本地 `sregs`（避免覆盖后触发非法状态）。
+3. 增加了若干调试日志（BootVCPU/Init/Ack），用于定位本轮问题。
+
+#### 15.6 本次关键诊断结论
+
+1. Node1 上 `RAM=4096MB` 时，KVM vCPU 创建在最小探针里可稳定复现异常：
+   - `KVM_SET_USER_MEMORY_REGION` 成功后，`KVM_CREATE_VCPU(id=0/1)` 返回 `errno=17(EEXIST)`。
+2. Node1 上 `RAM=1024/2048/3072MB` 时，探针可正常 `KVM_CREATE_VCPU`。
+3. 因此本轮将两端 slave 运行参数从 `4096` 下调到 `3072`（仅运行参数级修正）。
+
+#### 15.7 最后一次交互测试结果（最终）
+
+测试项（Node2 本机）：
+1. 端口监听：
+   - `12726`：监听成功（qemu 进程存在）
+2. SSH Banner：
+   - `BANNER_TIMEOUT`
+3. SSH 登录：
+   - `cirros/gocubsgo`：`Connection timed out during banner exchange`
+   - `root`：`Connection timed out`
+
+结论：
+- VM 进程在跑、端口在监听，但仍未达到可交互登录状态。
+
+#### 15.8 最后一次日志状态摘要
+
+Node1 `flat-slave.log`：
+- 已不再是“启动即崩溃”；
+- 有稳定 ACK 回包；
+- 但持续出现 `exit=17`（对应 `KVM_EXIT_INTERNAL_ERROR`）。
+
+Node2 `flat-master.log`：
+- 持续出现 `matched rid=... -> status=1`；
+- 伴随 `Node 0 OFFLINE` 间歇告警；
+- 与 VM 登录失败一致。
+
+Node2 `flat-vm-wavevm-pub.log`：
+- 末尾仍是 `kvm_enabled=0`（当前 VM 侧仍在 TCG 本地执行路径）。
+
+#### 15.9 本次已明确排除/确认的问题
+
+已确认：
+1. 不是单纯“slave 启动即崩溃”问题（该问题本轮已被消除）。
+2. 不是单纯“端口没监听”问题（12726 可监听）。
+3. 存在环境/平台边界行为：Node1 在 4GB KVM 路径触发异常，降到 3GB 可创建 vCPU。
+
+仍存在：
+1. 执行语义层未稳定（`exit_reason=17` + `status=1` 循环）；
+2. VM 仍无法完成 SSH 交互。
+
+#### 15.10 下一步计划（限时最小路径）
+
+1. 固定当前已验证可运行基线：
+   - Node1/Node2 slave 都保持 `3072`，避免回到 4GB 触发点。
+2. 收敛 `status=1` 的唯一来源：
+   - 在 Node2 master 的 `RX VCPU_EXIT` 解包位置打印 ACK 前 16 字节十六进制，确认 `status` 字段是否被上游覆盖/错位。
+3. 对 `exit=17` 做一次单点分流：
+   - 仅在 Node1 `TCG->KVM` 路径，保留当前 `sregs` 策略下继续最小化输入上下文（先不动整体协议）。
+4. 以“SSH banner 成功出现”为第一验收门槛：
+   - 不先追求完整业务，仅先拿到 banner，再推进登录与分布式内存验证。
