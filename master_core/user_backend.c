@@ -48,8 +48,6 @@ static int g_local_port = 0;
 static struct sockaddr_in g_gateways[WVM_MAX_GATEWAYS];
 static volatile int g_tx_socket = -1;
 int g_slave_forward_port = 0;
-uint32_t g_curr_epoch = 0;
-uint8_t g_my_node_state = 1;
 
 __attribute__((weak)) int push_to_aggregator(uint32_t slave_id, void *data, int len) {
     if (!data || len <= 0) {
@@ -92,6 +90,8 @@ __attribute__((weak)) int push_to_aggregator(uint32_t slave_id, void *data, int 
 // --- 外部引用 ---
 extern void *g_shm_ptr; 
 extern size_t g_shm_size;
+extern uint32_t g_curr_epoch;
+extern uint8_t g_my_node_state;
 extern void broadcast_irq_to_qemu(void);
 extern void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t source_node_id);
 extern void broadcast_push_to_qemu(uint16_t msg_type, void* payload, int len);
@@ -420,7 +420,7 @@ static int raw_send(tx_node_t *node) {
     struct wvm_header *hdr = (struct wvm_header *)node->data;
     // 使用本文件中的轻量状态镜像，避免跨对象链接耦合。
 
-    hdr->epoch = g_curr_epoch;
+    hdr->epoch = htonl(g_curr_epoch);
     hdr->node_state = g_my_node_state;
     hdr->target_id = htonl(node->target_id);
     
@@ -822,12 +822,21 @@ static void* rx_thread_loop(void *arg) {
                 uint16_t msg_type = ntohs(hdr->msg_type); // 定义 msg_type
 
                 if (received_crc == calculated_crc) {
-                    uint32_t msg_epoch = hdr->epoch;
-                    extern uint32_t g_curr_epoch;
+                    uint32_t msg_epoch = ntohl(hdr->epoch);
+                    if (msg_type == MSG_HEARTBEAT) {
+                        uint64_t hb_rid = WVM_NTOHLL(hdr->req_id);
+                        u_log("[HB RX] src_port=%u src_id=%u target_id=%u epoch=%u local=%u",
+                              (unsigned)ntohs(src_addrs[i].sin_port),
+                              (unsigned)ntohl(hdr->slave_id),
+                              (unsigned)ntohl(hdr->target_id),
+                              (unsigned)msg_epoch,
+                              (unsigned)g_curr_epoch);
+                        u_log("[HB RX] rid=%llu", (unsigned long long)hb_rid);
+                    }
 
                     // [自治策略]：丢弃来自未来的非法包，或处理落后包
                     if (msg_epoch > g_curr_epoch + 5) {
-                        if (msg_type == MSG_VCPU_RUN) {
+                        if (msg_type == MSG_VCPU_RUN || msg_type == MSG_HEARTBEAT) {
                             u_log("[RX Drop Epoch] msg=%u src_port=%u epoch=%u local=%u",
                                   (unsigned)msg_type, (unsigned)ntohs(src_addrs[i].sin_port),
                                   msg_epoch, g_curr_epoch);

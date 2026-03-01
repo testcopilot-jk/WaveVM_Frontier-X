@@ -92,7 +92,7 @@ struct dsm_driver_ops *g_ops = NULL;
 int g_total_nodes = 1;
 int g_my_node_id = 0;
 int g_ctrl_port = 0; // 这里的定义同时供应给 wavevm_node_master 和 wavevm.ko
-static uint32_t g_curr_epoch = 0;
+uint32_t g_curr_epoch = 0;
 
 // 哈希环脏标记 (解决 CPU 抖动)
 static atomic_bool g_ring_dirty = false;
@@ -459,7 +459,7 @@ void update_local_topology_view(uint32_t src_id, uint32_t src_epoch, uint8_t src
     atomic_store(&g_ring_dirty, true);
 }
 
-static uint8_t  g_my_node_state = NODE_STATE_SHADOW;
+uint8_t  g_my_node_state = NODE_STATE_SHADOW;
 static uint64_t g_last_gossip_us = 0;
 static uint64_t g_state_start_us = 0;
 
@@ -1256,49 +1256,23 @@ void wvm_declare_interest_in_neighborhood(uint64_t gpa) {
 }
 
 static void add_gossip_to_aggregator(uint32_t target_node_id, uint8_t state, uint32_t epoch) {
-    pthread_mutex_lock(&g_gossip_agg.lock);
-    size_t needed = sizeof(struct wvm_header);
+    struct wvm_heartbeat_payload hb;
+    (void)state;
+    (void)epoch;
 
-    // 缓冲区满或目标切换时冲刷
-    if (g_gossip_agg.curr_offset + needed > MTU_SIZE) {
-        g_ops->send_packet(g_gossip_agg.buf, g_gossip_agg.curr_offset, g_gossip_agg.last_gateway_id);
-        g_gossip_agg.curr_offset = 0;
-    }
+    hb.local_epoch = htonl(g_curr_epoch);
+    hb.active_node_count = htonl(g_peer_count);
+    hb.load_factor = 0;
+    hb.peer_epoch_sum = 0;
+    hb.ctrl_port = htons((uint16_t)g_ctrl_port);
 
-    struct wvm_header *hdr = (struct wvm_header *)(g_gossip_agg.buf + g_gossip_agg.curr_offset);
-    memset(hdr, 0, sizeof(*hdr)); // 必须清零
-    hdr->magic = htonl(WVM_MAGIC);
-    hdr->msg_type = htons(MSG_HEARTBEAT);
-    hdr->slave_id = htonl(g_my_node_id);
-    hdr->node_state = state;
-    hdr->epoch = htonl(epoch);
-    struct wvm_heartbeat_payload *hb = (struct wvm_heartbeat_payload *)(hdr + 1);
-    hb->local_epoch = htonl(g_curr_epoch);
-    hb->active_node_count = htonl(g_peer_count);
-    hb->load_factor = 0; 
-    hb->peer_epoch_sum = 0;
-    // [V31 FIX] 填入本地配置的端口
-    hb->ctrl_port = htons((uint16_t)g_ctrl_port);
-
-    // 注意：Header 的 payload_len 需要更新，包含心跳结构体
-    hdr->payload_len = htons(sizeof(struct wvm_heartbeat_payload));
-    
-    // 重新计算 CRC (包含 payload)
-    hdr->crc32 = 0;
-    hdr->crc32 = htonl(calculate_crc32(hdr, sizeof(*hdr) + sizeof(*hb)));
-
-    g_gossip_agg.last_gateway_id = target_node_id; 
-    g_gossip_agg.curr_offset += (sizeof(*hdr) + sizeof(*hb));
-    pthread_mutex_unlock(&g_gossip_agg.lock);
+    /* Heartbeat packets must be sent as standalone frames so header/CRC/target_id
+     * are set consistently by the backend send pipeline. */
+    g_ops->send_packet_async(MSG_HEARTBEAT, &hb, sizeof(hb), target_node_id, 1);
 }
 
 static void flush_gossip_aggregator() {
-    pthread_mutex_lock(&g_gossip_agg.lock);
-    if (g_gossip_agg.curr_offset > 0) {
-        g_ops->send_packet(g_gossip_agg.buf, g_gossip_agg.curr_offset, g_gossip_agg.last_gateway_id);
-        g_gossip_agg.curr_offset = 0;
-    }
-    pthread_mutex_unlock(&g_gossip_agg.lock);
+    /* No-op: heartbeat aggregation removed; each heartbeat is sent directly. */
 }
 
 /* 
@@ -1311,6 +1285,10 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
     uint32_t src_id = ntohl(hdr->slave_id);
     uint32_t src_epoch = ntohl(hdr->epoch);
     uint8_t  src_state = hdr->node_state;
+
+    if (type == MSG_HEARTBEAT && g_ops && g_ops->log) {
+        g_ops->log("[HB LOGIC] src=%u state=%u epoch=%u", src_id, src_state, src_epoch);
+    }
 
     // 1. [核心安全检查] 任何消息都必须透传 Epoch 和 State
     // 如果收到的消息 Epoch 大于本地太远，说明本地视图已严重落后，强制触发视图拉取
