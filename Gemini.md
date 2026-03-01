@@ -8803,7 +8803,6 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     if (g_wvm_dev_fd < 0) { 
         // [V28.5 FIXED] KVM Dirty Log Sync (Full Implementation)
         // 完整实现：获取位图 -> 遍历 -> 封包 -> 发送
-        // 这里的 slot 0 对应整个 RAM
         struct kvm_dirty_log log = { .slot = 0 };
         size_t nbits_per_long = sizeof(unsigned long) * 8;
 
@@ -15333,3 +15332,116 @@ Node2 `flat-vm-wavevm-pub.log`：
    - 仅在 Node1 `TCG->KVM` 路径，保留当前 `sregs` 策略下继续最小化输入上下文（先不动整体协议）。
 4. 以“SSH banner 成功出现”为第一验收门槛：
    - 不先追求完整业务，仅先拿到 banner，再推进登录与分布式内存验证。
+
+## 16. 2026-03-01 紧急续测记录（实例 8008/8002，限时版）
+
+本节为 2026-03-01 当天在“时间与额度受限”条件下的连续操作归档，目标是固定最小改动并保留可续跑现场。
+
+#### 16.1 本轮目标与约束
+
+目标：
+- 延续“禁用分布式存储，仅验证分布式算力与分布式内存链路”的测试目标。
+- 优先消除/定位 `slave` 启动异常与 VM 秒退问题。
+
+约束：
+- 不走本地编译产物直跑远端，统一采用远端本机编译。
+- 最小修复原则，不做架构级改造。
+- 启动参数不引入 HOOK/mode/split 测试开关。
+
+#### 16.2 本次实例与端口（实际）
+
+Node1：
+- SSH：`root@111.6.167.245:8008`
+- 密码：`NQPWHaVwnwJQslTh1w0o7U2MFmwiQfv9`
+- 公网端口段：`10700-10799`
+
+Node2：
+- SSH：`root@111.6.167.245:8002`
+- 密码：`KsLgBEQXIaYou8NG8Kudmr8W0RfGHEEm`
+- 公网端口段：`10100-10199`
+
+#### 16.3 本轮使用的配置与启动命令（最终一次）
+
+两端 `run/start_flat.sh` 实际启动参数：
+
+Node1：
+```bash
+./gateway_service/wavevm_gateway 10720 172.30.0.108 10710 conf/flat_routes_pub.conf 10721
+./master_core/wavevm_node_master 4096 10710 conf/flat_topo_pub.conf 0 10721 10725 64
+./slave_daemon/wavevm_node_slave 10725 6 4096 0 10721
+```
+
+Node2：
+```bash
+./gateway_service/wavevm_gateway 10120 172.30.0.102 10110 conf/flat_routes_pub.conf 10121
+./master_core/wavevm_node_master 4096 10110 conf/flat_topo_pub.conf 1 10121 10125 64
+./slave_daemon/wavevm_node_slave 10125 6 4096 1 10121
+```
+
+VM 启动脚本（Node1）：
+```bash
+export WVM_INSTANCE_ID=0
+/root/wvmtest/src/wavevm-qemu/build-native/qemu-system-x86_64 \
+  -accel wavevm -machine q35 -m 1024 -smp 1 \
+  -drive file=/root/wvmtest/images/cirros-default.img,if=virtio,format=qcow2 \
+  -netdev user,id=ne,hostfwd=tcp::10726-:22 -device e1000,netdev=ne \
+  -display none -vga none -serial file:/root/wvmtest/logs/flat-vm-serial.log -monitor none
+```
+
+备注：
+- Node2 VM 脚本指向 `./src/wavevm-qemu/build-native/qemu-system-x86_64`，现场存在缺失/不可执行情况（`exit 127`）。
+
+#### 16.4 本轮代码同步与构建方式
+
+- 同步方式：本地源码打包直传（不走 `git pull`）到两端 `/root/wvmtest`。
+- 构建方式（两端）：
+```bash
+make -C master_core -f Makefile_User -j6
+make -C slave_daemon -j6
+```
+
+#### 16.5 本轮关键代码变更（最小修复）
+
+1. `master_core/logic_core.c`
+- 心跳聚合改为单包 `send_packet_async(MSG_HEARTBEAT, ...)`，移除手工多包拼装发送。
+
+2. `master_core/user_backend.c` + `master_core/logic_core.c` + `master_core/logic_core.h`
+- 修复 `epoch` 发送/接收大小端（`htonl/ntohl`）。
+- 合并 `g_curr_epoch` / `g_my_node_state` 真源，移除 `user_backend.c` 重复定义，改为引用 `logic_core` 同一份状态。
+
+3. `slave_daemon/slave_hybrid.c`
+- 保留此前的 boot vCPU 提前创建修复。
+- KVM->KVM 路径不再整块覆盖 `kvm_sregs`，改为精选字段覆盖。
+
+4. `master_core/main_wrapper.c`
+- 追加 IPC 诊断日志（连接建立、header/payload 短读、未知 type、断连）。
+
+5. `wavevm-qemu/accel/wavevm/wavevm-cpu.c`
+- 本轮新增最小修复：将 ACK 回写路径中的 `ksregs` 整块 `memcpy` 改为“先 `KVM_GET_SREGS`，再精选架构字段覆盖”，避免覆盖本地 APIC/中断相关状态。
+
+#### 16.6 本轮观测结果（最终状态）
+
+已确认：
+1. 两端 `slave` boot vCPU 初始化成功：
+- `create fd=5 errno=0`
+- `mmap_size=12288 errno=0`
+2. 两端 master 心跳接收与逻辑处理稳定出现：
+- `[HB RX] ...`
+- `[HB LOGIC] ...`
+3. 间歇出现 `Liveness ... OFFLINE` 告警，属于当前仍未完全闭环的问题。
+
+未完成：
+1. Node1 VM 端口 `10726` 可短时出现监听，但未稳定保持，SSH Banner 未形成稳定可登录态。
+2. Node2 VM 未进入有效验证（QEMU 可执行缺失/不可执行）。
+
+#### 16.7 现场遗留问题（收敛后）
+
+1. 控制面“收到心跳但仍 OFFLINE”与局部状态机判活仍需继续收敛。
+2. Node1 上 QEMU 仍存在秒退/短时监听后消失现象。
+3. Node2 前端 QEMU 本体可执行状态需先恢复（可执行文件路径/权限/二进制一致性）。
+
+#### 16.8 下一步计划（建议顺序，最小爆炸半径）
+
+1. 先固定二进制一致性：补齐 Node2 `qemu-system-x86_64`，确认两端前端版本一致。
+2. 在 Node1 仅做单机链路断点：对 `main_wrapper.c` IPC 日志 + `wavevm-cpu.c` 回写路径联合观察，锁定 VM 秒退触发点。
+3. 在“VM 端口稳定监听 + 出现 SSH Banner”后，再推进登录验证，不提前扩展到分布式存储。
