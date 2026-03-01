@@ -187,6 +187,28 @@ static bool wavevm_valid_mmio_exit(const struct kvm_run *run)
            run->mmio.len == 4 || run->mmio.len == 8;
 }
 
+/* Keep local APIC/interrupt state and only import architectural sregs fields. */
+static void wavevm_apply_arch_sregs(struct kvm_sregs *dst,
+                                    const struct kvm_sregs *src)
+{
+    dst->cs = src->cs;
+    dst->ds = src->ds;
+    dst->es = src->es;
+    dst->fs = src->fs;
+    dst->gs = src->gs;
+    dst->ss = src->ss;
+    dst->tr = src->tr;
+    dst->ldt = src->ldt;
+    dst->gdt = src->gdt;
+    dst->idt = src->idt;
+    dst->cr0 = src->cr0;
+    dst->cr2 = src->cr2;
+    dst->cr3 = src->cr3;
+    dst->cr4 = src->cr4;
+    dst->cr8 = src->cr8;
+    dst->efer = src->efer;
+}
+
 /* 
  * [物理意图] 充当远程 Slave 的“本地代理执行人”。
  * [关键逻辑] 当远程计算节点触发 PIO/MMIO 退出时，Master 在本地 QEMU 中代为执行该 I/O 操作并返回结果。
@@ -296,7 +318,8 @@ static void wavevm_remote_exec(CPUState *cpu) {
             kregs.r14 = kctx->r14; kregs.r15 = kctx->r15;
             kregs.rip = kctx->rip; kregs.rflags = kctx->rflags;
             
-            memcpy(&ksregs, kctx->sregs_data, sizeof(ksregs));
+            ioctl(cpu->kvm_fd, KVM_GET_SREGS, &ksregs);
+            wavevm_apply_arch_sregs(&ksregs, (const struct kvm_sregs *)kctx->sregs_data);
             ioctl(cpu->kvm_fd, KVM_SET_SREGS, &ksregs);
             ioctl(cpu->kvm_fd, KVM_SET_REGS, &kregs);
             
@@ -410,7 +433,8 @@ static void wavevm_remote_exec(CPUState *cpu) {
         kregs.r14 = kctx->r14; kregs.r15 = kctx->r15;
         kregs.rip = kctx->rip; kregs.rflags = kctx->rflags;
         
-        memcpy(&ksregs, kctx->sregs_data, sizeof(ksregs));
+        ioctl(cpu->kvm_fd, KVM_GET_SREGS, &ksregs);
+        wavevm_apply_arch_sregs(&ksregs, (const struct kvm_sregs *)kctx->sregs_data);
         ioctl(cpu->kvm_fd, KVM_SET_SREGS, &ksregs);
         ioctl(cpu->kvm_fd, KVM_SET_REGS, &kregs);
         

@@ -235,6 +235,7 @@ void broadcast_irq_to_qemu(void) {
 void* client_handler(void *socket_desc) {
     int qemu_fd = *(int*)socket_desc;
     free(socket_desc);
+    fprintf(stderr, "[IPC] client connected fd=%d\n", qemu_fd);
 
     pthread_mutex_lock(&g_client_lock);
     if (g_client_count < MAX_QEMU_CLIENTS) {
@@ -245,9 +246,21 @@ void* client_handler(void *socket_desc) {
     wvm_ipc_header_t ipc_hdr;
     uint8_t payload_buf[sizeof(struct wvm_ipc_cpu_run_req)]; // Use largest possible payload
 
-    while (read(qemu_fd, &ipc_hdr, sizeof(ipc_hdr)) == sizeof(ipc_hdr)) {
+    while (1) {
+        ssize_t hdr_n = read(qemu_fd, &ipc_hdr, sizeof(ipc_hdr));
+        if (hdr_n != (ssize_t)sizeof(ipc_hdr)) {
+            if (hdr_n == 0) {
+                fprintf(stderr, "[IPC] peer closed before header fd=%d\n", qemu_fd);
+            } else {
+                fprintf(stderr, "[IPC] header read short fd=%d n=%zd errno=%d\n",
+                        qemu_fd, hdr_n, errno);
+            }
+            break;
+        }
         if (ipc_hdr.len > sizeof(payload_buf)) {
-             // Payload too large, drain and ignore
+            fprintf(stderr, "[IPC] payload too large fd=%d type=%u len=%u max=%zu\n",
+                    qemu_fd, (unsigned)ipc_hdr.type, (unsigned)ipc_hdr.len, sizeof(payload_buf));
+            // Payload too large, drain and ignore
             char drain[1024];
             size_t remaining = ipc_hdr.len;
             while(remaining > 0) {
@@ -258,7 +271,12 @@ void* client_handler(void *socket_desc) {
             continue;
         }
         
-        if (read(qemu_fd, payload_buf, ipc_hdr.len) != ipc_hdr.len) break;
+        ssize_t payload_n = read(qemu_fd, payload_buf, ipc_hdr.len);
+        if (payload_n != (ssize_t)ipc_hdr.len) {
+            fprintf(stderr, "[IPC] payload read short fd=%d type=%u need=%u got=%zd errno=%d\n",
+                    qemu_fd, (unsigned)ipc_hdr.type, (unsigned)ipc_hdr.len, payload_n, errno);
+            break;
+        }
 
         switch (ipc_hdr.type) {
             case WVM_IPC_TYPE_MEM_FAULT:
@@ -359,9 +377,12 @@ void* client_handler(void *socket_desc) {
                 break;
             }
             default:
+                fprintf(stderr, "[IPC] unknown type fd=%d type=%u len=%u\n",
+                        qemu_fd, (unsigned)ipc_hdr.type, (unsigned)ipc_hdr.len);
                 break;
         }
     }
+    fprintf(stderr, "[IPC] client disconnected fd=%d\n", qemu_fd);
     close(qemu_fd);
     
     // 移除客户端并压缩数组，防止 Slot 耗尽
