@@ -5,11 +5,13 @@
 #include "sysemu/hw_accel.h"
 #include "sysemu/kvm.h" 
 #include "sysemu/runstate.h"
+#include "qapi/error.h"
 #include "linux/kvm.h"
 #include "hw/boards.h"
 #include "qemu/main-loop.h"
 #include "exec/address-spaces.h"
 #include "exec/cpu-all.h"
+#include "../kvm/kvm-cpus.h"
 #include "../../../common_include/wavevm_protocol.h" 
 #include "../../../common_include/wavevm_config.h"
 #include "../../../common_include/wavevm_ioctl.h"
@@ -473,6 +475,8 @@ static void *wavevm_cpu_thread_fn(void *arg) {
     
     if (kvm_enabled()) {
         qemu_mutex_lock_iothread();
+        kvm_init_vcpu(cpu, &error_fatal);
+        kvm_init_cpu_signals(cpu);
         cpu_synchronize_state(cpu);
         qemu_mutex_unlock_iothread();
     }
@@ -539,6 +543,11 @@ static void *wavevm_cpu_thread_fn(void *arg) {
         }
     }
 out:
+    if (kvm_enabled() && cpu->kvm_fd >= 0) {
+        qemu_mutex_lock_iothread();
+        kvm_destroy_vcpu(cpu);
+        qemu_mutex_unlock_iothread();
+    }
     rcu_unregister_thread();
     return NULL;
 }

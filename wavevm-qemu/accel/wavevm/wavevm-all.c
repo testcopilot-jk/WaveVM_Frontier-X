@@ -6,6 +6,7 @@
 #include "sysemu/accel.h"
 #include "sysemu/cpus.h"
 #include "sysemu/sysemu.h"
+#include "qom/object.h"
 #include "hw/boards.h"
 #include "qemu/option.h"
 #include <sys/ioctl.h>
@@ -46,6 +47,12 @@ static void *g_primary_ram_hva = NULL;
 static uint64_t g_primary_ram_size = 0;
 static bool g_user_mem_inited = false;
 static uint64_t g_user_ram_size_hint = 0;
+static bool g_wvm_kvm_bootstrap_done = false;
+static AccelState *g_wvm_kvm_accel = NULL;
+
+static const CpusAccel wavevm_cpus = {
+    .create_vcpu_thread = wavevm_start_vcpu_thread,
+};
 
 static int wavevm_auto_split_from_vcpus(int vcpus)
 {
@@ -687,6 +694,42 @@ static int wavevm_init_machine(MachineState *ms) {
 
     memory_listener_register(&wavevm_mem_listener, &address_space_memory);
 
+    if (s->mode == WVM_MODE_USER && !g_wvm_kvm_bootstrap_done) {
+        AccelClass *kvm_ac;
+        AccelState *saved_accel;
+
+        g_wvm_kvm_bootstrap_done = true;
+        if (access("/dev/kvm", R_OK | W_OK) == 0) {
+            kvm_ac = accel_find("kvm");
+            if (kvm_ac && kvm_ac->init_machine) {
+                g_wvm_kvm_accel = ACCEL(object_new(ACCEL_CLASS_NAME("kvm")));
+                if (g_wvm_kvm_accel) {
+#ifdef CONFIG_KVM
+                    kvm_allowed = true;
+#endif
+                    saved_accel = ms->accelerator;
+                    ms->accelerator = g_wvm_kvm_accel;
+                    ret = kvm_ac->init_machine(ms);
+                    ms->accelerator = saved_accel;
+
+                    if (ret == 0) {
+                        cpus_register_accel(&wavevm_cpus);
+                        fprintf(stderr, "[WaveVM] KVM bootstrap OK, keep wavevm vCPU control (kvm_enabled=%d)\n",
+                                kvm_enabled() ? 1 : 0);
+                    } else {
+#ifdef CONFIG_KVM
+                        kvm_allowed = false;
+#endif
+                        object_unref(OBJECT(g_wvm_kvm_accel));
+                        g_wvm_kvm_accel = NULL;
+                        ret = 0;
+                        fprintf(stderr, "[WaveVM] KVM bootstrap failed, stay on TCG path\n");
+                    }
+                }
+            }
+        }
+    }
+
     if (s->mode == WVM_MODE_KERNEL) ret = wavevm_init_machine_kernel(s, ms);
     else ret = wavevm_init_machine_user(s, ms);
     if (ret < 0) return ret;
@@ -789,9 +832,6 @@ static void wavevm_accel_init(Object *obj) {
 }
 static void wavevm_accel_class_init(ObjectClass *oc, void *data) {
     AccelClass *ac = ACCEL_CLASS(oc);
-    static const CpusAccel wavevm_cpus = {
-        .create_vcpu_thread = wavevm_start_vcpu_thread,
-    };
 
     ac->name = "wavevm";
     ac->init_machine = wavevm_init_machine;

@@ -570,16 +570,13 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         return;
     }
     struct kvm_regs kregs; struct kvm_sregs ksregs;
-    // 1. 获取本地底版（保留不可见的隐藏段状态）
+    // 1. 读取当前 sregs，供直通路径或转换路径继续使用
     ioctl(t_vcpu_fd, KVM_GET_SREGS, &ksregs); 
-    struct kvm_sregs base_ksregs = ksregs;
 
     // 2. 只有不一样的时候才转换！
     if (req->mode_tcg) {
         // TCG 对 KVM：转换计算
         wvm_translate_tcg_to_kvm(&req->ctx.tcg, &kregs, &ksregs);
-        /* Keep host-native segment/control state to avoid invalid mixed state. */
-        ksregs = base_ksregs;
     } else {
         // KVM 对 KVM：零转换直通
         wvm_kvm_context_t *ctx = &req->ctx.kvm;
