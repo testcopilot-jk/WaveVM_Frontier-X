@@ -24,6 +24,7 @@
 #include <arpa/inet.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <stdint.h>
 #include <linux/kvm.h>
 #include <errno.h>
 #include <sched.h>
@@ -42,6 +43,20 @@ static int g_service_port = 9000;
 static long g_num_cores = 0;
 static int g_ram_mb = 1024;
 static uint64_t g_slave_ram_size = 1024UL * 1024 * 1024;
+
+typedef struct {
+    int slot;
+    uint64_t guest_phys_addr;
+    uint64_t size;
+    uint8_t *hva;
+    uint32_t flags;
+    bool track_dirty;
+} wvm_kvm_slot_t;
+
+static wvm_kvm_slot_t g_kvm_slots[4];
+static int g_kvm_slot_count = 0;
+static uint8_t *g_kvm_reserved_hva = NULL;
+static size_t g_kvm_reserved_size = 0;
 // 用于通知 IRQ 线程 Master 地址已就绪
 static pthread_cond_t g_master_cond = PTHREAD_COND_INITIALIZER;
 static pthread_mutex_t g_master_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -264,6 +279,80 @@ static int g_wvm_dev_fd = -1;
 static int g_base_id = 0;
 static int g_vcpu_init_debug_once = 0;
 
+#define WVM_PAGE_SIZE            4096ULL
+#define WVM_KVM_IDMAP_ADDR       0xfffbc000ULL
+#define WVM_KVM_TSS_ADDR         0xfffbd000ULL
+#define WVM_KVM_RESERVED_SIZE    0x2000ULL /* IDMAP + TSS pages */
+
+static uint8_t *wvm_gpa_to_hva(uint64_t gpa)
+{
+    for (int i = 0; i < g_kvm_slot_count; i++) {
+        const wvm_kvm_slot_t *slot = &g_kvm_slots[i];
+        if (gpa >= slot->guest_phys_addr &&
+            gpa < slot->guest_phys_addr + slot->size) {
+            return slot->hva + (gpa - slot->guest_phys_addr);
+        }
+    }
+    return NULL;
+}
+
+static inline int wvm_gpa_page_valid(uint64_t gpa)
+{
+    uint8_t *hva = wvm_gpa_to_hva(gpa);
+    if (!hva) return 0;
+    /* Require the whole page to fit in a single slot. */
+    return wvm_gpa_to_hva(gpa + (WVM_PAGE_SIZE - 1)) != NULL;
+}
+
+static int wvm_kvm_add_memslot(int vm_fd, int slot_id,
+                              uint64_t guest_phys_addr, uint64_t size,
+                              uint8_t *hva, uint32_t flags, bool track_dirty)
+{
+    struct kvm_userspace_memory_region region;
+
+    if (size == 0) {
+        return 0;
+    }
+    if ((guest_phys_addr & (WVM_PAGE_SIZE - 1)) ||
+        (size & (WVM_PAGE_SIZE - 1)) ||
+        (((uintptr_t)hva) & (WVM_PAGE_SIZE - 1))) {
+        fprintf(stderr, "[Hybrid] memslot alignment invalid gpa=%#llx size=%#llx hva=%p\n",
+                (unsigned long long)guest_phys_addr,
+                (unsigned long long)size,
+                (void*)hva);
+        return -1;
+    }
+
+    memset(&region, 0, sizeof(region));
+    region.slot = (uint32_t)slot_id;
+    region.flags = flags;
+    region.guest_phys_addr = guest_phys_addr;
+    region.memory_size = size;
+    region.userspace_addr = (uint64_t)hva;
+
+    if (ioctl(vm_fd, KVM_SET_USER_MEMORY_REGION, &region) < 0) {
+        perror("[Hybrid] KVM_SET_USER_MEMORY_REGION failed");
+        fprintf(stderr, "[Hybrid] memslot=%d gpa=%#llx size=%#llx hva=%p\n",
+                slot_id,
+                (unsigned long long)guest_phys_addr,
+                (unsigned long long)size,
+                (void*)hva);
+        return -1;
+    }
+
+    if (g_kvm_slot_count < (int)(sizeof(g_kvm_slots) / sizeof(g_kvm_slots[0]))) {
+        g_kvm_slots[g_kvm_slot_count].slot = slot_id;
+        g_kvm_slots[g_kvm_slot_count].guest_phys_addr = guest_phys_addr;
+        g_kvm_slots[g_kvm_slot_count].size = size;
+        g_kvm_slots[g_kvm_slot_count].hva = hva;
+        g_kvm_slots[g_kvm_slot_count].flags = flags;
+        g_kvm_slots[g_kvm_slot_count].track_dirty = track_dirty;
+        g_kvm_slot_count++;
+    }
+
+    return 0;
+}
+
 /* 
  * [物理意图] 在远程节点初始化硬件虚拟化容器（KVM），为“算力托管”圈定物理内存边界。
  * [关键逻辑] 创建 KVM 虚拟机实例，利用 mmap 映射大页内存，并根据是否有内核模块（Mode A）选择最优路径。
@@ -315,19 +404,64 @@ void init_kvm_global() {
     g_vm_fd = ioctl(g_kvm_fd, KVM_CREATE_VM, 0);
     if (g_vm_fd < 0) { close(g_kvm_fd); g_kvm_fd = -1; return; }
 
-    ioctl(g_vm_fd, KVM_SET_TSS_ADDR, 0xfffbd000);
-    __u64 map_addr = 0xfffbc000;
+    ioctl(g_vm_fd, KVM_SET_TSS_ADDR, WVM_KVM_TSS_ADDR);
+    __u64 map_addr = WVM_KVM_IDMAP_ADDR;
     ioctl(g_vm_fd, KVM_SET_IDENTITY_MAP_ADDR, &map_addr);
     ioctl(g_vm_fd, KVM_CREATE_IRQCHIP, 0);
 
-    struct kvm_userspace_memory_region region = {
-        .slot = 0,
-        .flags = KVM_MEM_LOG_DIRTY_PAGES,
-        .guest_phys_addr = 0,
-        .memory_size = g_slave_ram_size,
-        .userspace_addr = (uint64_t)g_phy_ram
-    };
-    ioctl(g_vm_fd, KVM_SET_USER_MEMORY_REGION, &region);
+    g_kvm_slot_count = 0;
+
+    /* Map a dedicated 2-page reserved window for KVM IDMAP/TSS. */
+    g_kvm_reserved_size = (size_t)WVM_KVM_RESERVED_SIZE;
+    g_kvm_reserved_hva = mmap(NULL, g_kvm_reserved_size, PROT_READ | PROT_WRITE,
+                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (g_kvm_reserved_hva == MAP_FAILED) {
+        perror("[Hybrid] mmap reserved");
+        g_kvm_reserved_hva = NULL;
+        close(g_vm_fd);
+        g_vm_fd = -1;
+        close(g_kvm_fd);
+        g_kvm_fd = -1;
+        return;
+    }
+
+    /* Slot 0: [0, IDMAP_ADDR) */
+    uint64_t low_size = g_slave_ram_size;
+    if (low_size > WVM_KVM_IDMAP_ADDR) {
+        low_size = WVM_KVM_IDMAP_ADDR;
+    }
+    if (wvm_kvm_add_memslot(g_vm_fd, 0, 0, low_size, g_phy_ram,
+                            KVM_MEM_LOG_DIRTY_PAGES, true) < 0) {
+        close(g_vm_fd);
+        g_vm_fd = -1;
+        close(g_kvm_fd);
+        g_kvm_fd = -1;
+        return;
+    }
+
+    /* Slot 2: reserved IDMAP/TSS pages. */
+    if (wvm_kvm_add_memslot(g_vm_fd, 2, WVM_KVM_IDMAP_ADDR, WVM_KVM_RESERVED_SIZE,
+                            g_kvm_reserved_hva, 0, false) < 0) {
+        close(g_vm_fd);
+        g_vm_fd = -1;
+        close(g_kvm_fd);
+        g_kvm_fd = -1;
+        return;
+    }
+
+    /* Slot 1: (IDMAP_ADDR + reserved, ram_end] */
+    uint64_t hole_end = WVM_KVM_IDMAP_ADDR + WVM_KVM_RESERVED_SIZE;
+    if (g_slave_ram_size > hole_end) {
+        uint64_t high_size = g_slave_ram_size - hole_end;
+        if (wvm_kvm_add_memslot(g_vm_fd, 1, hole_end, high_size, g_phy_ram + hole_end,
+                                KVM_MEM_LOG_DIRTY_PAGES, true) < 0) {
+            close(g_vm_fd);
+            g_vm_fd = -1;
+            close(g_kvm_fd);
+            g_kvm_fd = -1;
+            return;
+        }
+    }
 
     g_kvm_available = 1;
     pthread_spin_init(&g_master_lock, 0);
@@ -611,71 +745,76 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         // 完整实现：获取位图 -> 遍历 -> 封包 -> 发送
         // 这里的 slot 0 对应整个 RAM
         struct kvm_dirty_log log = { .slot = 0 };
-        size_t bitmap_size = (g_slave_ram_size / 4096) / 8;
-        if (bitmap_size == 0) bitmap_size = 1; // Safety check
+        size_t nbits_per_long = sizeof(unsigned long) * 8;
 
-        if (!t_dirty_bitmap_cache || t_dirty_bitmap_size < bitmap_size) {
-            if (t_dirty_bitmap_cache) free(t_dirty_bitmap_cache);
-            t_dirty_bitmap_cache = malloc(bitmap_size);
-            t_dirty_bitmap_size = bitmap_size;
-        }
+        for (int sidx = 0; sidx < g_kvm_slot_count; sidx++) {
+            const wvm_kvm_slot_t *slot = &g_kvm_slots[sidx];
+            if (!slot->track_dirty) {
+                continue;
+            }
 
-        if (t_dirty_bitmap_cache) {
+            /* Slot-local dirty bitmap. */
+            uint64_t pages = slot->size / WVM_PAGE_SIZE;
+            size_t bitmap_size = (size_t)(((pages + nbits_per_long - 1) / nbits_per_long) * sizeof(unsigned long));
+            if (bitmap_size == 0) {
+                continue;
+            }
+
+            if (!t_dirty_bitmap_cache || t_dirty_bitmap_size < bitmap_size) {
+                if (t_dirty_bitmap_cache) free(t_dirty_bitmap_cache);
+                t_dirty_bitmap_cache = malloc(bitmap_size);
+                t_dirty_bitmap_size = bitmap_size;
+            }
+            if (!t_dirty_bitmap_cache) {
+                perror("malloc dirty bitmap");
+                continue;
+            }
+
+            log.slot = slot->slot;
             log.dirty_bitmap = t_dirty_bitmap_cache;
-            memset(log.dirty_bitmap, 0, bitmap_size); // 必须清零，因为是复用的
-        
-            // 从 KVM 获取脏页位图
-            if (ioctl(g_vm_fd, KVM_GET_DIRTY_LOG, &log) == 0) {
-                unsigned long *p = (unsigned long *)log.dirty_bitmap;
-                uint64_t num_longs = bitmap_size / sizeof(unsigned long);
-            
-                // 在栈上分配发送缓冲区，避免频繁 malloc
-                // Header + GPA(8) + PageData(4096)
-                uint8_t tx_buf[sizeof(struct wvm_header) + 8 + 4096];
-                struct wvm_header *wh = (struct wvm_header *)tx_buf;
-                size_t total_len = sizeof(tx_buf); // 包总长
+            memset(log.dirty_bitmap, 0, bitmap_size);
 
-                for (uint64_t i = 0; i < num_longs; i++) {
-                if (p[i] == 0) continue; // 快速跳过无脏页的块
-                
-                    for (int b = 0; b < 64; b++) {
-                        if ((p[i] >> b) & 1) {
-                            uint64_t gpa = (i * 64 + b) * 4096;
-                            if (gpa >= g_slave_ram_size) continue;
-                       
-                            // 1. 检查队列是否已满
-                            uint32_t next_tail = (g_mpsc_tail + 1) % MPSC_QUEUE_SIZE;
-                            if (next_tail == g_mpsc_head) {
-                                // 队列已满，选择丢弃。这是新的丢包点。
-                                // 生产环境可以加一个计数器来监控丢包率。
-                                continue;
-                            }
+            if (ioctl(g_vm_fd, KVM_GET_DIRTY_LOG, &log) != 0) {
+                continue;
+            }
 
-                            // 2. 分配任务内存
-                            dirty_page_task_t* task = malloc(sizeof(dirty_page_task_t));
-                            if (!task) {
-                                // 内存分配失败，也只能放弃
-                                continue;
-                            }
-                            
-                            // 3. 填充任务数据
-                            task->gpa = gpa;
-                            memcpy(task->data, g_phy_ram + gpa, 4096);
+            unsigned long *p = (unsigned long *)log.dirty_bitmap;
+            uint64_t num_longs = bitmap_size / sizeof(unsigned long);
 
-                            // 4. 加锁，将任务指针放入队列，更新 tail
-                            pthread_mutex_lock(&g_mpsc_lock);
-                            g_mpsc_queue[g_mpsc_tail] = task;
-                            g_mpsc_tail = next_tail;
-                            pthread_mutex_unlock(&g_mpsc_lock);
+            for (uint64_t i = 0; i < num_longs; i++) {
+                if (p[i] == 0) continue;
 
-                            // 5. 唤醒消费者线程
-                            pthread_cond_signal(&g_mpsc_cond);
+                for (size_t b = 0; b < nbits_per_long; b++) {
+                    if ((p[i] >> b) & 1) {
+                        uint64_t gpa = slot->guest_phys_addr +
+                                       (i * nbits_per_long + b) * WVM_PAGE_SIZE;
+                        if (gpa >= g_slave_ram_size) continue;
+
+                        uint8_t *hva = wvm_gpa_to_hva(gpa);
+                        if (!hva) continue;
+
+                        uint32_t next_tail = (g_mpsc_tail + 1) % MPSC_QUEUE_SIZE;
+                        if (next_tail == g_mpsc_head) {
+                            continue;
                         }
+
+                        dirty_page_task_t* task = malloc(sizeof(dirty_page_task_t));
+                        if (!task) {
+                            continue;
+                        }
+
+                        task->gpa = gpa;
+                        memcpy(task->data, hva, 4096);
+
+                        pthread_mutex_lock(&g_mpsc_lock);
+                        g_mpsc_queue[g_mpsc_tail] = task;
+                        g_mpsc_tail = next_tail;
+                        pthread_mutex_unlock(&g_mpsc_lock);
+
+                        pthread_cond_signal(&g_mpsc_cond);
                     }
                 }
             }
-        } else {
-            perror("malloc dirty bitmap");
         }
     }
     // 导出寄存器状态并回包
@@ -752,6 +891,9 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
     }
 
     if (gpa >= g_slave_ram_size) return;
+    if (!wvm_gpa_page_valid(gpa)) return;
+    uint8_t *hva = wvm_gpa_to_hva(gpa);
+    if (!hva) return;
 
     if (type == MSG_MEM_READ) {
         struct wvm_header ack_hdr = { 
@@ -760,7 +902,7 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
         };
         uint8_t tx[sizeof(ack_hdr) + 4096];
         memcpy(tx, &ack_hdr, sizeof(ack_hdr));
-        memcpy(tx+sizeof(ack_hdr), g_phy_ram+gpa, 4096);
+        memcpy(tx+sizeof(ack_hdr), hva, 4096);
         if (robust_sendto(sockfd, tx, sizeof(tx), client) == 0) {
             //此处无需擦除
         } else {
@@ -770,11 +912,11 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
     } 
     else if (type == MSG_MEM_WRITE) {
         if (hdr->payload_len >= 8+4096) {
-            memcpy(g_phy_ram+gpa, (uint8_t*)payload+8, 4096);
+            memcpy(hva, (uint8_t*)payload+8, 4096);
         }
     }
     else if (type == MSG_INVALIDATE) {
-        madvise(g_phy_ram + gpa, 4096, MADV_DONTNEED);
+        madvise(hva, 4096, MADV_DONTNEED);
     }
     else if (type == MSG_DOWNGRADE) {
         if (hdr->payload_len < 16) return;
@@ -797,11 +939,11 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
         uint8_t tx[sizeof(wb_hdr) + 8 + 4096];
         memcpy(tx, &wb_hdr, sizeof(wb_hdr));
         *(uint64_t*)(tx + sizeof(wb_hdr)) = WVM_HTONLL(gpa);
-        memcpy(tx + sizeof(wb_hdr) + 8, g_phy_ram + gpa, 4096);
+        memcpy(tx + sizeof(wb_hdr) + 8, hva, 4096);
         
         if (robust_sendto(sockfd, tx, sizeof(tx), client) == 0) {
             // 只有确保网络层已经接纳了这个包，才敢擦除本地物理内存
-            madvise(g_phy_ram + gpa, 4096, MADV_DONTNEED);
+            madvise(hva, 4096, MADV_DONTNEED);
         } else {
             // 如果发不出去，宁可让 Master 稍后重试，也不要擦除数据
             //fprintf(stderr, "[WVM-Slave] Critical: Failed to send back data for GPA %lx, aborting unmap\n", gpa);
@@ -815,7 +957,7 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
         uint64_t orig_req_id;
         memcpy(&orig_req_id, (uint8_t*)payload + 8, 8);
 
-        if (gpa < g_slave_ram_size) {
+        if (gpa < g_slave_ram_size && wvm_gpa_page_valid(gpa)) {
             struct wvm_header wb_hdr;
             wb_hdr.magic = htonl(WVM_MAGIC);
             wb_hdr.msg_type = htons(MSG_WRITE_BACK);
@@ -829,11 +971,11 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
             
             uint64_t net_gpa = WVM_HTONLL(gpa);
             memcpy(tx + sizeof(wb_hdr), &net_gpa, 8);
-            memcpy(tx + sizeof(wb_hdr) + 8, g_phy_ram + gpa, 4096);
+            memcpy(tx + sizeof(wb_hdr) + 8, hva, 4096);
             
             if (robust_sendto(sockfd, tx, sizeof(tx), client) == 0) {
                 // 同上
-                madvise(g_phy_ram + gpa, 4096, MADV_DONTNEED);
+                madvise(hva, 4096, MADV_DONTNEED);
             } else {
                 //fprintf(stderr, "[WVM-Slave] Critical: Failed to send back data for GPA %lx, aborting unmap\n", gpa);
             }
