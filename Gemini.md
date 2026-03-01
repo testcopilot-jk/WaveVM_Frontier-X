@@ -7596,6 +7596,7 @@ void broadcast_irq_to_qemu(void) {
 void* client_handler(void *socket_desc) {
     int qemu_fd = *(int*)socket_desc;
     free(socket_desc);
+    fprintf(stderr, "[IPC] client connected fd=%d\n", qemu_fd);
 
     pthread_mutex_lock(&g_client_lock);
     if (g_client_count < MAX_QEMU_CLIENTS) {
@@ -7606,9 +7607,21 @@ void* client_handler(void *socket_desc) {
     wvm_ipc_header_t ipc_hdr;
     uint8_t payload_buf[sizeof(struct wvm_ipc_cpu_run_req)]; // Use largest possible payload
 
-    while (read(qemu_fd, &ipc_hdr, sizeof(ipc_hdr)) == sizeof(ipc_hdr)) {
+    while (1) {
+        ssize_t hdr_n = read(qemu_fd, &ipc_hdr, sizeof(ipc_hdr));
+        if (hdr_n != (ssize_t)sizeof(ipc_hdr)) {
+            if (hdr_n == 0) {
+                fprintf(stderr, "[IPC] peer closed before header fd=%d\n", qemu_fd);
+            } else {
+                fprintf(stderr, "[IPC] header read short fd=%d n=%zd errno=%d\n",
+                        qemu_fd, hdr_n, errno);
+            }
+            break;
+        }
         if (ipc_hdr.len > sizeof(payload_buf)) {
-             // Payload too large, drain and ignore
+            fprintf(stderr, "[IPC] payload too large fd=%d type=%u len=%u max=%zu\n",
+                    qemu_fd, (unsigned)ipc_hdr.type, (unsigned)ipc_hdr.len, sizeof(payload_buf));
+            // Payload too large, drain and ignore
             char drain[1024];
             size_t remaining = ipc_hdr.len;
             while(remaining > 0) {
@@ -7619,7 +7632,12 @@ void* client_handler(void *socket_desc) {
             continue;
         }
         
-        if (read(qemu_fd, payload_buf, ipc_hdr.len) != ipc_hdr.len) break;
+        ssize_t payload_n = read(qemu_fd, payload_buf, ipc_hdr.len);
+        if (payload_n != (ssize_t)ipc_hdr.len) {
+            fprintf(stderr, "[IPC] payload read short fd=%d type=%u need=%u got=%zd errno=%d\n",
+                    qemu_fd, (unsigned)ipc_hdr.type, (unsigned)ipc_hdr.len, payload_n, errno);
+            break;
+        }
 
         switch (ipc_hdr.type) {
             case WVM_IPC_TYPE_MEM_FAULT:
@@ -7720,9 +7738,12 @@ void* client_handler(void *socket_desc) {
                 break;
             }
             default:
+                fprintf(stderr, "[IPC] unknown type fd=%d type=%u len=%u\n",
+                        qemu_fd, (unsigned)ipc_hdr.type, (unsigned)ipc_hdr.len);
                 break;
         }
     }
+    fprintf(stderr, "[IPC] client disconnected fd=%d\n", qemu_fd);
     close(qemu_fd);
     
     // 移除客户端并压缩数组，防止 Slot 耗尽
@@ -8464,6 +8485,36 @@ void init_kvm_global() {
     g_vm_fd = ioctl(g_kvm_fd, KVM_CREATE_VM, 0);
     if (g_vm_fd < 0) { close(g_kvm_fd); g_kvm_fd = -1; return; }
 
+    /* On some virtualized hosts, vCPU must be created before full VM wiring. */
+    errno = 0;
+    int boot_vcpu_id = 0;
+    g_boot_vcpu_fd = ioctl(g_vm_fd, KVM_CREATE_VCPU, boot_vcpu_id);
+    if (g_boot_vcpu_fd < 0 && errno == EEXIST) {
+        for (int try_id = 1; try_id < 8192; try_id++) {
+            g_boot_vcpu_fd = ioctl(g_vm_fd, KVM_CREATE_VCPU, try_id);
+            if (g_boot_vcpu_fd >= 0) {
+                boot_vcpu_id = try_id;
+                break;
+            }
+            if (errno != EEXIST) {
+                break;
+            }
+        }
+    }
+    fprintf(stderr, "[Slave BootVCPU] create fd=%d errno=%d vm=%d kvm=%d id=%d\n",
+            g_boot_vcpu_fd, errno, g_vm_fd, g_kvm_fd, boot_vcpu_id);
+    if (g_boot_vcpu_fd >= 0) {
+        int mmap_size = ioctl(g_kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
+        fprintf(stderr, "[Slave BootVCPU] mmap_size=%d errno=%d\n", mmap_size, errno);
+        if (mmap_size > 0) {
+            g_boot_kvm_run = mmap(NULL, mmap_size, PROT_READ|PROT_WRITE, MAP_SHARED, g_boot_vcpu_fd, 0);
+            if (g_boot_kvm_run == MAP_FAILED) {
+                fprintf(stderr, "[Slave BootVCPU] mmap failed errno=%d\n", errno);
+                g_boot_kvm_run = NULL;
+            }
+        }
+    }
+
     ioctl(g_vm_fd, KVM_SET_TSS_ADDR, WVM_KVM_TSS_ADDR);
     __u64 map_addr = WVM_KVM_IDMAP_ADDR;
     ioctl(g_vm_fd, KVM_SET_IDENTITY_MAP_ADDR, &map_addr);
@@ -8526,22 +8577,6 @@ void init_kvm_global() {
     g_kvm_available = 1;
     pthread_spin_init(&g_master_lock, 0);
 
-    errno = 0;
-    g_boot_vcpu_fd = ioctl(g_vm_fd, KVM_CREATE_VCPU, 0);
-    fprintf(stderr, "[Slave BootVCPU] create fd=%d errno=%d vm=%d kvm=%d\n",
-            g_boot_vcpu_fd, errno, g_vm_fd, g_kvm_fd);
-    if (g_boot_vcpu_fd >= 0) {
-        int mmap_size = ioctl(g_kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
-        fprintf(stderr, "[Slave BootVCPU] mmap_size=%d errno=%d\n", mmap_size, errno);
-        if (mmap_size > 0) {
-            g_boot_kvm_run = mmap(NULL, mmap_size, PROT_READ|PROT_WRITE, MAP_SHARED, g_boot_vcpu_fd, 0);
-            if (g_boot_kvm_run == MAP_FAILED) {
-                fprintf(stderr, "[Slave BootVCPU] mmap failed errno=%d\n", errno);
-                g_boot_kvm_run = NULL;
-            }
-        }
-    }
-
     printf("[Hybrid] KVM Hardware Acceleration Active (RAM: %d MB).\n", g_ram_mb);
 }
 
@@ -8579,7 +8614,7 @@ void init_thread_local_vcpu(int vcpu_id) {
     t_vcpu_fd = ioctl(g_vm_fd, KVM_CREATE_VCPU, vcpu_id);
     if (t_vcpu_fd < 0 && errno == EEXIST) {
         /* Some hosts reserve vcpu0 in-kernel. Probe a small contiguous range. */
-        for (int try_id = 1; try_id < 64; try_id++) {
+        for (int try_id = 1; try_id < 8192; try_id++) {
             t_vcpu_fd = ioctl(g_vm_fd, KVM_CREATE_VCPU, try_id);
             if (t_vcpu_fd >= 0) {
                 chosen_vcpu_id = try_id;
@@ -8779,7 +8814,25 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         kregs.r8  = ctx->r8;  kregs.r9  = ctx->r9;  kregs.r10 = ctx->r10; kregs.r11 = ctx->r11;
         kregs.r12 = ctx->r12; kregs.r13 = ctx->r13; kregs.r14 = ctx->r14; kregs.r15 = ctx->r15;
         kregs.rip = ctx->rip; kregs.rflags = ctx->rflags;
-        memcpy(&ksregs, ctx->sregs_data, sizeof(ksregs));
+
+        /* Keep local APIC/interrupt state and only import architectural sregs. */
+        struct kvm_sregs *remote_sregs = (struct kvm_sregs *)ctx->sregs_data;
+        ksregs.cs = remote_sregs->cs;
+        ksregs.ds = remote_sregs->ds;
+        ksregs.es = remote_sregs->es;
+        ksregs.fs = remote_sregs->fs;
+        ksregs.gs = remote_sregs->gs;
+        ksregs.ss = remote_sregs->ss;
+        ksregs.tr = remote_sregs->tr;
+        ksregs.ldt = remote_sregs->ldt;
+        ksregs.gdt = remote_sregs->gdt;
+        ksregs.idt = remote_sregs->idt;
+        ksregs.cr0 = remote_sregs->cr0;
+        ksregs.cr2 = remote_sregs->cr2;
+        ksregs.cr3 = remote_sregs->cr3;
+        ksregs.cr4 = remote_sregs->cr4;
+        ksregs.cr8 = remote_sregs->cr8;
+        ksregs.efer = remote_sregs->efer;
     }
 
     ioctl(t_vcpu_fd, KVM_SET_SREGS, &ksregs); 
@@ -9454,7 +9507,6 @@ int main(int argc, char **argv) {
     }
     return 0;
 }
-
 ```
 
 **文件**: `slave_daemon/slave_vfio.h`
@@ -11549,6 +11601,28 @@ static bool wavevm_valid_mmio_exit(const struct kvm_run *run)
            run->mmio.len == 4 || run->mmio.len == 8;
 }
 
+/* Keep local APIC/interrupt state and only import architectural sregs fields. */
+static void wavevm_apply_arch_sregs(struct kvm_sregs *dst,
+                                    const struct kvm_sregs *src)
+{
+    dst->cs = src->cs;
+    dst->ds = src->ds;
+    dst->es = src->es;
+    dst->fs = src->fs;
+    dst->gs = src->gs;
+    dst->ss = src->ss;
+    dst->tr = src->tr;
+    dst->ldt = src->ldt;
+    dst->gdt = src->gdt;
+    dst->idt = src->idt;
+    dst->cr0 = src->cr0;
+    dst->cr2 = src->cr2;
+    dst->cr3 = src->cr3;
+    dst->cr4 = src->cr4;
+    dst->cr8 = src->cr8;
+    dst->efer = src->efer;
+}
+
 /* 
  * [物理意图] 充当远程 Slave 的“本地代理执行人”。
  * [关键逻辑] 当远程计算节点触发 PIO/MMIO 退出时，Master 在本地 QEMU 中代为执行该 I/O 操作并返回结果。
@@ -11658,7 +11732,8 @@ static void wavevm_remote_exec(CPUState *cpu) {
             kregs.r14 = kctx->r14; kregs.r15 = kctx->r15;
             kregs.rip = kctx->rip; kregs.rflags = kctx->rflags;
             
-            memcpy(&ksregs, kctx->sregs_data, sizeof(ksregs));
+            ioctl(cpu->kvm_fd, KVM_GET_SREGS, &ksregs);
+            wavevm_apply_arch_sregs(&ksregs, (const struct kvm_sregs *)kctx->sregs_data);
             ioctl(cpu->kvm_fd, KVM_SET_SREGS, &ksregs);
             ioctl(cpu->kvm_fd, KVM_SET_REGS, &kregs);
             
@@ -11772,7 +11847,8 @@ static void wavevm_remote_exec(CPUState *cpu) {
         kregs.r14 = kctx->r14; kregs.r15 = kctx->r15;
         kregs.rip = kctx->rip; kregs.rflags = kctx->rflags;
         
-        memcpy(&ksregs, kctx->sregs_data, sizeof(ksregs));
+        ioctl(cpu->kvm_fd, KVM_GET_SREGS, &ksregs);
+        wavevm_apply_arch_sregs(&ksregs, (const struct kvm_sregs *)kctx->sregs_data);
         ioctl(cpu->kvm_fd, KVM_SET_SREGS, &ksregs);
         ioctl(cpu->kvm_fd, KVM_SET_REGS, &kregs);
         
@@ -11964,7 +12040,6 @@ void wavevm_start_vcpu_thread(CPUState *cpu) {
     
     qemu_thread_create(cpu->thread, thread_name, wavevm_cpu_thread_fn, cpu, QEMU_THREAD_JOINABLE);
 }
-
 ```
 
 **文件**: `wavevm-qemu/accel/wavevm/wavevm-user-mem.c`
