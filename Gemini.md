@@ -10814,6 +10814,8 @@ static MemoryListener wavevm_mem_listener = {
 static int wavevm_init_machine(MachineState *ms) {
     WaveVMAccelState *s = WAVEVM_ACCEL(ms->accelerator);
     bool has_wvm_dev = (access("/dev/wavevm", R_OK | W_OK) == 0);
+    const char *disable_auto_kvm = getenv("WVM_DISABLE_AUTO_KVM");
+    bool auto_kvm_enabled = !(disable_auto_kvm && atoi(disable_auto_kvm) == 1);
     char *role = getenv("WVM_ROLE");
     bool is_slave = (role && strcmp(role, "SLAVE") == 0);
 
@@ -10835,12 +10837,16 @@ static int wavevm_init_machine(MachineState *ms) {
 
     memory_listener_register(&wavevm_mem_listener, &address_space_memory);
 
-    if (s->mode == WVM_MODE_USER && !g_wvm_kvm_bootstrap_done) {
+    if (!g_wvm_kvm_bootstrap_done) {
         AccelClass *kvm_ac;
         AccelState *saved_accel;
+        const char *mode_str = (s->mode == WVM_MODE_USER) ? "user" : "kernel";
 
         g_wvm_kvm_bootstrap_done = true;
-        if (access("/dev/kvm", R_OK | W_OK) == 0) {
+        if (!auto_kvm_enabled) {
+            fprintf(stderr, "[WaveVM] Auto-KVM disabled by WVM_DISABLE_AUTO_KVM=1 (mode=%s)\n",
+                    mode_str);
+        } else if (access("/dev/kvm", R_OK | W_OK) == 0) {
             kvm_ac = accel_find("kvm");
             if (kvm_ac && kvm_ac->init_machine) {
                 g_wvm_kvm_accel = ACCEL(object_new(ACCEL_CLASS_NAME("kvm")));
@@ -10855,8 +10861,8 @@ static int wavevm_init_machine(MachineState *ms) {
 
                     if (ret == 0) {
                         cpus_register_accel(&wavevm_cpus);
-                        fprintf(stderr, "[WaveVM] KVM bootstrap OK, keep wavevm vCPU control (kvm_enabled=%d)\n",
-                                kvm_enabled() ? 1 : 0);
+                        fprintf(stderr, "[WaveVM] KVM bootstrap OK (mode=%s), keep wavevm vCPU control (kvm_enabled=%d)\n",
+                                mode_str, kvm_enabled() ? 1 : 0);
                     } else {
 #ifdef CONFIG_KVM
                         kvm_allowed = false;
@@ -10864,10 +10870,14 @@ static int wavevm_init_machine(MachineState *ms) {
                         object_unref(OBJECT(g_wvm_kvm_accel));
                         g_wvm_kvm_accel = NULL;
                         ret = 0;
-                        fprintf(stderr, "[WaveVM] KVM bootstrap failed, stay on TCG path\n");
+                        fprintf(stderr, "[WaveVM] KVM bootstrap failed (mode=%s), stay on TCG path\n",
+                                mode_str);
                     }
                 }
             }
+        } else {
+            fprintf(stderr, "[WaveVM] /dev/kvm not available (mode=%s), stay on TCG path\n",
+                    mode_str);
         }
     }
 
