@@ -3054,7 +3054,7 @@ struct dsm_driver_ops *g_ops = NULL;
 int g_total_nodes = 1;
 int g_my_node_id = 0;
 int g_ctrl_port = 0; // 这里的定义同时供应给 wavevm_node_master 和 wavevm.ko
-static uint32_t g_curr_epoch = 0;
+uint32_t g_curr_epoch = 0;
 
 // 哈希环脏标记 (解决 CPU 抖动)
 static atomic_bool g_ring_dirty = false;
@@ -3421,7 +3421,7 @@ void update_local_topology_view(uint32_t src_id, uint32_t src_epoch, uint8_t src
     atomic_store(&g_ring_dirty, true);
 }
 
-static uint8_t  g_my_node_state = NODE_STATE_SHADOW;
+uint8_t  g_my_node_state = NODE_STATE_SHADOW;
 static uint64_t g_last_gossip_us = 0;
 static uint64_t g_state_start_us = 0;
 
@@ -3915,7 +3915,10 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
     // 这是 V28 逻辑的直接复用，但增加了 Version 字段处理
     
     // 1. 分配请求 ID
-    uint64_t rid = g_ops->alloc_req_id(page_buffer); // 注意：这里 page_buffer 是临时存放处
+    // 远程 ACK 是 wvm_mem_ack_payload（含 version + 4KB data），
+    // 不能直接把 4KB 页缓冲传给 req_ctx，否则 version 会丢失或发生越界风险。
+    struct wvm_mem_ack_payload ack_payload;
+    uint64_t rid = g_ops->alloc_req_id(&ack_payload);
     if (rid == (uint64_t)-1) return -1;
 
     // 2. 构造 MSG_MEM_READ 包
@@ -3965,14 +3968,19 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
     }
 
     g_ops->free_packet(buffer);
-    
-    // 注意：数据已经被网络层写入到 page_buffer (实际上是 req_ctx 里的 buffer)
-    // 但我们需要提取 Version。
-    // 在 Kernel Backend 中，我们传递给 alloc_req_id 的是一个 bounce buffer
-    // 它包含了 struct wvm_mem_ack_payload { gpa, version, data }
-    // 所以这里 logic core 其实不负责解包，解包逻辑在 kernel_backend.c 的 wvm_fault_handler 中。
-    // Logic Core 只要保证网络交互完成即可。
-    
+
+    if (success) {
+        uint64_t ack_gpa = WVM_NTOHLL(ack_payload.gpa);
+        if (ack_gpa != gpa) {
+            g_ops->free_req_id(rid);
+            return -1;
+        }
+        memcpy(page_buffer, ack_payload.data, 4096);
+        if (version_out) {
+            *version_out = WVM_NTOHLL(ack_payload.version);
+        }
+    }
+
     g_ops->free_req_id(rid);
     return success ? 0 : -1;
 }
@@ -4218,49 +4226,23 @@ void wvm_declare_interest_in_neighborhood(uint64_t gpa) {
 }
 
 static void add_gossip_to_aggregator(uint32_t target_node_id, uint8_t state, uint32_t epoch) {
-    pthread_mutex_lock(&g_gossip_agg.lock);
-    size_t needed = sizeof(struct wvm_header);
+    struct wvm_heartbeat_payload hb;
+    (void)state;
+    (void)epoch;
 
-    // 缓冲区满或目标切换时冲刷
-    if (g_gossip_agg.curr_offset + needed > MTU_SIZE) {
-        g_ops->send_packet(g_gossip_agg.buf, g_gossip_agg.curr_offset, g_gossip_agg.last_gateway_id);
-        g_gossip_agg.curr_offset = 0;
-    }
+    hb.local_epoch = htonl(g_curr_epoch);
+    hb.active_node_count = htonl(g_peer_count);
+    hb.load_factor = 0;
+    hb.peer_epoch_sum = 0;
+    hb.ctrl_port = htons((uint16_t)g_ctrl_port);
 
-    struct wvm_header *hdr = (struct wvm_header *)(g_gossip_agg.buf + g_gossip_agg.curr_offset);
-    memset(hdr, 0, sizeof(*hdr)); // 必须清零
-    hdr->magic = htonl(WVM_MAGIC);
-    hdr->msg_type = htons(MSG_HEARTBEAT);
-    hdr->slave_id = htonl(g_my_node_id);
-    hdr->node_state = state;
-    hdr->epoch = htonl(epoch);
-    struct wvm_heartbeat_payload *hb = (struct wvm_heartbeat_payload *)(hdr + 1);
-    hb->local_epoch = htonl(g_curr_epoch);
-    hb->active_node_count = htonl(g_peer_count);
-    hb->load_factor = 0; 
-    hb->peer_epoch_sum = 0;
-    // [V31 FIX] 填入本地配置的端口
-    hb->ctrl_port = htons((uint16_t)g_ctrl_port);
-
-    // 注意：Header 的 payload_len 需要更新，包含心跳结构体
-    hdr->payload_len = htons(sizeof(struct wvm_heartbeat_payload));
-    
-    // 重新计算 CRC (包含 payload)
-    hdr->crc32 = 0;
-    hdr->crc32 = htonl(calculate_crc32(hdr, sizeof(*hdr) + sizeof(*hb)));
-
-    g_gossip_agg.last_gateway_id = target_node_id; 
-    g_gossip_agg.curr_offset += (sizeof(*hdr) + sizeof(*hb));
-    pthread_mutex_unlock(&g_gossip_agg.lock);
+    /* Heartbeat packets must be sent as standalone frames so header/CRC/target_id
+     * are set consistently by the backend send pipeline. */
+    g_ops->send_packet_async(MSG_HEARTBEAT, &hb, sizeof(hb), target_node_id, 1);
 }
 
 static void flush_gossip_aggregator() {
-    pthread_mutex_lock(&g_gossip_agg.lock);
-    if (g_gossip_agg.curr_offset > 0) {
-        g_ops->send_packet(g_gossip_agg.buf, g_gossip_agg.curr_offset, g_gossip_agg.last_gateway_id);
-        g_gossip_agg.curr_offset = 0;
-    }
-    pthread_mutex_unlock(&g_gossip_agg.lock);
+    /* No-op: heartbeat aggregation removed; each heartbeat is sent directly. */
 }
 
 /* 
@@ -4273,6 +4255,10 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
     uint32_t src_id = ntohl(hdr->slave_id);
     uint32_t src_epoch = ntohl(hdr->epoch);
     uint8_t  src_state = hdr->node_state;
+
+    if (type == MSG_HEARTBEAT && g_ops && g_ops->log) {
+        g_ops->log("[HB LOGIC] src=%u state=%u epoch=%u", src_id, src_state, src_epoch);
+    }
 
     // 1. [核心安全检查] 任何消息都必须透传 Epoch 和 State
     // 如果收到的消息 Epoch 大于本地太远，说明本地视图已严重落后，强制触发视图拉取
@@ -6317,8 +6303,6 @@ static int g_local_port = 0;
 static struct sockaddr_in g_gateways[WVM_MAX_GATEWAYS];
 static volatile int g_tx_socket = -1;
 int g_slave_forward_port = 0;
-uint32_t g_curr_epoch = 0;
-uint8_t g_my_node_state = 1;
 
 __attribute__((weak)) int push_to_aggregator(uint32_t slave_id, void *data, int len) {
     if (!data || len <= 0) {
@@ -6361,6 +6345,8 @@ __attribute__((weak)) int push_to_aggregator(uint32_t slave_id, void *data, int 
 // --- 外部引用 ---
 extern void *g_shm_ptr; 
 extern size_t g_shm_size;
+extern uint32_t g_curr_epoch;
+extern uint8_t g_my_node_state;
 extern void broadcast_irq_to_qemu(void);
 extern void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t source_node_id);
 extern void broadcast_push_to_qemu(uint16_t msg_type, void* payload, int len);
@@ -6689,7 +6675,7 @@ static int raw_send(tx_node_t *node) {
     struct wvm_header *hdr = (struct wvm_header *)node->data;
     // 使用本文件中的轻量状态镜像，避免跨对象链接耦合。
 
-    hdr->epoch = g_curr_epoch;
+    hdr->epoch = htonl(g_curr_epoch);
     hdr->node_state = g_my_node_state;
     hdr->target_id = htonl(node->target_id);
     
@@ -7091,12 +7077,21 @@ static void* rx_thread_loop(void *arg) {
                 uint16_t msg_type = ntohs(hdr->msg_type); // 定义 msg_type
 
                 if (received_crc == calculated_crc) {
-                    uint32_t msg_epoch = hdr->epoch;
-                    extern uint32_t g_curr_epoch;
+                    uint32_t msg_epoch = ntohl(hdr->epoch);
+                    if (msg_type == MSG_HEARTBEAT) {
+                        uint64_t hb_rid = WVM_NTOHLL(hdr->req_id);
+                        u_log("[HB RX] src_port=%u src_id=%u target_id=%u epoch=%u local=%u",
+                              (unsigned)ntohs(src_addrs[i].sin_port),
+                              (unsigned)ntohl(hdr->slave_id),
+                              (unsigned)ntohl(hdr->target_id),
+                              (unsigned)msg_epoch,
+                              (unsigned)g_curr_epoch);
+                        u_log("[HB RX] rid=%llu", (unsigned long long)hb_rid);
+                    }
 
                     // [自治策略]：丢弃来自未来的非法包，或处理落后包
                     if (msg_epoch > g_curr_epoch + 5) {
-                        if (msg_type == MSG_VCPU_RUN) {
+                        if (msg_type == MSG_VCPU_RUN || msg_type == MSG_HEARTBEAT) {
                             u_log("[RX Drop Epoch] msg=%u src_port=%u epoch=%u local=%u",
                                   (unsigned)msg_type, (unsigned)ntohs(src_addrs[i].sin_port),
                                   msg_epoch, g_curr_epoch);
@@ -7184,16 +7179,9 @@ static void* rx_thread_loop(void *arg) {
                         }
                         if (g_u_req_ctx[idx].rx_buffer && g_u_req_ctx[idx].full_id == rid) {
                     
-                            // [V29 Final Fix] 处理带版本的 ACK
-                            if (msg_type == MSG_MEM_ACK && p_len == sizeof(struct wvm_mem_ack_payload)) {
-                                struct wvm_mem_ack_payload *ack_p = (struct wvm_mem_ack_payload*)payload;
-                                memcpy(g_u_req_ctx[idx].rx_buffer, ack_p->data, 4096);
-                                // 版本号可以通过 IPC 传递给 QEMU，或者由调用方通过共享内存处理
-                                // 这里我们完成了数据拷贝，通知调用方完成
-                            } else {
-                                // 兼容旧模式
-                                memcpy(g_u_req_ctx[idx].rx_buffer, payload, p_len);
-                            }
+                            // MSG_MEM_ACK 必须保留完整 payload（含 version），
+                            // 由上层按各自语义解析，避免版本号在此层被静默丢弃。
+                            memcpy(g_u_req_ctx[idx].rx_buffer, payload, p_len);
                             g_u_req_ctx[idx].status = 1;
                             if (msg_type == MSG_VCPU_EXIT) {
                                 u_log("[RX VCPU_EXIT] matched rid=%llu -> status=1",

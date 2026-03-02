@@ -924,16 +924,9 @@ static void* rx_thread_loop(void *arg) {
                         }
                         if (g_u_req_ctx[idx].rx_buffer && g_u_req_ctx[idx].full_id == rid) {
                     
-                            // [V29 Final Fix] 处理带版本的 ACK
-                            if (msg_type == MSG_MEM_ACK && p_len == sizeof(struct wvm_mem_ack_payload)) {
-                                struct wvm_mem_ack_payload *ack_p = (struct wvm_mem_ack_payload*)payload;
-                                memcpy(g_u_req_ctx[idx].rx_buffer, ack_p->data, 4096);
-                                // 版本号可以通过 IPC 传递给 QEMU，或者由调用方通过共享内存处理
-                                // 这里我们完成了数据拷贝，通知调用方完成
-                            } else {
-                                // 兼容旧模式
-                                memcpy(g_u_req_ctx[idx].rx_buffer, payload, p_len);
-                            }
+                            // MSG_MEM_ACK 必须保留完整 payload（含 version），
+                            // 由上层按各自语义解析，避免版本号在此层被静默丢弃。
+                            memcpy(g_u_req_ctx[idx].rx_buffer, payload, p_len);
                             g_u_req_ctx[idx].status = 1;
                             if (msg_type == MSG_VCPU_EXIT) {
                                 u_log("[RX VCPU_EXIT] matched rid=%llu -> status=1",

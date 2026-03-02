@@ -953,7 +953,10 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
     // 这是 V28 逻辑的直接复用，但增加了 Version 字段处理
     
     // 1. 分配请求 ID
-    uint64_t rid = g_ops->alloc_req_id(page_buffer); // 注意：这里 page_buffer 是临时存放处
+    // 远程 ACK 是 wvm_mem_ack_payload（含 version + 4KB data），
+    // 不能直接把 4KB 页缓冲传给 req_ctx，否则 version 会丢失或发生越界风险。
+    struct wvm_mem_ack_payload ack_payload;
+    uint64_t rid = g_ops->alloc_req_id(&ack_payload);
     if (rid == (uint64_t)-1) return -1;
 
     // 2. 构造 MSG_MEM_READ 包
@@ -1003,14 +1006,19 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
     }
 
     g_ops->free_packet(buffer);
-    
-    // 注意：数据已经被网络层写入到 page_buffer (实际上是 req_ctx 里的 buffer)
-    // 但我们需要提取 Version。
-    // 在 Kernel Backend 中，我们传递给 alloc_req_id 的是一个 bounce buffer
-    // 它包含了 struct wvm_mem_ack_payload { gpa, version, data }
-    // 所以这里 logic core 其实不负责解包，解包逻辑在 kernel_backend.c 的 wvm_fault_handler 中。
-    // Logic Core 只要保证网络交互完成即可。
-    
+
+    if (success) {
+        uint64_t ack_gpa = WVM_NTOHLL(ack_payload.gpa);
+        if (ack_gpa != gpa) {
+            g_ops->free_req_id(rid);
+            return -1;
+        }
+        memcpy(page_buffer, ack_payload.data, 4096);
+        if (version_out) {
+            *version_out = WVM_NTOHLL(ack_payload.version);
+        }
+    }
+
     g_ops->free_req_id(rid);
     return success ? 0 : -1;
 }
