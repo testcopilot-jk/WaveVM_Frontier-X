@@ -12129,11 +12129,11 @@ static int g_block_count = 0;
 void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa) {
     if (!g_fault_hook_checked) {
         const char *hook_env = getenv("WVM_ENABLE_FAULT_HOOK");
-        g_fault_hook_enabled = (hook_env && atoi(hook_env) != 0);
+        g_fault_hook_enabled = (!hook_env || atoi(hook_env) != 0);
         g_fault_hook_checked = true;
     }
     if (g_block_count >= MAX_RAM_BLOCKS) exit(1);
-    if (g_fault_hook_enabled) {
+    if (!kvm_enabled()) {
         mprotect(hva, size, PROT_NONE);
     }
     g_mem_blocks[g_block_count].hva_start = (uintptr_t)hva;
@@ -12334,7 +12334,7 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
         else {
             // 此时内存状态已不可信，必须强制失效
             // 下次访问触发 sigsegv -> request_page_sync (V28 Pull) 拉取最新全量
-            if (g_fault_hook_enabled) {
+            if (!kvm_enabled()) {
                 mprotect((uint8_t*)g_ram_base + gpa, 4096, PROT_NONE);
             }
             
@@ -13134,7 +13134,7 @@ static void *mem_push_listener_thread(void *arg) {
                     
                     // 触发强制同步
                     void* hva = gpa_to_hva_safe(stale_gpa);
-                    if (hva && g_fault_hook_enabled) {
+                    if (hva && !kvm_enabled()) {
                         mprotect(hva, 4096, PROT_NONE);
                     }
                     set_local_page_version(stale_gpa, 0);
@@ -13197,7 +13197,7 @@ static void *mem_push_listener_thread(void *arg) {
                         } else {
                             // 严重乱序：回退到 Pull 模式
                             // 这种情况下必须立即锁回，不能 Lazy，因为状态已重置
-                            if (g_fault_hook_enabled) {
+                            if (!kvm_enabled()) {
                                 mprotect((uint8_t*)g_ram_base + gpa, 4096, PROT_NONE);
                             }
                             set_local_page_version(gpa, 0);
@@ -13250,9 +13250,8 @@ void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
 
     // KVM + PROT_NONE 会导致硬件访存路径异常，KVM 下强制关闭 fault hook。
     if (kvm_enabled()) {
-        enable_fault_hook = false;
         memory_global_dirty_log_start();
-        fprintf(stderr, "[WaveVM] KVM detected: fault hook disabled, migration dirty log enabled.\n");
+        fprintf(stderr, "[WaveVM] KVM detected: PROT_NONE path disabled, migration dirty log enabled.\n");
     }
     g_fault_hook_enabled = enable_fault_hook;
     g_fault_hook_checked = true;
@@ -13283,7 +13282,7 @@ void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
         pthread_create(&g_harvester_thread, NULL, diff_harvester_thread_fn, NULL);
     }
 
-    if (enable_fault_hook) {
+    if (!kvm_enabled()) {
         struct sigaction sa;
         memset(&sa, 0, sizeof(sa));
         sa.sa_flags = SA_SIGINFO | SA_NODEFER; 
