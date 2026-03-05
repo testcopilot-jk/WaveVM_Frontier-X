@@ -441,6 +441,7 @@ static void *wavevm_slave_net_thread(void *arg) {
                         cpu_exec(cpu);
                     } else {
                         // [KVM 关键]
+                        qemu_mutex_unlock_iothread();
                         int ret;
                         do {
                             ret = kvm_vcpu_ioctl(cpu, KVM_RUN, 0);
@@ -451,6 +452,7 @@ static void *wavevm_slave_net_thread(void *arg) {
                                     reason == KVM_EXIT_FAIL_ENTRY) break;
                             }
                         } while (ret > 0 || ret == -EINTR);
+                        qemu_mutex_lock_iothread();
                     }
 
                     // C. 导出上下文并回包

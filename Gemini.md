@@ -10763,6 +10763,7 @@ static void *wavevm_slave_net_thread(void *arg) {
                         cpu_exec(cpu);
                     } else {
                         // [KVM 关键]
+                        qemu_mutex_unlock_iothread();
                         int ret;
                         do {
                             ret = kvm_vcpu_ioctl(cpu, KVM_RUN, 0);
@@ -10773,6 +10774,7 @@ static void *wavevm_slave_net_thread(void *arg) {
                                     reason == KVM_EXIT_FAIL_ENTRY) break;
                             }
                         } while (ret > 0 || ret == -EINTR);
+                        qemu_mutex_lock_iothread();
                     }
 
                     // C. 导出上下文并回包
@@ -11394,7 +11396,6 @@ int wvm_send_ipc_block_io(uint64_t lba, void *buf, uint32_t len, int is_write) {
     
     return ret; 
 }
-
 ```
 
 **文件**: `wavevm-qemu/accel/wavevm/wavevm-cpu.c`
@@ -11934,9 +11935,7 @@ static void *wavevm_cpu_thread_fn(void *arg) {
 
         if (cpu_can_run(cpu)) {
             if (kvm_enabled()) {
-                qemu_mutex_lock_iothread();
                 ret = kvm_vcpu_ioctl(cpu, KVM_RUN, 0);
-                qemu_mutex_unlock_iothread();
 
                 if (ret < 0) {
                     if (errno == EINTR || errno == EAGAIN) continue;
@@ -12063,6 +12062,9 @@ void wavevm_start_vcpu_thread(CPUState *cpu) {
 #include <stdbool.h>
 #include <time.h>
 #include <stdatomic.h>
+#include "sysemu/kvm.h"
+#include "exec/memory.h"
+#include "exec/ram_addr.h"
 
 #include "../../../common_include/wavevm_protocol.h"
 
@@ -12882,6 +12884,22 @@ static void *diff_harvester_thread_fn(void *arg) {
     while (g_threads_running) {
         usleep(1000); // 1ms 采集周期
 
+        // KVM 模式：基于脏页日志收割，不依赖 SIGSEGV/PROT_NONE。
+        if (kvm_enabled()) {
+            for (uint64_t gpa = 0; gpa + 4096 <= g_ram_size; gpa += 4096) {
+                if (!cpu_physical_memory_test_and_clear_dirty(gpa, 4096, DIRTY_MEMORY_MIGRATION)) {
+                    continue;
+                }
+
+                void *hva = (uint8_t *)g_ram_base + gpa;
+                uint64_t ver = get_local_page_version(gpa);
+                add_to_aggregator(gpa, ver + 1, 0, 4096, hva, 0);
+                set_local_page_version(gpa, ver + 1);
+            }
+            flush_aggregator();
+            continue;
+        }
+
         // 1. 偷走链表 (Detach List)
         WritablePage *batch_head = NULL;
         pthread_mutex_lock(&g_writable_list_lock);
@@ -13228,6 +13246,13 @@ void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
     const char *hook_env = getenv("WVM_ENABLE_FAULT_HOOK");
     if (hook_env && atoi(hook_env) == 0) {
         enable_fault_hook = false;
+    }
+
+    // KVM + PROT_NONE 会导致硬件访存路径异常，KVM 下强制关闭 fault hook。
+    if (kvm_enabled()) {
+        enable_fault_hook = false;
+        memory_global_dirty_log_start();
+        fprintf(stderr, "[WaveVM] KVM detected: fault hook disabled, migration dirty log enabled.\n");
     }
     g_fault_hook_enabled = enable_fault_hook;
     g_fault_hook_checked = true;

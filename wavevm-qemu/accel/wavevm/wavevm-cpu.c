@@ -532,9 +532,7 @@ static void *wavevm_cpu_thread_fn(void *arg) {
 
         if (cpu_can_run(cpu)) {
             if (kvm_enabled()) {
-                qemu_mutex_lock_iothread();
                 ret = kvm_vcpu_ioctl(cpu, KVM_RUN, 0);
-                qemu_mutex_unlock_iothread();
 
                 if (ret < 0) {
                     if (errno == EINTR || errno == EAGAIN) continue;
