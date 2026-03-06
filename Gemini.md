@@ -1297,6 +1297,7 @@ echo "[SUCCESS] Kernel parameters are tuned for V29 'Wavelet' deployment."
 // --- 核心常量定义 ---
 #define WVM_MAX_SLAVES (1UL << WVM_SLAVE_BITS)
 #define WVM_MAX_GATEWAYS (WVM_MAX_SLAVES)
+#define WVM_MAX_VMS 256  // Multi-VM 资源池化：最多 256 个 VM 共享同一集群
 /*
  * [协议特征与物理限制]
  * WVM_MAGIC: 数据包特征码 "WVMX"，用于在接收端快速识别并丢弃非法/垃圾流量。
@@ -1550,6 +1551,17 @@ typedef struct wvm_ipc_header_t {
 
 // 前后端分离路由占位符
 #define WVM_NODE_AUTO_ROUTE 0xFFFFFFFF  // 旧值 0x3FFFFFFF，改为全 1 避免与 vm_id 编码冲突
+
+// --- Multi-VM Resource Pooling: VM ID 编解码 ---
+// slave_id / target_id 的高 8 位编码 vm_id，低 24 位编码 node_id
+// 协议头 48 字节不变，向后兼容：vm_id=0 时 ENCODE_ID(0,n) == n
+#define WVM_VMID_SHIFT    24
+#define WVM_VMID_MASK     (0xFFu << WVM_VMID_SHIFT)    // 0xFF000000
+#define WVM_NODEID_MASK   ((1u << WVM_VMID_SHIFT) - 1)  // 0x00FFFFFF
+
+#define WVM_ENCODE_ID(vm, node) (((uint32_t)(vm) << WVM_VMID_SHIFT) | ((node) & WVM_NODEID_MASK))
+#define WVM_GET_VMID(id)        (((uint32_t)(id) >> WVM_VMID_SHIFT) & 0xFF)
+#define WVM_GET_NODEID(id)      ((uint32_t)(id) & WVM_NODEID_MASK)
 
 // [Fix #3] AUTO_ROUTE 是 sentinel 值 (0xFFFFFFFF)，不能做 GET_NODEID 后参与普通比较
 // 所有需要判断"是否是有效路由目标"的地方必须先过此检查
@@ -1824,7 +1836,6 @@ static inline uint32_t calculate_crc32(const void* data, size_t length) {
 
 #endif // CRC32_H
 #endif // __SSE4_2__
-
 ```
 
 **文件**: `common_include/uthash.h`
@@ -3041,6 +3052,8 @@ extern struct dsm_driver_ops *g_ops;
 #endif
 
 extern int g_my_node_id;
+extern uint32_t g_curr_epoch;
+extern uint8_t g_my_node_state;
 
 // --- 初始化与配置 ---
 int wvm_core_init(struct dsm_driver_ops *ops, int total_nodes_hint);
@@ -3181,6 +3194,7 @@ int g_total_nodes = 1;
 int g_my_node_id = 0;
 int g_ctrl_port = 0; // 这里的定义同时供应给 wavevm_node_master 和 wavevm.ko
 uint32_t g_curr_epoch = 0;
+extern uint8_t g_my_vm_id; // Multi-VM: 定义在 main_wrapper.c
 
 // 哈希环脏标记 (解决 CPU 抖动)
 static atomic_bool g_ring_dirty = false;
@@ -3298,9 +3312,13 @@ void wvm_set_cpu_mapping(int vcpu_index, uint32_t slave_id) {
 
 uint32_t wvm_get_compute_slave_id(int vcpu_index) {
     if (vcpu_index >= 0 && vcpu_index < WVM_CPU_ROUTE_TABLE_SIZE) {
-        return g_cpu_route_table[vcpu_index];
+        uint32_t raw = g_cpu_route_table[vcpu_index];
+        // [Fix #3] AUTO_ROUTE 是 sentinel，不能做 ENCODE_ID 操作
+        if (raw == WVM_NODE_AUTO_ROUTE) return raw;
+        // [Multi-VM] 返回 composite ID
+        return WVM_ENCODE_ID(g_my_vm_id, raw);
     }
-    return WVM_NODE_AUTO_ROUTE; 
+    return WVM_NODE_AUTO_ROUTE;
 }
 
 /* 
@@ -3471,12 +3489,13 @@ uint32_t wvm_get_storage_node_id(uint64_t lba) {
     // LBA (512B) -> Byte Offset -> 64MB Chunk Index
     uint64_t chunk_idx = (lba << 9) >> WVM_STORAGE_CHUNK_SHIFT;
     uint32_t slot = murmur3_32(chunk_idx) % HASH_RING_SIZE;
-    
+
     uint32_t target;
     pthread_rwlock_rdlock(&g_ring_lock);
     target = g_hash_ring_cache[slot];
     pthread_rwlock_unlock(&g_ring_lock);
-    return target;
+    // [Multi-VM] 返回 composite ID
+    return WVM_ENCODE_ID(g_my_vm_id, target);
 }
 
 /* --- 逻辑入口：处理接收到的心跳与视图更新 --- */
@@ -3647,7 +3666,7 @@ void* autonomous_monitor_thread(void* arg) {
                     uint32_t ridx = 0;
                     g_ops->get_random(&ridx);
                     peer_entry_t *p = &g_peer_view[ridx % g_peer_count];
-                    add_gossip_to_aggregator(p->node_id, g_my_node_state, g_curr_epoch);
+                    add_gossip_to_aggregator(WVM_ENCODE_ID(g_my_vm_id, p->node_id), g_my_node_state, g_curr_epoch);
                 }
             }
             pthread_rwlock_unlock(&g_view_lock);
@@ -3669,7 +3688,7 @@ static void request_view_from_neighbor(uint32_t peer_id) {
     memset(&hdr, 0, sizeof(hdr));
     hdr.magic = htonl(WVM_MAGIC);
     hdr.msg_type = htons(MSG_VIEW_PULL);
-    hdr.slave_id = htonl(g_my_node_id);
+    hdr.slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
     hdr.epoch = g_curr_epoch;
     hdr.payload_len = 0;
 
@@ -3697,7 +3716,7 @@ static void handle_view_pull(struct wvm_header *rx_hdr, uint32_t src_id) {
     // 基础包头填充
     hdr->magic = htonl(WVM_MAGIC);
     hdr->msg_type = htons(MSG_VIEW_ACK);
-    hdr->slave_id = htonl(g_my_node_id);
+    hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
     hdr->payload_len = htons(payload_len);
     hdr->epoch = g_curr_epoch;
     hdr->node_state = g_my_node_state;
@@ -3716,7 +3735,9 @@ static void handle_view_pull(struct wvm_header *rx_hdr, uint32_t src_id) {
     // [Fix #2] src_id 是裸 node_id（内部逻辑），发包时需要编码为 composite ID
     g_ops->send_packet(buf, pkt_len, WVM_ENCODE_ID(g_my_vm_id, src_id));
     g_ops->free_packet(buf);
-}(void *payload) {
+}
+
+static void handle_view_ack(void *payload) {
     struct wvm_view_payload *pl = (struct wvm_view_payload *)payload;
     uint32_t count = ntohl(pl->entry_count);
 
@@ -3777,7 +3798,8 @@ void wvm_set_my_node_id(int id) {
 // DHT 路由
 uint32_t wvm_get_directory_node_id(uint64_t gpa) {
     // 在百万节点规模下，即使局部视图不一致，路由结果也能大概率收敛
-    return get_owner_node_id(gpa);
+    // [Multi-VM] 返回 composite ID (vm_id | node_id) 用于网络寻址
+    return WVM_ENCODE_ID(g_my_vm_id, get_owner_node_id(gpa));
 }
 
 // 本地缺页快速路径
@@ -3944,7 +3966,7 @@ static void broadcast_to_subscribers(page_meta_t *page, uint16_t msg_type, void 
                         // 4. 将任务放入目标分片队列
                         broadcast_task_t *t = &target_shard->queue[current_tail & BCAST_Q_MASK];
                         t->msg_type = msg_type;
-                        t->target_id = target_id;
+                        t->target_id = WVM_ENCODE_ID(g_my_vm_id, target_id); // [Multi-VM] composite ID for network
                         t->len = len;
                         t->data_ptr = data_copy;
                         t->flags = flags;
@@ -3996,7 +4018,7 @@ static void force_sync_client(uint64_t gpa, page_meta_t* page, uint32_t client_i
     hdr->magic = htonl(WVM_MAGIC);
     hdr->msg_type = htons(MSG_FORCE_SYNC);
     hdr->payload_len = htons(pl_size);
-    hdr->slave_id = htonl(g_my_node_id);
+    hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
     hdr->req_id = 0;
     hdr->qos_level = 1; // High priority correction
 
@@ -4009,11 +4031,14 @@ static void force_sync_client(uint64_t gpa, page_meta_t* page, uint32_t client_i
     // [Fix #2] client_id 是裸 node_id，发包时需要编码为 composite ID
     g_ops->send_packet(buffer, pkt_len, WVM_ENCODE_ID(g_my_vm_id, client_id));
     g_ops->free_packet(buffer);
-}(uint64_t gpa, void *page_buffer, uint64_t *version_out) {
+}
+
+int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *version_out) {
     uint32_t dir_node = wvm_get_directory_node_id(gpa);
     
     // 场景 A: 我就是目录节点 (Local Hit)
-    if (dir_node == g_my_node_id) {
+    // [Multi-VM] dir_node 是 composite ID，用 WVM_GET_NODEID 比较
+    if (WVM_GET_NODEID(dir_node) == (uint32_t)g_my_node_id) {
         uint32_t lock_idx = get_lock_idx(gpa);
         pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
         
@@ -4215,7 +4240,7 @@ int wvm_rpc_call(uint16_t msg_type, void *payload, int len, uint32_t target_id, 
     hdr->magic = htonl(WVM_MAGIC);
     hdr->msg_type = htons(msg_type);
     hdr->payload_len = htons(len);
-    hdr->slave_id = htonl(g_my_node_id); // Source ID
+    hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id)); // Source ID
     // Preserve logical destination so fractal gateways can route correctly.
     hdr->target_id = htonl(target_id);
     hdr->req_id = WVM_HTONLL(rid);
@@ -4319,7 +4344,8 @@ void wvm_declare_interest_in_neighborhood(uint64_t gpa) {
     uint32_t dir_node = wvm_get_directory_node_id(gpa);
     
     // 如果我自己就是 Directory，不需要网络宣告 (本地 Logic Core 会自动处理)
-    if (dir_node == g_my_node_id) return;
+    // [Multi-VM] dir_node 现在是 composite ID，用 WVM_GET_NODEID 提取裸 ID 比较
+    if (WVM_GET_NODEID(dir_node) == (uint32_t)g_my_node_id) return;
 
     // 2. 分配数据包 (Atomic 上下文安全)
     size_t pkt_len = sizeof(struct wvm_header) + sizeof(uint64_t);
@@ -4336,7 +4362,7 @@ void wvm_declare_interest_in_neighborhood(uint64_t gpa) {
     hdr->magic = htonl(WVM_MAGIC);
     hdr->msg_type = htons(MSG_DECLARE_INTEREST);
     hdr->payload_len = htons(sizeof(uint64_t));
-    hdr->slave_id = htonl(g_my_node_id); // 告诉对方我是谁
+    hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id)); // 告诉对方我是谁
     hdr->req_id = 0;                     // 异步消息，不需要 ACK
     hdr->qos_level = 1;                  // 订阅是元数据操作，走 Fast Lane
 
@@ -4376,18 +4402,24 @@ static void flush_gossip_aggregator() {
  */
 void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t source_node_id) {
     uint16_t type = ntohs(hdr->msg_type);
-    uint32_t src_id = ntohl(hdr->slave_id);
+    uint32_t src_id_raw = ntohl(hdr->slave_id);
+    // [Multi-VM] 解码 composite ID，提取裸 node_id 给内部 DHT 操作
+    uint8_t  src_vm_id = WVM_GET_VMID(src_id_raw);
+    uint32_t src_id = WVM_GET_NODEID(src_id_raw);
     uint32_t src_epoch = ntohl(hdr->epoch);
     uint8_t  src_state = hdr->node_state;
 
+    // [Multi-VM] 丢弃其他 VM 的包
+    if (src_vm_id != g_my_vm_id) return;
+
     if (type == MSG_HEARTBEAT && g_ops && g_ops->log) {
-        g_ops->log("[HB LOGIC] src=%u state=%u epoch=%u", src_id, src_state, src_epoch);
+        g_ops->log("[HB LOGIC] src=%u vm=%u state=%u epoch=%u", src_id, src_vm_id, src_state, src_epoch);
     }
 
     // 1. [核心安全检查] 任何消息都必须透传 Epoch 和 State
     // 如果收到的消息 Epoch 大于本地太远，说明本地视图已严重落后，强制触发视图拉取
     if (src_epoch > g_curr_epoch + 1) {
-        request_view_from_neighbor(src_id);
+        request_view_from_neighbor(WVM_ENCODE_ID(g_my_vm_id, src_id));
     }
 
     uint16_t r_ctrl_port = 0;
@@ -4422,7 +4454,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             uint64_t gpa = WVM_NTOHLL(*(uint64_t*)payload);
             
             // 确保我是这个页面的 Directory
-            if (wvm_get_directory_node_id(gpa) != g_my_node_id) return;
+            if (WVM_GET_NODEID(wvm_get_directory_node_id(gpa)) != (uint32_t)g_my_node_id) return;
             
             // 构造 MSG_MEM_ACK (包含版本号的 payload)
             size_t pl_size = sizeof(struct wvm_mem_ack_payload);
@@ -4434,7 +4466,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             ack->magic = htonl(WVM_MAGIC);
             ack->msg_type = htons(MSG_MEM_ACK);
             ack->payload_len = htons(pl_size);
-            ack->slave_id = htonl(g_my_node_id);
+            ack->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
             ack->req_id = hdr->req_id; // 必须回传请求ID
             ack->qos_level = 0; // 大包走慢车道
 
@@ -4466,7 +4498,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             if (ntohs(hdr->payload_len) < sizeof(uint64_t)) return;
             uint64_t gpa = WVM_NTOHLL(*(uint64_t*)payload);
             
-            if (wvm_get_directory_node_id(gpa) != g_my_node_id) return;
+            if (WVM_GET_NODEID(wvm_get_directory_node_id(gpa)) != (uint32_t)g_my_node_id) return;
 
             uint32_t lock_idx = get_lock_idx(gpa);
             pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
@@ -4526,7 +4558,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                 if (sizeof(struct wvm_diff_log) + sz > pl_len) return;
                 if (off + sz > 4096) return;
 
-                if (wvm_get_directory_node_id(gpa) != g_my_node_id) return;
+                if (WVM_GET_NODEID(wvm_get_directory_node_id(gpa)) != (uint32_t)g_my_node_id) return;
 
                 uint32_t lock_idx = get_lock_idx(gpa);
                 pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
@@ -4608,7 +4640,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             void *data_ptr = (uint8_t*)payload + sizeof(uint64_t);
             
             // 1. [Security] 权限检查：只有 Owner 才能接受 Write 并返回 ACK
-            if (wvm_get_directory_node_id(gpa) != g_my_node_id) {
+            if (WVM_GET_NODEID(wvm_get_directory_node_id(gpa)) != (uint32_t)g_my_node_id) {
                 // 如果我不是 Owner，这是一个错误路由的包，静默丢弃或记录日志
                 // 绝对不能发 ACK，否则客户端会误以为写入成功
                 if (g_ops->log) g_ops->log("[Logic] Write on non-owner GPA %llx ignored", gpa);
@@ -4660,12 +4692,12 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                     ack_hdr->magic = htonl(WVM_MAGIC);
                     ack_hdr->msg_type = htons(MSG_MEM_ACK);
                     ack_hdr->payload_len = 0;
-                    ack_hdr->slave_id = htonl(g_my_node_id);
+                    ack_hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
                     ack_hdr->req_id = hdr->req_id; // 关键：回传请求 ID
                     ack_hdr->qos_level = 1;        // 控制信令走快车道
-                    
+
                     // CRC32 由 send_packet 后端自动计算，此处无需手动填
-                    ack_hdr->crc32 = 0; 
+                    ack_hdr->crc32 = 0;
                     
                     g_ops->send_packet(ack_buf, ack_len, src_id);
                     g_ops->free_packet(ack_buf);
@@ -4723,7 +4755,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                 ack_hdr->magic = htonl(WVM_MAGIC);
                 ack_hdr->msg_type = htons(MSG_MEM_ACK); // 回复类型
                 ack_hdr->payload_len = 0;
-                ack_hdr->slave_id = htonl(g_my_node_id);
+                ack_hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
                 ack_hdr->req_id = hdr->req_id; // 关键：原样回传 SYNC_MAGIC
                 ack_hdr->qos_level = 1;        // 必须走快车道，否则 AIMD 会误判延迟
                 ack_hdr->epoch = htonl(g_curr_epoch);
@@ -4885,6 +4917,8 @@ void wvm_logic_broadcast_rpc(void *full_pkt_data, int full_pkt_len, uint16_t msg
 
 // [Fix] Multi-VM: 引用全局 vm_id，用于 composite ID 编码
 extern uint8_t g_my_vm_id;
+
+// 定义并初始化 mapping 锁
 static struct rw_semaphore g_mapping_sem; 
 
 static int service_port = 9000;
@@ -6409,6 +6443,7 @@ ccflags-y := -I$(src)/../common_include -std=gnu11
 #include <errno.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <sys/ioctl.h>
 #include <stdarg.h>
 #include <sys/time.h>
 #include <sys/sysinfo.h>
@@ -6428,6 +6463,7 @@ ccflags-y := -I$(src)/../common_include -std=gnu11
 
 // --- 全局状态 ---
 static int g_my_node_id = 0;
+extern uint8_t g_my_vm_id;
 static int g_local_port = 0;
 static struct sockaddr_in g_gateways[WVM_MAX_GATEWAYS];
 static volatile int g_tx_socket = -1;
@@ -6753,11 +6789,11 @@ static void u_send_packet_async(uint16_t msg_type, void* payload, int len, uint3
     if (!buffer) return;
 
     struct wvm_header *hdr = (struct wvm_header *)buffer;
-    extern int g_my_node_id; 
+    extern int g_my_node_id;
     hdr->magic = htonl(WVM_MAGIC);
     hdr->msg_type = htons(msg_type);
     hdr->payload_len = htons(len);
-    hdr->slave_id = htonl(g_my_node_id);
+    hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
     hdr->target_id = htonl(target_id);
     hdr->req_id = 0;
     hdr->qos_level = qos;
@@ -6799,6 +6835,7 @@ static tx_node_t* queue_pop(tx_queue_t *q) {
  * [后果] 这是 P2P 网络在公网环境下的生命线。它防止了节点在网络拥塞时疯狂重传，从而实现“优雅减速”而非“系统坍缩”。
  */
 static int raw_send(tx_node_t *node) {
+    // [Fix #1] g_gateways 按裸 node_id 索引，g_my_node_id 已经是裸 ID，无需解码
     struct sockaddr_in *target = &g_gateways[g_my_node_id];
     if (target->sin_port == 0 || g_tx_socket < 0) return -1;
     
@@ -7006,7 +7043,7 @@ static void handle_slave_read(int fd, struct sockaddr_in *dest, struct wvm_heade
     // 注意：payload_len 现在是 4112 字节 (16 + 4096)，而不是 4096！
     ack_hdr->payload_len = htons(sizeof(struct wvm_mem_ack_payload));
     ack_hdr->req_id = req->req_id;
-    ack_hdr->slave_id = htonl(g_my_node_id);
+    ack_hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
     ack_hdr->target_id = req->slave_id;
     ack_hdr->qos_level = 0; // 慢车道包
     ack_hdr->crc32 = 0;
@@ -7092,7 +7129,7 @@ static void handle_ipc_rpc_passthrough(int qemu_fd, void *data, uint32_t len) {
         handle_rpc_batch_execution(payload, payload_len);
         
         // 2. [Broadcast] 全网广播 (Source ID = Me)
-        hdr->slave_id = htonl(g_my_node_id);
+        hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
         wvm_logic_broadcast_rpc(data, len, msg_type);
     }
     
@@ -7235,7 +7272,17 @@ static void* rx_thread_loop(void *arg) {
                     // 校验通过，恢复 CRC
                     hdr->crc32 = htonl(received_crc);
                     void *payload = (void*)hdr + sizeof(struct wvm_header);
-                
+
+                    // [Multi-VM] vm_id 过滤：丢弃不属于本 VM 的包
+                    {
+                        uint32_t target_raw = ntohl(hdr->target_id);
+                        if (target_raw != WVM_NODE_AUTO_ROUTE &&
+                            WVM_GET_VMID(target_raw) != g_my_vm_id) {
+                            offset += current_pkt_len;
+                            continue;
+                        }
+                    }
+
                     // [路由优先] Slave 业务包必须先分流，不能被 req_id 分支误判为 ACK。
                     // 仅当包不是来自本地 slave 端口时，才转发到 slave 进程处理。
                     int is_slave_service_msg =
@@ -7513,10 +7560,11 @@ int user_backend_init(int my_node_id, int port) {
 // --- 全局状态 ---
 extern struct dsm_driver_ops u_ops;
 extern int user_backend_init(int my_node_id, int port);
-void *g_shm_ptr = NULL; 
+void *g_shm_ptr = NULL;
 size_t g_shm_size = 0;
 int g_dev_fd = -1;
 extern int g_my_node_id;
+uint8_t g_my_vm_id = 0;  // Multi-VM: 默认 0，向后兼容
 
 #define MAX_QEMU_CLIENTS 8
 #define NUM_BCAST_WORKERS 8
@@ -7567,13 +7615,18 @@ void load_swarm_config(const char *filename) {
     while (fgets(line, sizeof(line), fp)) {
         // 跳过注释和空行
         if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
-        
+
         char keyword[16];
         int bid, port, cores, ram;
         char ip_str[64];
-        
-        // 1. 尝试读取关键字 "NODE"
+
+        // 1. 尝试读取关键字
         if (sscanf(line, "%15s", keyword) != 1) continue;
+
+        // [Multi-VM] 解析 VM 指令（仅记录，不影响 NODE 解析）
+        // 格式: VM <VmID> <StartVnode> <VnodeCount>
+        if (strcmp(keyword, "VM") == 0) continue; // VM 指令在此阶段跳过，仅用于文档
+
         if (strcmp(keyword, "NODE") != 0) continue;
 
         // 2. 解析: NODE <ID> <IP> <PORT> <CORES> <RAM>
@@ -7590,10 +7643,11 @@ void load_swarm_config(const char *filename) {
             int v_count = ram / WVM_RAM_UNIT_GB;
             if (v_count < 1) v_count = 1;
 
-            // 2. 注入 Gateway IP 表
+            // 2. 注入 Gateway IP 表 (使用 composite ID: vm_id | node_id)
             for (int v = 0; v < v_count; v++) {
                 int v_id = total_vnodes + v;
-                u_ops.set_gateway_ip(v_id, inet_addr(ip_str), htons(port));
+                uint32_t composite_id = WVM_ENCODE_ID(g_my_vm_id, v_id);
+                u_ops.set_gateway_ip(composite_id, inet_addr(ip_str), htons(port));
             }
 
             // 3. 记录物理节点信息
@@ -7904,9 +7958,10 @@ void load_initial_seeds(const char *config_file) {
                 g_seeds[g_seed_count].sin_family = AF_INET;
                 g_seeds[g_seed_count].sin_addr.s_addr = inet_addr(ip);
                 g_seeds[g_seed_count].sin_port = htons(port);
-                
+
                 // 关键：将种子节点预埋入局部视图
                 // 初始状态设为 SHADOW，等待心跳激活
+                // [Multi-VM] 使用裸 node_id，topology view 内部用裸 ID
                 update_local_topology_view(id, 0, NODE_STATE_SHADOW, &g_seeds[g_seed_count], 0);
                 g_seed_count++;
             }
@@ -7922,7 +7977,7 @@ int main(int argc, char **argv) {
 
     // 参数检查
     if (argc < 7) {
-        fprintf(stderr, "Usage: %s <RAM_MB> <LOCAL_PORT> <SWARM_CONFIG> <MY_PHYS_ID> <CTRL_PORT> <SLAVE_PORT> [SYNC_BATCH]\n", argv[0]);
+        fprintf(stderr, "Usage: %s <RAM_MB> <LOCAL_PORT> <SWARM_CONFIG> <MY_PHYS_ID> <CTRL_PORT> <SLAVE_PORT> [SYNC_BATCH] [VM_ID]\n", argv[0]);
         return 1;
     }
 
@@ -7948,8 +8003,12 @@ int main(int argc, char **argv) {
         extern int g_sync_batch_size;
         g_sync_batch_size = atoi(argv[7]);
     }
+    // 可选参数：VM ID (Multi-VM 资源池化)
+    if (argc >= 9) {
+        g_my_vm_id = (uint8_t)atoi(argv[8]);
+    }
 
-    printf("[*] WaveVM Swarm V29.5 'Wavelet' Node Daemon (PhysID: %d)\n", my_phys_id);
+    printf("[*] WaveVM Swarm V30.0 'Wavelet' Node Daemon (PhysID: %d, VM: %u)\n", my_phys_id, (unsigned)g_my_vm_id);
 
     // 2. 初始化用户态后端 (User Backend)
     // 注意：此时我们暂时用 PhysID 初始化，后续 load_swarm_config 会填充完整的路由表
@@ -8479,6 +8538,7 @@ static struct kvm_run *g_boot_kvm_run = NULL;
 static pthread_spinlock_t g_master_lock;
 static int g_wvm_dev_fd = -1;
 static int g_base_id = 0;
+static uint8_t g_slave_vm_id = 0;
 static int g_vcpu_init_debug_once = 0;
 
 #define WVM_PAGE_SIZE            4096ULL
@@ -8816,7 +8876,7 @@ void* dirty_sync_sender_thread(void* arg) {
         wh->magic = htonl(WVM_MAGIC);
         wh->msg_type = htons(MSG_MEM_WRITE);
         wh->payload_len = htons(8 + 4096);
-        wh->slave_id = 0; // 源ID在Slave模式下意义不大，可设为0
+        wh->slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
         wh->req_id = 0;
         wh->qos_level = 0;
 
@@ -8856,7 +8916,7 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         ack_hdr.msg_type = htons(MSG_VCPU_EXIT);
         ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
         /* ACK must originate from this slave node and target the requester. */
-        ack_hdr.slave_id = htonl((uint32_t)g_base_id);
+        ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
         ack_hdr.target_id = htonl(hdr->slave_id);
         ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
 
@@ -8893,7 +8953,7 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         ack_hdr.msg_type = htons(MSG_VCPU_EXIT);
         ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
         /* ACK must originate from this slave node and target the requester. */
-        ack_hdr.slave_id = htonl((uint32_t)g_base_id);
+        ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
         ack_hdr.target_id = htonl(hdr->slave_id);
         ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
 
@@ -9059,7 +9119,7 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     ack_hdr.msg_type = htons(MSG_VCPU_EXIT);       
     ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
     /* ACK must originate from this slave node and target the requester. */
-    ack_hdr.slave_id = htonl((uint32_t)g_base_id);
+    ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
     ack_hdr.target_id = htonl(hdr->slave_id);
     ack_hdr.req_id = WVM_HTONLL(hdr->req_id);      
     
@@ -9531,7 +9591,7 @@ void* tcg_proxy_thread(void *arg) {
                 
                 uint32_t slave_id = ntohl(hdr->slave_id);
                 uint16_t msg_type = ntohs(hdr->msg_type);
-                int core_idx = (int)(slave_id - g_base_id);
+                int core_idx = (int)(WVM_GET_NODEID(slave_id) - g_base_id);
     
                 if (core_idx < 0 || core_idx >= g_num_cores) continue;
 
@@ -9584,10 +9644,11 @@ int main(int argc, char **argv) {
         g_base_id = atoi(argv[4]);
     }
     if (argc >= 6) g_ctrl_port = atoi(argv[5]);
+    if (argc >= 7) g_slave_vm_id = (uint8_t)atoi(argv[6]);
 
     printf("[Init] WaveVM Hybrid Slave V28.0 (Swarm Edition)\n");
-    printf("[Init] Config: Port=%d, Cores=%ld, RAM=%d MB, BaseID=%d\n", 
-           g_service_port, g_num_cores, g_ram_mb, g_base_id);
+    printf("[Init] Config: Port=%d, Cores=%ld, RAM=%d MB, BaseID=%d, VM=%u\n",
+           g_service_port, g_num_cores, g_ram_mb, g_base_id, (unsigned)g_slave_vm_id);
     
     // 解析 -vfio 参数
     for (int i = 1; i < argc; i++) {
@@ -14523,7 +14584,7 @@ static void* gateway_worker(void *arg) {
             // [关键]：只要收到合法的 WVM 包，就学习源路由
             // 排除掉 Upstream (Master/Core) 的 ID，只学习 Downstream (Leaf) 节点
             // 这里可以通过 ID 范围判断，或者简单地全部学习（Upstream 路由更新也无妨）
-            if (source_id < WVM_MAX_SLAVES) {
+            if (source_id != WVM_NODE_AUTO_ROUTE) {
                 learn_route(source_id, &src_addrs[i]);
             }
 
