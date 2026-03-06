@@ -15475,11 +15475,11 @@ git push origin HEAD:main
 补充说明：
 - 前文相关代码块已同步为仓库对应文件内容，无需再额外附加差异片段。
 
-## 15. 最后一次尝试完整记录（2026-02-28，收尾版）
+## 🧪 2026-02-28 最后一次尝试完整记录（收尾版）
 
 本节仅记录“最后一次连续尝试”的实际配置、命令、观测与结论，便于下次直接续跑。
 
-#### 15.1 本次目标与约束
+### 本次目标与约束
 
 目标：
 - 不启用分布式存储（仅算力/内存链路）
@@ -15490,7 +15490,7 @@ git push origin HEAD:main
 - 启动参数不使用测试开关（不带 HOOK/mode/split）
 - 通过 `ssh -p` + `tmux` 保活
 
-#### 15.2 节点与端口信息（本次实际使用）
+### 节点与端口信息（本次实际使用）
 
 Node1：
 - SSH：`root@111.6.167.245:8033`
@@ -15502,7 +15502,7 @@ Node2：
 - 内网 IP：`172.30.0.128`
 - 公网端口段：`12700-12799`
 
-#### 15.3 本次实际配置文件（两端一致）
+### 本次实际配置文件（两端一致）
 
 文件：`/root/wvmtest/conf/flat_routes_pub.conf`
 
@@ -15521,7 +15521,7 @@ NODE 1 172.30.0.128 12720 6 4
 说明：
 - 名称仍为 `*_pub.conf`，但实际内容走内网地址（`172.30.x.x`）。
 
-#### 15.4 本次实际启动命令（最后一次干净重启）
+### 本次实际启动命令（最后一次干净重启）
 
 Node1（8033）：
 
@@ -15554,7 +15554,7 @@ WVM_INSTANCE_ID=0 ./src/wavevm-qemu/build-native/qemu-system-x86_64 \
 - 本轮明确校正了实例 socket：重启后 Node2 master 监听为 `/tmp/wvm_user_0.sock`，因此 VM 使用 `WVM_INSTANCE_ID=0`。
 - 使用 `WVM_INSTANCE_ID=1` 会出现：`vCPU 0 failed to connect master!`。
 
-#### 15.5 本次关键代码改动（工作区）
+### 本次关键代码改动（工作区）
 
 文件：`slave_daemon/slave_hybrid.c`
 
@@ -15568,14 +15568,14 @@ WVM_INSTANCE_ID=0 ./src/wavevm-qemu/build-native/qemu-system-x86_64 \
    - `TCG -> KVM` 转换时保留本地 `sregs`（避免覆盖后触发非法状态）。
 3. 增加了若干调试日志（BootVCPU/Init/Ack），用于定位本轮问题。
 
-#### 15.6 本次关键诊断结论
+### 本次关键诊断结论
 
 1. Node1 上 `RAM=4096MB` 时，KVM vCPU 创建在最小探针里可稳定复现异常：
    - `KVM_SET_USER_MEMORY_REGION` 成功后，`KVM_CREATE_VCPU(id=0/1)` 返回 `errno=17(EEXIST)`。
 2. Node1 上 `RAM=1024/2048/3072MB` 时，探针可正常 `KVM_CREATE_VCPU`。
 3. 因此本轮将两端 slave 运行参数从 `4096` 下调到 `3072`（仅运行参数级修正）。
 
-#### 15.7 最后一次交互测试结果（最终）
+### 最后一次交互测试结果（最终）
 
 测试项（Node2 本机）：
 1. 端口监听：
@@ -15589,7 +15589,7 @@ WVM_INSTANCE_ID=0 ./src/wavevm-qemu/build-native/qemu-system-x86_64 \
 结论：
 - VM 进程在跑、端口在监听，但仍未达到可交互登录状态。
 
-#### 15.8 最后一次日志状态摘要
+### 最后一次日志状态摘要
 
 Node1 `flat-slave.log`：
 - 已不再是“启动即崩溃”；
@@ -15604,7 +15604,7 @@ Node2 `flat-master.log`：
 Node2 `flat-vm-wavevm-pub.log`：
 - 末尾仍是 `kvm_enabled=0`（当前 VM 侧仍在 TCG 本地执行路径）。
 
-#### 15.9 本次已明确排除/确认的问题
+### 本次已明确排除/确认的问题
 
 已确认：
 1. 不是单纯“slave 启动即崩溃”问题（该问题本轮已被消除）。
@@ -15615,7 +15615,7 @@ Node2 `flat-vm-wavevm-pub.log`：
 1. 执行语义层未稳定（`exit_reason=17` + `status=1` 循环）；
 2. VM 仍无法完成 SSH 交互。
 
-#### 15.10 下一步计划（限时最小路径）
+### 下一步计划（限时最小路径）
 
 1. 固定当前已验证可运行基线：
    - Node1/Node2 slave 都保持 `3072`，避免回到 4GB 触发点。
@@ -15626,11 +15626,11 @@ Node2 `flat-vm-wavevm-pub.log`：
 4. 以“SSH banner 成功出现”为第一验收门槛：
    - 不先追求完整业务，仅先拿到 banner，再推进登录与分布式内存验证。
 
-## 16. 2026-03-01 紧急续测记录（实例 8008/8002，限时版）
+## 🧪 2026-03-01 紧急续测记录（实例 8008/8002，限时版）
 
 本节为 2026-03-01 当天在“时间与额度受限”条件下的连续操作归档，目标是固定最小改动并保留可续跑现场。
 
-#### 16.1 本轮目标与约束
+### 本轮目标与约束
 
 目标：
 - 延续“禁用分布式存储，仅验证分布式算力与分布式内存链路”的测试目标。
@@ -15641,7 +15641,7 @@ Node2 `flat-vm-wavevm-pub.log`：
 - 最小修复原则，不做架构级改造。
 - 启动参数不引入 HOOK/mode/split 测试开关。
 
-#### 16.2 本次实例与端口（实际）
+### 本次实例与端口（实际）
 
 Node1：
 - SSH：`root@111.6.167.245:8008`
@@ -15653,7 +15653,7 @@ Node2：
 - 密码：`KsLgBEQXIaYou8NG8Kudmr8W0RfGHEEm`
 - 公网端口段：`10100-10199`
 
-#### 16.3 本轮使用的配置与启动命令（最终一次）
+### 本轮使用的配置与启动命令（最终一次）
 
 两端 `run/start_flat.sh` 实际启动参数：
 
@@ -15684,7 +15684,7 @@ export WVM_INSTANCE_ID=0
 备注：
 - Node2 VM 脚本指向 `./src/wavevm-qemu/build-native/qemu-system-x86_64`，现场存在缺失/不可执行情况（`exit 127`）。
 
-#### 16.4 本轮代码同步与构建方式
+### 本轮代码同步与构建方式
 
 - 同步方式：本地源码打包直传（不走 `git pull`）到两端 `/root/wvmtest`。
 - 构建方式（两端）：
@@ -15693,7 +15693,7 @@ make -C master_core -f Makefile_User -j6
 make -C slave_daemon -j6
 ```
 
-#### 16.5 本轮关键代码变更（最小修复）
+### 本轮关键代码变更（最小修复）
 
 1. `master_core/logic_core.c`
 - 心跳聚合改为单包 `send_packet_async(MSG_HEARTBEAT, ...)`，移除手工多包拼装发送。
@@ -15712,7 +15712,7 @@ make -C slave_daemon -j6
 5. `wavevm-qemu/accel/wavevm/wavevm-cpu.c`
 - 本轮新增最小修复：将 ACK 回写路径中的 `ksregs` 整块 `memcpy` 改为“先 `KVM_GET_SREGS`，再精选架构字段覆盖”，避免覆盖本地 APIC/中断相关状态。
 
-#### 16.6 本轮观测结果（最终状态）
+### 本轮观测结果（最终状态）
 
 已确认：
 1. 两端 `slave` boot vCPU 初始化成功：
@@ -15727,13 +15727,13 @@ make -C slave_daemon -j6
 1. Node1 VM 端口 `10726` 可短时出现监听，但未稳定保持，SSH Banner 未形成稳定可登录态。
 2. Node2 VM 未进入有效验证（QEMU 可执行缺失/不可执行）。
 
-#### 16.7 现场遗留问题（收敛后）
+### 现场遗留问题（收敛后）
 
 1. 控制面“收到心跳但仍 OFFLINE”与局部状态机判活仍需继续收敛。
 2. Node1 上 QEMU 仍存在秒退/短时监听后消失现象。
 3. Node2 前端 QEMU 本体可执行状态需先恢复（可执行文件路径/权限/二进制一致性）。
 
-#### 16.8 下一步计划（建议顺序，最小爆炸半径）
+### 下一步计划（建议顺序，最小爆炸半径）
 
 1. 先固定二进制一致性：补齐 Node2 `qemu-system-x86_64`，确认两端前端版本一致。
 2. 在 Node1 仅做单机链路断点：对 `main_wrapper.c` IPC 日志 + `wavevm-cpu.c` 回写路径联合观察，锁定 VM 秒退触发点。
@@ -15741,9 +15741,9 @@ make -C slave_daemon -j6
 
 ---
 
-## 17. 2026-03-06 V31 Multi-VM 致命缺陷修复记录
+## 🔧 2026-03-06 V31 Multi-VM 致命缺陷修复记录
 
-### 17.1 背景
+### 背景
 
 Gemini 对 V31 架构进行审计，指出三项"致命缺陷"：
 1. Kernel Mode A 单例灾难——多 VM 共用一个 `wavevm.ko`，全局变量无 vm_id 隔离。
@@ -15760,7 +15760,7 @@ Gemini 对 V31 架构进行审计，指出三项"致命缺陷"：
 
 此问题已确认并修复（见 17.3）。
 
-### 17.2 修复：Gateway composite ID fallback
+### 修复：Gateway composite ID fallback
 
 **文件**：`gateway_service/aggregator.c` — `internal_push()` 函数
 
@@ -15788,7 +15788,7 @@ static int internal_push(int fd, uint32_t slave_id, void *data, int len) {
     // ... 后续逻辑不变
 ```
 
-### 17.3 修复：target_id=AUTO_ROUTE 防止 vm_id 过滤误杀
+### 修复：target_id=AUTO_ROUTE 防止 vm_id 过滤误杀
 
 **问题根因**：
 - QEMU `wavevm-user-mem.c` 构造 UDP 包时 `memset(buf, 0, ...)` 后只设了 `slave_id`，从未设 `target_id`，导致 `target_id=0`。
