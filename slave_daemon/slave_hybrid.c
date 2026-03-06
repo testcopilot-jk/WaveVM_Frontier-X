@@ -277,6 +277,7 @@ static struct kvm_run *g_boot_kvm_run = NULL;
 static pthread_spinlock_t g_master_lock;
 static int g_wvm_dev_fd = -1;
 static int g_base_id = 0;
+static uint8_t g_slave_vm_id = 0;
 static int g_vcpu_init_debug_once = 0;
 
 #define WVM_PAGE_SIZE            4096ULL
@@ -614,7 +615,7 @@ void* dirty_sync_sender_thread(void* arg) {
         wh->magic = htonl(WVM_MAGIC);
         wh->msg_type = htons(MSG_MEM_WRITE);
         wh->payload_len = htons(8 + 4096);
-        wh->slave_id = 0; // 源ID在Slave模式下意义不大，可设为0
+        wh->slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
         wh->req_id = 0;
         wh->qos_level = 0;
 
@@ -654,7 +655,7 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         ack_hdr.msg_type = htons(MSG_VCPU_EXIT);
         ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
         /* ACK must originate from this slave node and target the requester. */
-        ack_hdr.slave_id = htonl((uint32_t)g_base_id);
+        ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
         ack_hdr.target_id = htonl(hdr->slave_id);
         ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
 
@@ -691,7 +692,7 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         ack_hdr.msg_type = htons(MSG_VCPU_EXIT);
         ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
         /* ACK must originate from this slave node and target the requester. */
-        ack_hdr.slave_id = htonl((uint32_t)g_base_id);
+        ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
         ack_hdr.target_id = htonl(hdr->slave_id);
         ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
 
@@ -857,7 +858,7 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     ack_hdr.msg_type = htons(MSG_VCPU_EXIT);       
     ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
     /* ACK must originate from this slave node and target the requester. */
-    ack_hdr.slave_id = htonl((uint32_t)g_base_id);
+    ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
     ack_hdr.target_id = htonl(hdr->slave_id);
     ack_hdr.req_id = WVM_HTONLL(hdr->req_id);      
     
@@ -1329,7 +1330,7 @@ void* tcg_proxy_thread(void *arg) {
                 
                 uint32_t slave_id = ntohl(hdr->slave_id);
                 uint16_t msg_type = ntohs(hdr->msg_type);
-                int core_idx = (int)(slave_id - g_base_id);
+                int core_idx = (int)(WVM_GET_NODEID(slave_id) - g_base_id);
     
                 if (core_idx < 0 || core_idx >= g_num_cores) continue;
 
@@ -1382,10 +1383,11 @@ int main(int argc, char **argv) {
         g_base_id = atoi(argv[4]);
     }
     if (argc >= 6) g_ctrl_port = atoi(argv[5]);
+    if (argc >= 7) g_slave_vm_id = (uint8_t)atoi(argv[6]);
 
     printf("[Init] WaveVM Hybrid Slave V28.0 (Swarm Edition)\n");
-    printf("[Init] Config: Port=%d, Cores=%ld, RAM=%d MB, BaseID=%d\n", 
-           g_service_port, g_num_cores, g_ram_mb, g_base_id);
+    printf("[Init] Config: Port=%d, Cores=%ld, RAM=%d MB, BaseID=%d, VM=%u\n",
+           g_service_port, g_num_cores, g_ram_mb, g_base_id, (unsigned)g_slave_vm_id);
     
     // 解析 -vfio 参数
     for (int i = 1; i < argc; i++) {

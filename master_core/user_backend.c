@@ -25,6 +25,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <sys/ioctl.h>
 #include <stdarg.h>
 #include <sys/time.h>
 #include <sys/sysinfo.h>
@@ -44,6 +45,7 @@
 
 // --- 全局状态 ---
 static int g_my_node_id = 0;
+extern uint8_t g_my_vm_id;
 static int g_local_port = 0;
 static struct sockaddr_in g_gateways[WVM_MAX_GATEWAYS];
 static volatile int g_tx_socket = -1;
@@ -367,11 +369,11 @@ static void u_send_packet_async(uint16_t msg_type, void* payload, int len, uint3
     if (!buffer) return;
 
     struct wvm_header *hdr = (struct wvm_header *)buffer;
-    extern int g_my_node_id; 
+    extern int g_my_node_id;
     hdr->magic = htonl(WVM_MAGIC);
     hdr->msg_type = htons(msg_type);
     hdr->payload_len = htons(len);
-    hdr->slave_id = htonl(g_my_node_id);
+    hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
     hdr->target_id = htonl(target_id);
     hdr->req_id = 0;
     hdr->qos_level = qos;
@@ -619,7 +621,7 @@ static void handle_slave_read(int fd, struct sockaddr_in *dest, struct wvm_heade
     // 注意：payload_len 现在是 4112 字节 (16 + 4096)，而不是 4096！
     ack_hdr->payload_len = htons(sizeof(struct wvm_mem_ack_payload));
     ack_hdr->req_id = req->req_id;
-    ack_hdr->slave_id = htonl(g_my_node_id);
+    ack_hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
     ack_hdr->target_id = req->slave_id;
     ack_hdr->qos_level = 0; // 慢车道包
     ack_hdr->crc32 = 0;
@@ -705,7 +707,7 @@ static void handle_ipc_rpc_passthrough(int qemu_fd, void *data, uint32_t len) {
         handle_rpc_batch_execution(payload, payload_len);
         
         // 2. [Broadcast] 全网广播 (Source ID = Me)
-        hdr->slave_id = htonl(g_my_node_id);
+        hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
         wvm_logic_broadcast_rpc(data, len, msg_type);
     }
     
@@ -848,7 +850,17 @@ static void* rx_thread_loop(void *arg) {
                     // 校验通过，恢复 CRC
                     hdr->crc32 = htonl(received_crc);
                     void *payload = (void*)hdr + sizeof(struct wvm_header);
-                
+
+                    // [Multi-VM] vm_id 过滤：丢弃不属于本 VM 的包
+                    {
+                        uint32_t target_raw = ntohl(hdr->target_id);
+                        if (target_raw != WVM_NODE_AUTO_ROUTE &&
+                            WVM_GET_VMID(target_raw) != g_my_vm_id) {
+                            offset += current_pkt_len;
+                            continue;
+                        }
+                    }
+
                     // [路由优先] Slave 业务包必须先分流，不能被 req_id 分支误判为 ACK。
                     // 仅当包不是来自本地 slave 端口时，才转发到 slave 进程处理。
                     int is_slave_service_msg =
@@ -863,17 +875,18 @@ static void* rx_thread_loop(void *arg) {
                     if (from_local_slave &&
                         (msg_type == MSG_VCPU_EXIT || msg_type == MSG_BLOCK_ACK)) {
                         uint32_t return_target = ntohl(hdr->target_id);
-                        if (return_target == (uint32_t)g_my_node_id) {
+                        uint32_t my_composite_id = WVM_ENCODE_ID(g_my_vm_id, g_my_node_id);
+                        if (return_target == my_composite_id) {
                             uint32_t legacy_target = ntohl(hdr->slave_id);
-                            if (legacy_target < WVM_MAX_GATEWAYS &&
-                                legacy_target != (uint32_t)g_my_node_id) {
+                            if (legacy_target != WVM_NODE_AUTO_ROUTE &&
+                                legacy_target != my_composite_id) {
                                 return_target = legacy_target;
                             }
                         }
                         u_log("[Slave Return] msg=%u src_port=%u rid=%llu return_target=%u",
                               (unsigned)msg_type, (unsigned)ntohs(src_addrs[i].sin_port),
                               (unsigned long long)rid, (unsigned)return_target);
-                        if (return_target < WVM_MAX_GATEWAYS && return_target != (uint32_t)g_my_node_id) {
+                        if (return_target != WVM_NODE_AUTO_ROUTE && return_target != my_composite_id) {
                             int rr = u_send_packet(base_ptr + offset, current_pkt_len, return_target);
                             u_log("[Slave Return] forward queued msg=%u rid=%llu target=%u ret=%d len=%d",
                                   (unsigned)msg_type, (unsigned long long)rid,

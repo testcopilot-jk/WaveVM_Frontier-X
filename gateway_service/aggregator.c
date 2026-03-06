@@ -436,7 +436,7 @@ static void* gateway_worker(void *arg) {
             // [关键]：只要收到合法的 WVM 包，就学习源路由
             // 排除掉 Upstream (Master/Core) 的 ID，只学习 Downstream (Leaf) 节点
             // 这里可以通过 ID 范围判断，或者简单地全部学习（Upstream 路由更新也无妨）
-            if (source_id < WVM_MAX_SLAVES) {
+            if (source_id != WVM_NODE_AUTO_ROUTE) {
                 learn_route(source_id, &src_addrs[i]);
             }
 
@@ -446,7 +446,7 @@ static void* gateway_worker(void *arg) {
              * deployments. Fallback to upstream only when no local route exists.
              */
             uint32_t route_id = source_id; // 兼容旧包：没有目标信息时按旧字段转发
-            if (target_id < WVM_MAX_SLAVES) {
+            if (target_id != WVM_NODE_AUTO_ROUTE) {
                 route_id = target_id;
             } else if (target_id == WVM_NODE_AUTO_ROUTE) {
                 route_id = source_id;

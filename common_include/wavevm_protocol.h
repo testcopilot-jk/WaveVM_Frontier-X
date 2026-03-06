@@ -177,7 +177,18 @@ typedef struct wvm_ipc_header_t {
 #define WVM_IPC_TYPE_RPC_PASSTHROUGH 99
 
 // 前后端分离路由占位符
-#define WVM_NODE_AUTO_ROUTE 0x3FFFFFFF
+#define WVM_NODE_AUTO_ROUTE 0xFFFFFFFF  // 旧值 0x3FFFFFFF，改为全 1 避免与 vm_id 编码冲突
+
+// --- Multi-VM Resource Pooling: VM ID 编解码 ---
+// slave_id / target_id 的高 8 位编码 vm_id，低 24 位编码 node_id
+// 协议头 48 字节不变，向后兼容：vm_id=0 时 ENCODE_ID(0,n) == n
+#define WVM_VMID_SHIFT    24
+#define WVM_VMID_MASK     (0xFFu << WVM_VMID_SHIFT)    // 0xFF000000
+#define WVM_NODEID_MASK   ((1u << WVM_VMID_SHIFT) - 1)  // 0x00FFFFFF
+
+#define WVM_ENCODE_ID(vm, node) (((uint32_t)(vm) << WVM_VMID_SHIFT) | ((node) & WVM_NODEID_MASK))
+#define WVM_GET_VMID(id)        (((uint32_t)(id) >> WVM_VMID_SHIFT) & 0xFF)
+#define WVM_GET_NODEID(id)      ((uint32_t)(id) & WVM_NODEID_MASK)
 
 #define WVM_CTRL_MAGIC 0x57564D43
 

@@ -51,6 +51,7 @@
 // --- 核心常量定义 ---
 #define WVM_MAX_SLAVES (1UL << WVM_SLAVE_BITS)
 #define WVM_MAX_GATEWAYS (WVM_MAX_SLAVES)
+#define WVM_MAX_VMS 256  // Multi-VM 资源池化：最多 256 个 VM 共享同一集群
 /*
  * [协议特征与物理限制]
  * WVM_MAGIC: 数据包特征码 "WVMX"，用于在接收端快速识别并丢弃非法/垃圾流量。

@@ -31,10 +31,11 @@
 // --- 全局状态 ---
 extern struct dsm_driver_ops u_ops;
 extern int user_backend_init(int my_node_id, int port);
-void *g_shm_ptr = NULL; 
+void *g_shm_ptr = NULL;
 size_t g_shm_size = 0;
 int g_dev_fd = -1;
 extern int g_my_node_id;
+uint8_t g_my_vm_id = 0;  // Multi-VM: 默认 0，向后兼容
 
 #define MAX_QEMU_CLIENTS 8
 #define NUM_BCAST_WORKERS 8
@@ -85,13 +86,18 @@ void load_swarm_config(const char *filename) {
     while (fgets(line, sizeof(line), fp)) {
         // 跳过注释和空行
         if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
-        
+
         char keyword[16];
         int bid, port, cores, ram;
         char ip_str[64];
-        
-        // 1. 尝试读取关键字 "NODE"
+
+        // 1. 尝试读取关键字
         if (sscanf(line, "%15s", keyword) != 1) continue;
+
+        // [Multi-VM] 解析 VM 指令（仅记录，不影响 NODE 解析）
+        // 格式: VM <VmID> <StartVnode> <VnodeCount>
+        if (strcmp(keyword, "VM") == 0) continue; // VM 指令在此阶段跳过，仅用于文档
+
         if (strcmp(keyword, "NODE") != 0) continue;
 
         // 2. 解析: NODE <ID> <IP> <PORT> <CORES> <RAM>
@@ -108,10 +114,11 @@ void load_swarm_config(const char *filename) {
             int v_count = ram / WVM_RAM_UNIT_GB;
             if (v_count < 1) v_count = 1;
 
-            // 2. 注入 Gateway IP 表
+            // 2. 注入 Gateway IP 表 (使用 composite ID: vm_id | node_id)
             for (int v = 0; v < v_count; v++) {
                 int v_id = total_vnodes + v;
-                u_ops.set_gateway_ip(v_id, inet_addr(ip_str), htons(port));
+                uint32_t composite_id = WVM_ENCODE_ID(g_my_vm_id, v_id);
+                u_ops.set_gateway_ip(composite_id, inet_addr(ip_str), htons(port));
             }
 
             // 3. 记录物理节点信息
@@ -422,9 +429,10 @@ void load_initial_seeds(const char *config_file) {
                 g_seeds[g_seed_count].sin_family = AF_INET;
                 g_seeds[g_seed_count].sin_addr.s_addr = inet_addr(ip);
                 g_seeds[g_seed_count].sin_port = htons(port);
-                
+
                 // 关键：将种子节点预埋入局部视图
                 // 初始状态设为 SHADOW，等待心跳激活
+                // [Multi-VM] 使用裸 node_id，topology view 内部用裸 ID
                 update_local_topology_view(id, 0, NODE_STATE_SHADOW, &g_seeds[g_seed_count], 0);
                 g_seed_count++;
             }
@@ -440,7 +448,7 @@ int main(int argc, char **argv) {
 
     // 参数检查
     if (argc < 7) {
-        fprintf(stderr, "Usage: %s <RAM_MB> <LOCAL_PORT> <SWARM_CONFIG> <MY_PHYS_ID> <CTRL_PORT> <SLAVE_PORT> [SYNC_BATCH]\n", argv[0]);
+        fprintf(stderr, "Usage: %s <RAM_MB> <LOCAL_PORT> <SWARM_CONFIG> <MY_PHYS_ID> <CTRL_PORT> <SLAVE_PORT> [SYNC_BATCH] [VM_ID]\n", argv[0]);
         return 1;
     }
 
@@ -466,8 +474,12 @@ int main(int argc, char **argv) {
         extern int g_sync_batch_size;
         g_sync_batch_size = atoi(argv[7]);
     }
+    // 可选参数：VM ID (Multi-VM 资源池化)
+    if (argc >= 9) {
+        g_my_vm_id = (uint8_t)atoi(argv[8]);
+    }
 
-    printf("[*] WaveVM Swarm V29.5 'Wavelet' Node Daemon (PhysID: %d)\n", my_phys_id);
+    printf("[*] WaveVM Swarm V30.0 'Wavelet' Node Daemon (PhysID: %d, VM: %u)\n", my_phys_id, (unsigned)g_my_vm_id);
 
     // 2. 初始化用户态后端 (User Backend)
     // 注意：此时我们暂时用 PhysID 初始化，后续 load_swarm_config 会填充完整的路由表
