@@ -8877,6 +8877,7 @@ void* dirty_sync_sender_thread(void* arg) {
         wh->msg_type = htons(MSG_MEM_WRITE);
         wh->payload_len = htons(8 + 4096);
         wh->slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
+        wh->target_id = htonl(WVM_NODE_AUTO_ROUTE); // [V31 Fix] 本地通信标记，防止 Master vm_id 过滤误杀
         wh->req_id = 0;
         wh->qos_level = 0;
 
@@ -12401,6 +12402,7 @@ static void send_push_packet(uint64_t gpa, uint64_t version, void *data, uint16_
     hdr->msg_type = htons(MSG_COMMIT_DIFF);
     hdr->payload_len = htons(pl_len);
     hdr->slave_id = htonl(g_slave_id);
+    hdr->target_id = htonl(WVM_NODE_AUTO_ROUTE); // [V31 Fix] 本地通信标记
     hdr->req_id = 0;
     hdr->qos_level = 1;
     hdr->flags = flags; // [关键]
@@ -12786,11 +12788,12 @@ static int request_page_sync(uintptr_t fault_addr, bool is_write) {
         hdr->msg_type = htons(MSG_MEM_READ); // V29 标准回退
     #endif
 
-    hdr->payload_len = htons(8); 
+    hdr->payload_len = htons(8);
     hdr->slave_id = htonl(g_slave_id);
-    hdr->req_id = WVM_HTONLL((uint64_t)gpa); 
-    hdr->mode_tcg = 1; 
-    hdr->qos_level = 1; 
+    hdr->target_id = htonl(WVM_NODE_AUTO_ROUTE); // [V31 Fix] 本地通信标记，防止 vm_id 过滤误杀
+    hdr->req_id = WVM_HTONLL((uint64_t)gpa);
+    hdr->mode_tcg = 1;
+    hdr->qos_level = 1;
 
     // [保留] Payload: GPA
     *(uint64_t *)(t_net_buf + sizeof(struct wvm_header)) = WVM_HTONLL(gpa);
@@ -12961,7 +12964,8 @@ static void send_commit_diff_dual_mode(uint64_t gpa, uint16_t offset, uint16_t s
     hdr->msg_type = htons(MSG_COMMIT_DIFF);
     hdr->payload_len = htons(pl_len);
     hdr->slave_id = htonl(g_slave_id);
-    hdr->req_id = 0; 
+    hdr->target_id = htonl(WVM_NODE_AUTO_ROUTE); // [V31 Fix] 本地通信标记
+    hdr->req_id = 0;
     hdr->qos_level = 1; // 走快车道
     hdr->crc32 = 0;     // 先清零
     hdr->flags = 0;
@@ -13045,6 +13049,7 @@ static void add_to_aggregator(uint64_t gpa, uint64_t version, uint16_t off, uint
     hdr->msg_type = htons(MSG_COMMIT_DIFF);
     hdr->payload_len = htons(payload_len);
     hdr->slave_id = htonl(g_slave_id);
+    hdr->target_id = htonl(WVM_NODE_AUTO_ROUTE); // [V31 Fix] 本地通信标记
     hdr->qos_level = 1;
     hdr->flags = flags;
     hdr->crc32 = 0;
@@ -14375,11 +14380,20 @@ static int internal_push(int fd, uint32_t slave_id, void *data, int len) {
     // 1. 读锁保护查找，防止与动态路由更新冲突
     pthread_rwlock_rdlock(&g_map_lock);
     gateway_node_t *node = find_node(slave_id);
+    // [Multi-VM Fallback] composite ID 查不到时，strip vm_id 用裸 node_id 再查一次
+    // 兼容 routes.conf 只写裸 ID、实际流量带 composite ID 的分形集群场景
+    // vm_id=0 时 WVM_GET_NODEID(id)==id，fallback 等价于 no-op 不影响性能
+    if (!node) {
+        uint32_t raw_id = WVM_GET_NODEID(slave_id);
+        if (raw_id != slave_id) {
+            node = find_node(raw_id);
+        }
+    }
     if (!node) {
         pthread_rwlock_unlock(&g_map_lock);
         return -1;
     }
-    
+
     // 2. 获取节点级互斥锁，随后释放全局读锁
     pthread_mutex_lock(&node->lock);
     pthread_rwlock_unlock(&g_map_lock); 

@@ -227,6 +227,15 @@ static int internal_push(int fd, uint32_t slave_id, void *data, int len) {
     // 1. 读锁保护查找，防止与动态路由更新冲突
     pthread_rwlock_rdlock(&g_map_lock);
     gateway_node_t *node = find_node(slave_id);
+    // [Multi-VM Fallback] composite ID 查不到时，strip vm_id 用裸 node_id 再查一次
+    // 兼容 routes.conf 只写裸 ID、实际流量带 composite ID 的分形集群场景
+    // vm_id=0 时 WVM_GET_NODEID(id)==id，fallback 等价于 no-op 不影响性能
+    if (!node) {
+        uint32_t raw_id = WVM_GET_NODEID(slave_id);
+        if (raw_id != slave_id) {
+            node = find_node(raw_id);
+        }
+    }
     if (!node) {
         pthread_rwlock_unlock(&g_map_lock);
         return -1;

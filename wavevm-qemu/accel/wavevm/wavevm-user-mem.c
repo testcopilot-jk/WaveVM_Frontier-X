@@ -173,6 +173,7 @@ static void send_push_packet(uint64_t gpa, uint64_t version, void *data, uint16_
     hdr->msg_type = htons(MSG_COMMIT_DIFF);
     hdr->payload_len = htons(pl_len);
     hdr->slave_id = htonl(g_slave_id);
+    hdr->target_id = htonl(WVM_NODE_AUTO_ROUTE); // [V31 Fix] 本地通信标记
     hdr->req_id = 0;
     hdr->qos_level = 1;
     hdr->flags = flags; // [关键]
@@ -558,11 +559,12 @@ static int request_page_sync(uintptr_t fault_addr, bool is_write) {
         hdr->msg_type = htons(MSG_MEM_READ); // V29 标准回退
     #endif
 
-    hdr->payload_len = htons(8); 
+    hdr->payload_len = htons(8);
     hdr->slave_id = htonl(g_slave_id);
-    hdr->req_id = WVM_HTONLL((uint64_t)gpa); 
-    hdr->mode_tcg = 1; 
-    hdr->qos_level = 1; 
+    hdr->target_id = htonl(WVM_NODE_AUTO_ROUTE); // [V31 Fix] 本地通信标记，防止 vm_id 过滤误杀
+    hdr->req_id = WVM_HTONLL((uint64_t)gpa);
+    hdr->mode_tcg = 1;
+    hdr->qos_level = 1;
 
     // [保留] Payload: GPA
     *(uint64_t *)(t_net_buf + sizeof(struct wvm_header)) = WVM_HTONLL(gpa);
@@ -733,7 +735,8 @@ static void send_commit_diff_dual_mode(uint64_t gpa, uint16_t offset, uint16_t s
     hdr->msg_type = htons(MSG_COMMIT_DIFF);
     hdr->payload_len = htons(pl_len);
     hdr->slave_id = htonl(g_slave_id);
-    hdr->req_id = 0; 
+    hdr->target_id = htonl(WVM_NODE_AUTO_ROUTE); // [V31 Fix] 本地通信标记
+    hdr->req_id = 0;
     hdr->qos_level = 1; // 走快车道
     hdr->crc32 = 0;     // 先清零
     hdr->flags = 0;
@@ -817,6 +820,7 @@ static void add_to_aggregator(uint64_t gpa, uint64_t version, uint16_t off, uint
     hdr->msg_type = htons(MSG_COMMIT_DIFF);
     hdr->payload_len = htons(payload_len);
     hdr->slave_id = htonl(g_slave_id);
+    hdr->target_id = htonl(WVM_NODE_AUTO_ROUTE); // [V31 Fix] 本地通信标记
     hdr->qos_level = 1;
     hdr->flags = flags;
     hdr->crc32 = 0;

@@ -616,6 +616,7 @@ void* dirty_sync_sender_thread(void* arg) {
         wh->msg_type = htons(MSG_MEM_WRITE);
         wh->payload_len = htons(8 + 4096);
         wh->slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
+        wh->target_id = htonl(WVM_NODE_AUTO_ROUTE); // [V31 Fix] 本地通信标记，防止 Master vm_id 过滤误杀
         wh->req_id = 0;
         wh->qos_level = 0;
 
