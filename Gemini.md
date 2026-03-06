@@ -4473,14 +4473,14 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             
             page_meta_t *page = find_or_create_page_meta(gpa);
             if (page) {
-                // 记录订阅者
-                copyset_set(&page->subscribers, source_node_id);
+                // 记录订阅者 (使用裸 node_id 索引位图，不能用 composite ID)
+                copyset_set(&page->subscribers, src_id);
                 page->last_interest_time = g_ops->get_time_us();
-                uint32_t seg_idx = source_node_id / 64; 
-                // 在二级位图中标记该段“有订阅者”
+                uint32_t seg_idx = src_id / 64;
+                // 在二级位图中标记该段"有订阅者"
                 page->segment_mask[seg_idx / 64] |= (1UL << (seg_idx % 64));
                 // 在一级位图中标记节点
-                page->subscribers.bits[seg_idx] |= (1UL << (source_node_id % 64));
+                page->subscribers.bits[seg_idx] |= (1UL << (src_id % 64));
             }
             
             // pthread_mutex_unlock(&g_dir_table_locks[lock_idx]); // lock_idx not valid in this branch
@@ -4551,7 +4551,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                     if (commit_epoch != g_curr_epoch || commit_counter != local_counter) {
                         // 版本冲突！拒绝并强制同步
                         // pthread_mutex_unlock(&g_dir_table_locks[lock_idx]); // lock_idx not valid in this branch
-                        force_sync_client(gpa, page, source_node_id);
+                        force_sync_client(gpa, page, src_id);
                         return;
                     }
                 
@@ -4883,7 +4883,8 @@ void wvm_logic_broadcast_rpc(void *full_pkt_data, int full_pkt_len, uint16_t msg
 #define TX_RING_SIZE 2048
 #define TX_SLOT_SIZE 65535
 
-// 定义并初始化 mapping 锁
+// [Fix] Multi-VM: 引用全局 vm_id，用于 composite ID 编码
+extern uint8_t g_my_vm_id;
 static struct rw_semaphore g_mapping_sem; 
 
 static int service_port = 9000;
@@ -5146,18 +5147,22 @@ static int k_check_req_status(uint64_t full_id) {
 
 // --- 发送逻辑 ---
 static void k_set_gateway_ip(uint32_t gw_id, uint32_t ip, uint16_t port) {
-    if (gw_id < WVM_MAX_GATEWAYS) {
-        gateway_table[gw_id].sin_family = AF_INET;
-        gateway_table[gw_id].sin_addr.s_addr = ip;
-        gateway_table[gw_id].sin_port = port;
+    // [Fix #1] 入参可能是 composite ID，先解码为裸 node_id 再索引静态数组
+    uint32_t raw_node_id = WVM_GET_NODEID(gw_id);
+    if (raw_node_id < WVM_MAX_GATEWAYS) {
+        gateway_table[raw_node_id].sin_family = AF_INET;
+        gateway_table[raw_node_id].sin_addr.s_addr = ip;
+        gateway_table[raw_node_id].sin_port = port;
     }
 }
 
 static int raw_kernel_send(void *data, int len, uint32_t target_id) {
     struct msghdr msg; struct kvec vec; struct sockaddr_in to_addr; int ret;
-    if (!g_socket || target_id >= WVM_MAX_GATEWAYS || gateway_table[target_id].sin_port == 0) return -ENODEV;
+    // [Fix #1] target_id 可能是 composite ID，解码为裸 node_id 索引 gateway_table
+    uint32_t raw_id = WVM_GET_NODEID(target_id);
+    if (!g_socket || raw_id >= WVM_MAX_GATEWAYS || gateway_table[raw_id].sin_port == 0) return -ENODEV;
 
-    to_addr = gateway_table[target_id];
+    to_addr = gateway_table[raw_id];
     memset(&msg, 0, sizeof(msg));
     msg.msg_name = &to_addr;
     msg.msg_namelen = sizeof(to_addr);
@@ -5281,11 +5286,11 @@ static void k_send_packet_async(uint16_t msg_type, void* payload, int len, uint3
     if (!buffer) return;
 
     struct wvm_header *hdr = (struct wvm_header *)buffer;
-    extern int g_my_node_id; 
+    extern int g_my_node_id;
     hdr->magic = htonl(WVM_MAGIC);
     hdr->msg_type = htons(msg_type);
     hdr->payload_len = htons(len);
-    hdr->slave_id = htonl(g_my_node_id);
+    hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
     hdr->req_id = 0;
     hdr->qos_level = qos;
     if (payload && len > 0) memcpy(buffer + sizeof(*hdr), payload, len);
@@ -5463,9 +5468,9 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
             hdr->magic = htonl(WVM_MAGIC);
             hdr->msg_type = htons(MSG_MEM_READ);
             hdr->payload_len = htons(sizeof(net_gpa));
-            hdr->slave_id = htonl(dir_node);
+            hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, dir_node));
             hdr->req_id = WVM_HTONLL(rid);
-            hdr->qos_level = 1; 
+            hdr->qos_level = 1;
             hdr->crc32 = 0;
             memcpy(buffer + sizeof(*hdr), &net_gpa, sizeof(net_gpa));
             k_send_packet(buffer, pkt_len, dir_node);
@@ -5506,7 +5511,7 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
                     hdr->magic = htonl(WVM_MAGIC);
                     hdr->msg_type = htons(MSG_MEM_READ);
                     hdr->payload_len = htons(sizeof(net_gpa));
-                    hdr->slave_id = htonl(dir_node);
+                    hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, dir_node));
                     hdr->req_id = WVM_HTONLL(rid);
                     hdr->qos_level = 1;
                     hdr->crc32 = 0;
@@ -5616,7 +5621,7 @@ static int committer_thread_fn(void *data) {
                 hdr->msg_type = htons(MSG_COMMIT_DIFF);
                 hdr->payload_len = htons(payload_size);
                 extern int g_my_node_id;
-                hdr->slave_id = htonl(g_my_node_id);
+                hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
                 hdr->req_id = 0;
                 hdr->qos_level = 1;
 
@@ -6137,10 +6142,10 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
         if (copy_from_user(&req, argp, sizeof(req))) return -EFAULT;
 
         uint32_t target = req.slave_id;
-        if (target == WVM_NODE_AUTO_ROUTE) {
+        if (!WVM_IS_VALID_TARGET(target)) {
             target = wvm_get_compute_slave_id(req.vcpu_index);
         }
-        if (target == WVM_NODE_AUTO_ROUTE || target >= WVM_MAX_GATEWAYS) return -ENODEV;
+        if (!WVM_IS_VALID_TARGET(target)) return -ENODEV;
 
         int ctx_len = req.mode_tcg ? sizeof(req.ctx.tcg) : sizeof(req.ctx.kvm);
         int ret = wvm_rpc_call(MSG_VCPU_RUN, &req.ctx, ctx_len, target, &ack.ctx, sizeof(ack.ctx));

@@ -250,7 +250,7 @@ typedef struct {
 
 struct wvm_ipc_cpu_run_req {
     uint32_t mode_tcg;
-    uint32_t slave_id;   // 如果设为 WVM_NODE_AUTO_ROUTE (0x3FFFFFFF)，由后端决定
+    uint32_t slave_id;   // 如果设为 WVM_NODE_AUTO_ROUTE (0xFFFFFFFF)，由后端决定
     uint32_t vcpu_index; // 传递 vCPU 序号用于查表路由
     union {
         wvm_kvm_context_t kvm;

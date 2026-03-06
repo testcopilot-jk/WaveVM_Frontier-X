@@ -1404,14 +1404,14 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             
             page_meta_t *page = find_or_create_page_meta(gpa);
             if (page) {
-                // 记录订阅者
-                copyset_set(&page->subscribers, source_node_id);
+                // 记录订阅者 (使用裸 node_id 索引位图，不能用 composite ID)
+                copyset_set(&page->subscribers, src_id);
                 page->last_interest_time = g_ops->get_time_us();
-                uint32_t seg_idx = source_node_id / 64; 
-                // 在二级位图中标记该段“有订阅者”
+                uint32_t seg_idx = src_id / 64;
+                // 在二级位图中标记该段"有订阅者"
                 page->segment_mask[seg_idx / 64] |= (1UL << (seg_idx % 64));
                 // 在一级位图中标记节点
-                page->subscribers.bits[seg_idx] |= (1UL << (source_node_id % 64));
+                page->subscribers.bits[seg_idx] |= (1UL << (src_id % 64));
             }
             
             // pthread_mutex_unlock(&g_dir_table_locks[lock_idx]); // lock_idx not valid in this branch
@@ -1482,7 +1482,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                     if (commit_epoch != g_curr_epoch || commit_counter != local_counter) {
                         // 版本冲突！拒绝并强制同步
                         // pthread_mutex_unlock(&g_dir_table_locks[lock_idx]); // lock_idx not valid in this branch
-                        force_sync_client(gpa, page, source_node_id);
+                        force_sync_client(gpa, page, src_id);
                         return;
                     }
                 
