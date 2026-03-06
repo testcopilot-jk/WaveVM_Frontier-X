@@ -446,10 +446,8 @@ static void* gateway_worker(void *arg) {
              * deployments. Fallback to upstream only when no local route exists.
              */
             uint32_t route_id = source_id; // 兼容旧包：没有目标信息时按旧字段转发
-            if (target_id != WVM_NODE_AUTO_ROUTE) {
+            if (WVM_IS_VALID_TARGET(target_id)) {
                 route_id = target_id;
-            } else if (target_id == WVM_NODE_AUTO_ROUTE) {
-                route_id = source_id;
             }
 
             int r = internal_push(local_fd, route_id, ptr, pkt_len);

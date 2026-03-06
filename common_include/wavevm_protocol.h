@@ -190,6 +190,10 @@ typedef struct wvm_ipc_header_t {
 #define WVM_GET_VMID(id)        (((uint32_t)(id) >> WVM_VMID_SHIFT) & 0xFF)
 #define WVM_GET_NODEID(id)      ((uint32_t)(id) & WVM_NODEID_MASK)
 
+// [Fix #3] AUTO_ROUTE 是 sentinel 值 (0xFFFFFFFF)，不能做 GET_NODEID 后参与普通比较
+// 所有需要判断"是否是有效路由目标"的地方必须先过此检查
+#define WVM_IS_VALID_TARGET(id) ((uint32_t)(id) != WVM_NODE_AUTO_ROUTE)
+
 #define WVM_CTRL_MAGIC 0x57564D43
 
 #define SYNC_MAGIC 0x53594E43 

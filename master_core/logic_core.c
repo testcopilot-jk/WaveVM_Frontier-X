@@ -212,6 +212,7 @@ void wvm_set_cpu_mapping(int vcpu_index, uint32_t slave_id) {
 uint32_t wvm_get_compute_slave_id(int vcpu_index) {
     if (vcpu_index >= 0 && vcpu_index < WVM_CPU_ROUTE_TABLE_SIZE) {
         uint32_t raw = g_cpu_route_table[vcpu_index];
+        // [Fix #3] AUTO_ROUTE 是 sentinel，不能做 ENCODE_ID 操作
         if (raw == WVM_NODE_AUTO_ROUTE) return raw;
         // [Multi-VM] 返回 composite ID
         return WVM_ENCODE_ID(g_my_vm_id, raw);
@@ -630,7 +631,8 @@ static void handle_view_pull(struct wvm_header *rx_hdr, uint32_t src_id) {
     }
     pthread_rwlock_unlock(&g_view_lock);
 
-    g_ops->send_packet(buf, pkt_len, src_id);
+    // [Fix #2] src_id 是裸 node_id（内部逻辑），发包时需要编码为 composite ID
+    g_ops->send_packet(buf, pkt_len, WVM_ENCODE_ID(g_my_vm_id, src_id));
     g_ops->free_packet(buf);
 }
 
@@ -925,7 +927,8 @@ static void force_sync_client(uint64_t gpa, page_meta_t* page, uint32_t client_i
     push->version = WVM_HTONLL(page->version); 
     memcpy(push->data, page->base_page_data, 4096);
 
-    g_ops->send_packet(buffer, pkt_len, client_id);
+    // [Fix #2] client_id 是裸 node_id，发包时需要编码为 composite ID
+    g_ops->send_packet(buffer, pkt_len, WVM_ENCODE_ID(g_my_vm_id, client_id));
     g_ops->free_packet(buffer);
 }
 

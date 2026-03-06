@@ -62,12 +62,14 @@ __attribute__((weak)) int push_to_aggregator(uint32_t slave_id, void *data, int 
         return -EAGAIN;
     }
 
-    if (slave_id >= WVM_MAX_GATEWAYS) {
+    // [Fix #1] slave_id 可能是 composite ID，解码为裸 node_id 索引 g_gateways[]
+    uint32_t raw_id = WVM_GET_NODEID(slave_id);
+    if (raw_id >= WVM_MAX_GATEWAYS) {
         errno = EINVAL;
         return -EINVAL;
     }
 
-    struct sockaddr_in *target = &g_gateways[slave_id];
+    struct sockaddr_in *target = &g_gateways[raw_id];
     if (target->sin_port == 0) {
         errno = EHOSTUNREACH;
         return -EHOSTUNREACH;
@@ -415,6 +417,7 @@ static tx_node_t* queue_pop(tx_queue_t *q) {
  * [后果] 这是 P2P 网络在公网环境下的生命线。它防止了节点在网络拥塞时疯狂重传，从而实现“优雅减速”而非“系统坍缩”。
  */
 static int raw_send(tx_node_t *node) {
+    // [Fix #1] g_gateways 按裸 node_id 索引，g_my_node_id 已经是裸 ID，无需解码
     struct sockaddr_in *target = &g_gateways[g_my_node_id];
     if (target->sin_port == 0 || g_tx_socket < 0) return -1;
     
@@ -553,26 +556,27 @@ extern int g_dev_fd;
  * [后果] 实现了真正的“配置一致性”。若穿透失败，内核将向错误的旧 IP 发送数据，导致分布式计算出现逻辑黑洞。
  */
 static void u_set_gateway_ip(uint32_t gw_id, uint32_t ip, uint16_t port) {
+    // [Fix #1] 入参可能是 composite ID，先解码为裸 node_id 再索引静态数组
+    // 这样 vm_id>0 时不会越界 (composite ID = (vm<<24)|node, 可能 > WVM_MAX_GATEWAYS)
+    uint32_t raw_node_id = WVM_GET_NODEID(gw_id);
+
     // 1. 更新用户态表 (供 Daemon 自身通信使用，如 Gossip)
-    if (gw_id < WVM_MAX_GATEWAYS) {
-        g_gateways[gw_id].sin_family = AF_INET;
-        g_gateways[gw_id].sin_addr.s_addr = ip;
-        g_gateways[gw_id].sin_port = port;
+    if (raw_node_id < WVM_MAX_GATEWAYS) {
+        g_gateways[raw_node_id].sin_family = AF_INET;
+        g_gateways[raw_node_id].sin_addr.s_addr = ip;
+        g_gateways[raw_node_id].sin_port = port;
     }
 
-    // 2. [关键] 如果是 Mode A，必须同步下发到内核！
-    // 通过判断 g_dev_fd 是否有效来识别是否开启了内核加速
+    // 2. [Fix #4] Mode A 内核路径对齐：传给内核的 gw_id 也用裸 node_id
+    // 内核模块 wavevm.ko 的路由表按裸 node_id 索引，不理解 composite 编码
     if (g_dev_fd > 0) {
         struct wvm_ioctl_gateway args;
-        args.gw_id = gw_id;
+        args.gw_id = raw_node_id;  // [Fix #4] 解码后下发内核
         args.ip = ip;     // 此时已经是网络序
         args.port = port; // 此时已经是网络序
-        
-        // 这一步实现了“垂直穿透”，让内核实时感知拓扑变化
+
         if (ioctl(g_dev_fd, IOCTL_SET_GATEWAY, &args) < 0) {
             perror("[Daemon] Failed to sync dynamic route to kernel");
-        } else {
-            // printf("[Daemon] Synced route %d -> %x to Kernel.\n", gw_id, ip);
         }
     }
 }
@@ -878,7 +882,7 @@ static void* rx_thread_loop(void *arg) {
                         uint32_t my_composite_id = WVM_ENCODE_ID(g_my_vm_id, g_my_node_id);
                         if (return_target == my_composite_id) {
                             uint32_t legacy_target = ntohl(hdr->slave_id);
-                            if (legacy_target != WVM_NODE_AUTO_ROUTE &&
+                            if (WVM_IS_VALID_TARGET(legacy_target) &&
                                 legacy_target != my_composite_id) {
                                 return_target = legacy_target;
                             }
@@ -886,7 +890,7 @@ static void* rx_thread_loop(void *arg) {
                         u_log("[Slave Return] msg=%u src_port=%u rid=%llu return_target=%u",
                               (unsigned)msg_type, (unsigned)ntohs(src_addrs[i].sin_port),
                               (unsigned long long)rid, (unsigned)return_target);
-                        if (return_target != WVM_NODE_AUTO_ROUTE && return_target != my_composite_id) {
+                        if (WVM_IS_VALID_TARGET(return_target) && return_target != my_composite_id) {
                             int rr = u_send_packet(base_ptr + offset, current_pkt_len, return_target);
                             u_log("[Slave Return] forward queued msg=%u rid=%llu target=%u ret=%d len=%d",
                                   (unsigned)msg_type, (unsigned long long)rid,

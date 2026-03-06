@@ -181,10 +181,10 @@ static void handle_ipc_fault(int qemu_fd, struct wvm_ipc_fault_req* req) {
 
 static void handle_ipc_cpu_run(int qemu_fd, struct wvm_ipc_cpu_run_req* req) {
     struct wvm_ipc_cpu_run_ack ack;
-    if (req->slave_id == WVM_NODE_AUTO_ROUTE) {
+    if (!WVM_IS_VALID_TARGET(req->slave_id)) {
         req->slave_id = wvm_get_compute_slave_id(req->vcpu_index);
     }
-    if (req->slave_id == WVM_NODE_AUTO_ROUTE) {
+    if (!WVM_IS_VALID_TARGET(req->slave_id)) {
         ack.status = -ENODEV;
     } else {
         ack.status = wvm_rpc_call(MSG_VCPU_RUN, &req->ctx,
@@ -330,7 +330,7 @@ void* client_handler(void *socket_desc) {
                     h->magic = htonl(WVM_MAGIC);
                     h->msg_type = htons(req->is_write ? MSG_BLOCK_WRITE : MSG_BLOCK_READ);
                     h->payload_len = htons(blk_size);
-                    h->slave_id = htonl(g_my_node_id);
+                    h->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
                     h->req_id = WVM_HTONLL(rid); // [FIX] 必须赋予请求ID才能收到ACK
                     h->qos_level = 1; 
                     
