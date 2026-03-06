@@ -1549,7 +1549,11 @@ typedef struct wvm_ipc_header_t {
 #define WVM_IPC_TYPE_RPC_PASSTHROUGH 99
 
 // 前后端分离路由占位符
-#define WVM_NODE_AUTO_ROUTE 0x3FFFFFFF
+#define WVM_NODE_AUTO_ROUTE 0xFFFFFFFF  // 旧值 0x3FFFFFFF，改为全 1 避免与 vm_id 编码冲突
+
+// [Fix #3] AUTO_ROUTE 是 sentinel 值 (0xFFFFFFFF)，不能做 GET_NODEID 后参与普通比较
+// 所有需要判断"是否是有效路由目标"的地方必须先过此检查
+#define WVM_IS_VALID_TARGET(id) ((uint32_t)(id) != WVM_NODE_AUTO_ROUTE)
 
 #define WVM_CTRL_MAGIC 0x57564D43
 
@@ -1607,7 +1611,7 @@ typedef struct {
 
 struct wvm_ipc_cpu_run_req {
     uint32_t mode_tcg;
-    uint32_t slave_id;   // 如果设为 WVM_NODE_AUTO_ROUTE (0x3FFFFFFF)，由后端决定
+    uint32_t slave_id;   // 如果设为 WVM_NODE_AUTO_ROUTE (0xFFFFFFFF)，由后端决定
     uint32_t vcpu_index; // 传递 vCPU 序号用于查表路由
     union {
         wvm_kvm_context_t kvm;
@@ -3709,11 +3713,10 @@ static void handle_view_pull(struct wvm_header *rx_hdr, uint32_t src_id) {
     }
     pthread_rwlock_unlock(&g_view_lock);
 
-    g_ops->send_packet(buf, pkt_len, src_id);
+    // [Fix #2] src_id 是裸 node_id（内部逻辑），发包时需要编码为 composite ID
+    g_ops->send_packet(buf, pkt_len, WVM_ENCODE_ID(g_my_vm_id, src_id));
     g_ops->free_packet(buf);
-}
-
-static void handle_view_ack(void *payload) {
+}(void *payload) {
     struct wvm_view_payload *pl = (struct wvm_view_payload *)payload;
     uint32_t count = ntohl(pl->entry_count);
 
@@ -4003,11 +4006,10 @@ static void force_sync_client(uint64_t gpa, page_meta_t* page, uint32_t client_i
     push->version = WVM_HTONLL(page->version); 
     memcpy(push->data, page->base_page_data, 4096);
 
-    g_ops->send_packet(buffer, pkt_len, client_id);
+    // [Fix #2] client_id 是裸 node_id，发包时需要编码为 composite ID
+    g_ops->send_packet(buffer, pkt_len, WVM_ENCODE_ID(g_my_vm_id, client_id));
     g_ops->free_packet(buffer);
-}
-
-int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *version_out) {
+}(uint64_t gpa, void *page_buffer, uint64_t *version_out) {
     uint32_t dir_node = wvm_get_directory_node_id(gpa);
     
     // 场景 A: 我就是目录节点 (Local Hit)
@@ -6437,12 +6439,14 @@ __attribute__((weak)) int push_to_aggregator(uint32_t slave_id, void *data, int 
         return -EAGAIN;
     }
 
-    if (slave_id >= WVM_MAX_GATEWAYS) {
+    // [Fix #1] slave_id 可能是 composite ID，解码为裸 node_id 索引 g_gateways[]
+    uint32_t raw_id = WVM_GET_NODEID(slave_id);
+    if (raw_id >= WVM_MAX_GATEWAYS) {
         errno = EINVAL;
         return -EINVAL;
     }
 
-    struct sockaddr_in *target = &g_gateways[slave_id];
+    struct sockaddr_in *target = &g_gateways[raw_id];
     if (target->sin_port == 0) {
         errno = EHOSTUNREACH;
         return -EHOSTUNREACH;
@@ -6928,26 +6932,27 @@ extern int g_dev_fd;
  * [后果] 实现了真正的“配置一致性”。若穿透失败，内核将向错误的旧 IP 发送数据，导致分布式计算出现逻辑黑洞。
  */
 static void u_set_gateway_ip(uint32_t gw_id, uint32_t ip, uint16_t port) {
+    // [Fix #1] 入参可能是 composite ID，先解码为裸 node_id 再索引静态数组
+    // 这样 vm_id>0 时不会越界 (composite ID = (vm<<24)|node, 可能 > WVM_MAX_GATEWAYS)
+    uint32_t raw_node_id = WVM_GET_NODEID(gw_id);
+
     // 1. 更新用户态表 (供 Daemon 自身通信使用，如 Gossip)
-    if (gw_id < WVM_MAX_GATEWAYS) {
-        g_gateways[gw_id].sin_family = AF_INET;
-        g_gateways[gw_id].sin_addr.s_addr = ip;
-        g_gateways[gw_id].sin_port = port;
+    if (raw_node_id < WVM_MAX_GATEWAYS) {
+        g_gateways[raw_node_id].sin_family = AF_INET;
+        g_gateways[raw_node_id].sin_addr.s_addr = ip;
+        g_gateways[raw_node_id].sin_port = port;
     }
 
-    // 2. [关键] 如果是 Mode A，必须同步下发到内核！
-    // 通过判断 g_dev_fd 是否有效来识别是否开启了内核加速
+    // 2. [Fix #4] Mode A 内核路径对齐：传给内核的 gw_id 也用裸 node_id
+    // 内核模块 wavevm.ko 的路由表按裸 node_id 索引，不理解 composite 编码
     if (g_dev_fd > 0) {
         struct wvm_ioctl_gateway args;
-        args.gw_id = gw_id;
+        args.gw_id = raw_node_id;  // [Fix #4] 解码后下发内核
         args.ip = ip;     // 此时已经是网络序
         args.port = port; // 此时已经是网络序
-        
-        // 这一步实现了“垂直穿透”，让内核实时感知拓扑变化
+
         if (ioctl(g_dev_fd, IOCTL_SET_GATEWAY, &args) < 0) {
             perror("[Daemon] Failed to sync dynamic route to kernel");
-        } else {
-            // printf("[Daemon] Synced route %d -> %x to Kernel.\n", gw_id, ip);
         }
     }
 }
@@ -7240,17 +7245,18 @@ static void* rx_thread_loop(void *arg) {
                     if (from_local_slave &&
                         (msg_type == MSG_VCPU_EXIT || msg_type == MSG_BLOCK_ACK)) {
                         uint32_t return_target = ntohl(hdr->target_id);
-                        if (return_target == (uint32_t)g_my_node_id) {
+                        uint32_t my_composite_id = WVM_ENCODE_ID(g_my_vm_id, g_my_node_id);
+                        if (return_target == my_composite_id) {
                             uint32_t legacy_target = ntohl(hdr->slave_id);
-                            if (legacy_target < WVM_MAX_GATEWAYS &&
-                                legacy_target != (uint32_t)g_my_node_id) {
+                            if (WVM_IS_VALID_TARGET(legacy_target) &&
+                                legacy_target != my_composite_id) {
                                 return_target = legacy_target;
                             }
                         }
                         u_log("[Slave Return] msg=%u src_port=%u rid=%llu return_target=%u",
                               (unsigned)msg_type, (unsigned)ntohs(src_addrs[i].sin_port),
                               (unsigned long long)rid, (unsigned)return_target);
-                        if (return_target < WVM_MAX_GATEWAYS && return_target != (uint32_t)g_my_node_id) {
+                        if (WVM_IS_VALID_TARGET(return_target) && return_target != my_composite_id) {
                             int rr = u_send_packet(base_ptr + offset, current_pkt_len, return_target);
                             u_log("[Slave Return] forward queued msg=%u rid=%llu target=%u ret=%d len=%d",
                                   (unsigned)msg_type, (unsigned long long)rid,
@@ -7645,10 +7651,10 @@ static void handle_ipc_fault(int qemu_fd, struct wvm_ipc_fault_req* req) {
 
 static void handle_ipc_cpu_run(int qemu_fd, struct wvm_ipc_cpu_run_req* req) {
     struct wvm_ipc_cpu_run_ack ack;
-    if (req->slave_id == WVM_NODE_AUTO_ROUTE) {
+    if (!WVM_IS_VALID_TARGET(req->slave_id)) {
         req->slave_id = wvm_get_compute_slave_id(req->vcpu_index);
     }
-    if (req->slave_id == WVM_NODE_AUTO_ROUTE) {
+    if (!WVM_IS_VALID_TARGET(req->slave_id)) {
         ack.status = -ENODEV;
     } else {
         ack.status = wvm_rpc_call(MSG_VCPU_RUN, &req->ctx,
@@ -7794,7 +7800,7 @@ void* client_handler(void *socket_desc) {
                     h->magic = htonl(WVM_MAGIC);
                     h->msg_type = htons(req->is_write ? MSG_BLOCK_WRITE : MSG_BLOCK_READ);
                     h->payload_len = htons(blk_size);
-                    h->slave_id = htonl(g_my_node_id);
+                    h->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
                     h->req_id = WVM_HTONLL(rid); // [FIX] 必须赋予请求ID才能收到ACK
                     h->qos_level = 1; 
                     
@@ -14522,10 +14528,8 @@ static void* gateway_worker(void *arg) {
              * deployments. Fallback to upstream only when no local route exists.
              */
             uint32_t route_id = source_id; // 兼容旧包：没有目标信息时按旧字段转发
-            if (target_id < WVM_MAX_SLAVES) {
+            if (WVM_IS_VALID_TARGET(target_id)) {
                 route_id = target_id;
-            } else if (target_id == WVM_NODE_AUTO_ROUTE) {
-                route_id = source_id;
             }
 
             int r = internal_push(local_fd, route_id, ptr, pkt_len);
