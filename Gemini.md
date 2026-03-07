@@ -3007,7 +3007,7 @@ struct dsm_driver_ops {
     int      (*is_atomic_context)(void);
     void     (*touch_watchdog)(void);
 
-    uint64_t (*alloc_req_id)(void *rx_buffer); 
+    uint64_t (*alloc_req_id)(void *rx_buffer, uint32_t buffer_size); // [FIX-G3]
     void     (*free_req_id)(uint64_t id);
     uint64_t (*get_time_us)(void);
     uint64_t (*time_diff_us)(uint64_t start);
@@ -4120,7 +4120,7 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
     // 远程 ACK 是 wvm_mem_ack_payload（含 version + 4KB data），
     // 不能直接把 4KB 页缓冲传给 req_ctx，否则 version 会丢失或发生越界风险。
     struct wvm_mem_ack_payload ack_payload;
-    uint64_t rid = g_ops->alloc_req_id(&ack_payload);
+    uint64_t rid = g_ops->alloc_req_id(&ack_payload, sizeof(ack_payload));
     if (rid == (uint64_t)-1) return -1;
 
     // 2. 构造 MSG_MEM_READ 包
@@ -4283,7 +4283,7 @@ int wvm_rpc_call(uint16_t msg_type, void *payload, int len, uint32_t target_id, 
     if (!net_rx_buf) return -ENOMEM;
 
     // 2. 分配请求ID
-    uint64_t rid = g_ops->alloc_req_id(net_rx_buf);
+    uint64_t rid = g_ops->alloc_req_id(net_rx_buf, WVM_MAX_PACKET_SIZE);
     if (rid == (uint64_t)-1) {
         g_ops->free_packet(net_rx_buf);
         return -EBUSY;
@@ -5026,8 +5026,9 @@ static DEFINE_PER_CPU(struct id_pool_t, g_id_pool);
 
 // 请求上下文：增加等待队列以支持异步休眠
 struct req_ctx_t {
-    void *rx_buffer;       
-    uint32_t generation;   
+    void *rx_buffer;
+    uint32_t generation;
+    uint32_t max_len; // [FIX-G3] 记录 rx_buffer 最大可用长度
     volatile int done;
     wait_queue_head_t wq; // [New] 内核任务在此休眠
     struct task_struct *waiter; // [New] 记录等待的任务 (用于调试或唤醒检查)
@@ -5185,7 +5186,7 @@ static void k_invalidate_meta_atomic(uint64_t gpa) {
  * [关键逻辑] 采用 Per-CPU 变量技术，每个逻辑核拥有独立的 ID 池。利用 Generation 机制检测网络乱序导致的 ABA 冲突。
  * [后果] 这一步是 Mode A 支持百万 TPS 的基石。它消除了传统分布式系统中全局 ID 产生器的串行化瓶颈。
  */
-static uint64_t k_alloc_req_id(void *rx_buffer) {
+static uint64_t k_alloc_req_id(void *rx_buffer, uint32_t buffer_size) {
     uint64_t id = (uint64_t)-1;
     unsigned long flags;
     int cpu = get_cpu();
@@ -5202,8 +5203,9 @@ static uint64_t k_alloc_req_id(void *rx_buffer) {
             if (g_req_ctx[combined_idx].generation == 0) g_req_ctx[combined_idx].generation = 1;
             id = ((uint64_t)g_req_ctx[combined_idx].generation << 32) | combined_idx;
             WRITE_ONCE(g_req_ctx[combined_idx].rx_buffer, rx_buffer);
+            g_req_ctx[combined_idx].max_len = buffer_size; // [FIX-G3]
             WRITE_ONCE(g_req_ctx[combined_idx].done, 0);
-            smp_wmb(); 
+            smp_wmb();
         } else { pool->head--; }
     }
 out:
@@ -5541,7 +5543,7 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
         }
 
         // 2. 分配请求 ID
-        rid = k_alloc_req_id(bounce_buf);
+        rid = k_alloc_req_id(bounce_buf, (uint32_t)ack_payload_size);
         if (rid == (uint64_t)-1) {
             kfree(bounce_buf);
             kfree(meta);
@@ -6104,7 +6106,10 @@ static void internal_process_single_packet(struct wvm_header *hdr, uint32_t src_
             if ((rid >> 32) == ctx->generation) {
                 if (ctx->rx_buffer) {
                     // V29 的 Payload 包含 Version，结构体变了，但 memcpy 逻辑通用
+                    // [FIX-G3] 截断保护：防止恶意/错乱包溢出 rx_buffer
                     size_t copy_len = ntohs(hdr->payload_len);
+                    if (copy_len > ctx->max_len)
+                        copy_len = ctx->max_len;
                     memcpy(ctx->rx_buffer, payload, copy_len);
                 }
                 WRITE_ONCE(ctx->done, 1);
@@ -6581,9 +6586,10 @@ extern void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint
 extern void broadcast_push_to_qemu(uint16_t msg_type, void* payload, int len);
 
 // --- 请求ID管理结构 ---
-struct u_req_ctx_t { 
-    void *rx_buffer; 
-    uint64_t full_id; 
+struct u_req_ctx_t {
+    void *rx_buffer;
+    uint64_t full_id;
+    uint32_t max_len; // [FIX-G3] 记录 rx_buffer 的最大可用长度
     volatile int status; // 0=Pending, 1=Done
     pthread_mutex_t lock;
 };
@@ -6794,25 +6800,26 @@ static void u_free_large_table(void *ptr) {
  * [关键逻辑] 实现基于 Generation（代数）的防止 ABA 机制。即便 ID 发生回绕，过时的包也不会误触发新的请求回调。
  * [后果] 如果没有 ID 追踪，网络乱序回包可能导致 CPU 读到错误的内存快照，产生静默数据破坏（Silent Data Corruption）。
  */
-static uint64_t u_alloc_req_id(void *rx_buffer) {
+static uint64_t u_alloc_req_id(void *rx_buffer, uint32_t buffer_size) {
     uint64_t id;
     int idx;
     int attempts = 0;
-    
+
     // 尝试多次获取 ID，避免在高并发下死锁
     while (attempts < MAX_INFLIGHT_REQS * 2) {
         id = __sync_fetch_and_add(&g_id_counter, 1);
         if (id == 0) id = __sync_fetch_and_add(&g_id_counter, 1);
-        
+
         idx = id % MAX_INFLIGHT_REQS;
-        
+
         if (pthread_mutex_trylock(&g_u_req_ctx[idx].lock) == 0) {
             if (g_u_req_ctx[idx].rx_buffer == NULL) {
                 g_u_req_ctx[idx].rx_buffer = rx_buffer;
-                g_u_req_ctx[idx].full_id = id; 
+                g_u_req_ctx[idx].full_id = id;
+                g_u_req_ctx[idx].max_len = buffer_size; // [FIX-G3]
                 g_u_req_ctx[idx].status = 0;
                 pthread_mutex_unlock(&g_u_req_ctx[idx].lock);
-                return id; 
+                return id;
             }
             pthread_mutex_unlock(&g_u_req_ctx[idx].lock);
         }
@@ -7420,10 +7427,14 @@ static void* rx_thread_loop(void *arg) {
                                   g_u_req_ctx[idx].rx_buffer ? 1 : 0);
                         }
                         if (g_u_req_ctx[idx].rx_buffer && g_u_req_ctx[idx].full_id == rid) {
-                    
+
                             // MSG_MEM_ACK 必须保留完整 payload（含 version），
                             // 由上层按各自语义解析，避免版本号在此层被静默丢弃。
-                            memcpy(g_u_req_ctx[idx].rx_buffer, payload, p_len);
+                            // [FIX-G3] 截断保护：防止恶意/错乱包溢出 rx_buffer
+                            uint32_t copy_len = p_len;
+                            if (copy_len > g_u_req_ctx[idx].max_len)
+                                copy_len = g_u_req_ctx[idx].max_len;
+                            memcpy(g_u_req_ctx[idx].rx_buffer, payload, copy_len);
                             g_u_req_ctx[idx].status = 1;
                             if (msg_type == MSG_VCPU_EXIT) {
                                 u_log("[RX VCPU_EXIT] matched rid=%llu -> status=1",
@@ -7635,6 +7646,24 @@ uint8_t g_my_vm_id = 0;  // Multi-VM: 默认 0，向后兼容
 
 #define MAX_QEMU_CLIENTS 8
 #define NUM_BCAST_WORKERS 8
+
+/* [FIX-G2] 坚如磐石的循环读取，处理 Partial Read 和 EINTR */
+static ssize_t read_exact(int fd, void *buf, size_t len) {
+    size_t received = 0;
+    char *ptr = (char *)buf;
+    while (received < len) {
+        ssize_t ret = read(fd, ptr + received, len - received);
+        if (ret > 0) {
+            received += ret;
+        } else if (ret == 0) {
+            return -1; // EOF: 对端关闭
+        } else {
+            if (errno == EINTR) continue; // 信号中断，重试
+            return -1; // 真正的错误
+        }
+    }
+    return (ssize_t)received;
+}
 
 // 初始种子节点
 #define MAX_SEEDS 8
@@ -7850,14 +7879,11 @@ void* client_handler(void *socket_desc) {
     uint8_t payload_buf[sizeof(struct wvm_ipc_cpu_run_req)]; // Use largest possible payload
 
     while (1) {
-        ssize_t hdr_n = read(qemu_fd, &ipc_hdr, sizeof(ipc_hdr));
-        if (hdr_n != (ssize_t)sizeof(ipc_hdr)) {
-            if (hdr_n == 0) {
-                fprintf(stderr, "[IPC] peer closed before header fd=%d\n", qemu_fd);
-            } else {
-                fprintf(stderr, "[IPC] header read short fd=%d n=%zd errno=%d\n",
-                        qemu_fd, hdr_n, errno);
-            }
+        // [FIX-G2] 使用 read_exact 处理 partial read
+        ssize_t hdr_n = read_exact(qemu_fd, &ipc_hdr, sizeof(ipc_hdr));
+        if (hdr_n < 0) {
+            fprintf(stderr, "[IPC] header read failed fd=%d errno=%d\n",
+                    qemu_fd, errno);
             break;
         }
         if (ipc_hdr.len > sizeof(payload_buf)) {
@@ -7874,10 +7900,11 @@ void* client_handler(void *socket_desc) {
             continue;
         }
         
-        ssize_t payload_n = read(qemu_fd, payload_buf, ipc_hdr.len);
-        if (payload_n != (ssize_t)ipc_hdr.len) {
-            fprintf(stderr, "[IPC] payload read short fd=%d type=%u need=%u got=%zd errno=%d\n",
-                    qemu_fd, (unsigned)ipc_hdr.type, (unsigned)ipc_hdr.len, payload_n, errno);
+        // [FIX-G2] 使用 read_exact 处理 partial read
+        ssize_t payload_n = read_exact(qemu_fd, payload_buf, ipc_hdr.len);
+        if (payload_n < 0) {
+            fprintf(stderr, "[IPC] payload read failed fd=%d type=%u need=%u errno=%d\n",
+                    qemu_fd, (unsigned)ipc_hdr.type, (unsigned)ipc_hdr.len, errno);
             break;
         }
 
@@ -7918,7 +7945,7 @@ void* client_handler(void *socket_desc) {
                 // [FIX] 1. 分配 RX Buffer 接收远端真实数据
                 size_t rx_buf_size = sizeof(struct wvm_block_payload) + req->len;
                 uint8_t *rx_buf = malloc(rx_buf_size);
-                uint64_t rid = u_ops.alloc_req_id(rx_buf);
+                uint64_t rid = u_ops.alloc_req_id(rx_buf, (uint32_t)rx_buf_size);
                 
                 uint8_t *pkt = u_ops.alloc_packet(pkt_len, 0);
                 if (pkt && rid != (uint64_t)-1) {
@@ -11291,13 +11318,13 @@ static int wavevm_init_machine_user(WaveVMAccelState *s, MachineState *ms) {
 
         wavevm_setup_memory_region(ms->ram, ms->ram_size, shm_fd);
         close(shm_fd);
-        
-        // Start KVM Sync Thread (Only needed for KVM Master)
+
+        // [FIX-G4] IPC 监听线程必须无条件启动 (KVM + TCG 都需要接收 Invalidate)
+        // dirty_sync_thread 仅 KVM 需要 (TCG 由 user-mem harvester 处理)
+        s->sync_thread_running = true;
+        qemu_thread_create(&s->ipc_thread, "wvm-ipc-rx", wavevm_master_ipc_thread, s, QEMU_THREAD_DETACHED);
         if (kvm_enabled()) {
-            s->sync_thread_running = true;
             qemu_thread_create(&s->sync_thread, "wvm-sync", wavevm_dirty_sync_thread, s, QEMU_THREAD_DETACHED);
-            // 启动 IPC 监听线程 (处理 VFIO 中断)
-            qemu_thread_create(&s->ipc_thread, "wvm-ipc-rx", wavevm_master_ipc_thread, s, QEMU_THREAD_DETACHED);
         }
     }
         
@@ -12463,7 +12490,8 @@ static int g_is_slave = 0;
 static int g_fd_req = -1;  
 static __thread int t_req_sock = -1;
 static __thread uint8_t t_net_buf[WVM_MAX_PACKET_SIZE];
-static int g_fd_push = -1; 
+static int g_fd_push = -1;
+static int g_ipc_diff_sock = -1; // [FIX-G1] Master TCG harvester 专用 IPC socket
 static void *g_ram_base = NULL;
 static size_t g_ram_size = 0;
 static uint32_t g_slave_id = 0;
@@ -12582,7 +12610,11 @@ static void defer_ro_protect(uint64_t gpa) {
 
 // 发送 PUSH 包 (Diff 或 Zero)
 static void send_push_packet(uint64_t gpa, uint64_t version, void *data, uint16_t size, uint8_t flags) {
-    if (g_fd_push < 0) return;
+    if (g_is_slave && g_fd_push < 0) return;
+    if (!g_is_slave && g_ipc_diff_sock < 0) {
+        g_ipc_diff_sock = internal_connect_master();
+        if (g_ipc_diff_sock < 0) return;
+    }
     size_t pl_len = sizeof(struct wvm_diff_log) + size;
     size_t pkt_len = sizeof(struct wvm_header) + pl_len;
     uint8_t *buf = malloc(pkt_len);
@@ -12608,7 +12640,12 @@ static void send_push_packet(uint64_t gpa, uint64_t version, void *data, uint16_
     if (size > 0 && data) memcpy(log->data, data, size);
 
     hdr->crc32 = htonl(calculate_crc32(buf, pkt_len));
-    send(g_fd_push, buf, pkt_len, 0);
+    // [FIX-G1] Master TCG 走 IPC
+    if (g_is_slave) {
+        send(g_fd_push, buf, pkt_len, 0);
+    } else {
+        send_diff_via_ipc(buf, pkt_len);
+    }
     free(buf);
 }
 
@@ -13190,12 +13227,45 @@ static struct {
     .lock = PTHREAD_MUTEX_INITIALIZER 
 };
 
+// [FIX-G1] Master TCG 模式：将 diff 数据封装为 IPC 发给 Master Daemon
+// 每个聚合包内可能有多个 wvm_header 子包（聚合格式），需要拆包后逐个以 IPC 发送
+static void send_diff_via_ipc(void *buf, size_t len) {
+    if (g_ipc_diff_sock < 0) {
+        g_ipc_diff_sock = internal_connect_master();
+        if (g_ipc_diff_sock < 0) return;
+    }
+    // 遍历聚合缓冲区中的每个子包
+    size_t off = 0;
+    while (off + sizeof(struct wvm_header) <= len) {
+        struct wvm_header *sub = (struct wvm_header *)((uint8_t *)buf + off);
+        uint16_t pl = ntohs(sub->payload_len);
+        size_t sub_len = sizeof(struct wvm_header) + pl;
+        if (off + sub_len > len) break;
+        // 只取 payload 部分（wvm_diff_log），封装为 IPC
+        wvm_ipc_header_t ipc_hdr = { .type = WVM_IPC_TYPE_COMMIT_DIFF, .len = pl };
+        void *payload = (uint8_t *)sub + sizeof(struct wvm_header);
+        // 发送 IPC header + payload（两次 write，由于是流式 socket 合并发送）
+        if (write(g_ipc_diff_sock, &ipc_hdr, sizeof(ipc_hdr)) < 0 ||
+            write(g_ipc_diff_sock, payload, pl) < 0) {
+            // 连接断开，尝试重连
+            close(g_ipc_diff_sock);
+            g_ipc_diff_sock = internal_connect_master();
+            break; // 放弃本轮剩余包
+        }
+        off += sub_len;
+    }
+}
+
 // 发送函数：将缓冲区推向网络
 static void flush_aggregator(void) {
     if (g_aggregator.curr_offset == 0) return;
-    // 使用 send 发往 g_fd_push。由于 t_req_sock 的 connect 逻辑，这里直接发。
-    if (send(g_fd_push, g_aggregator.buf, g_aggregator.curr_offset, 0) < 0) {
-        // 网络拥塞处理：如果发送失败，我们也只能清空，版本号一致性由 FORCE_SYNC 保证
+    // [FIX-G1] Master TCG 走 IPC, Slave 走 UDP push socket
+    if (g_is_slave) {
+        if (send(g_fd_push, g_aggregator.buf, g_aggregator.curr_offset, 0) < 0) {
+            // 网络拥塞处理：如果发送失败，清空，版本号一致性由 FORCE_SYNC 保证
+        }
+    } else {
+        send_diff_via_ipc(g_aggregator.buf, g_aggregator.curr_offset);
     }
     g_aggregator.curr_offset = 0;
 }
@@ -13230,7 +13300,12 @@ static void add_to_aggregator(uint64_t gpa, uint64_t version, uint16_t off, uint
         l->size = htons(sz);
         if (sz > 0) memcpy(l->data, data, sz);
         h->crc32 = htonl(calculate_crc32(tmp, needed));
-        send(g_fd_push, tmp, needed, 0);
+        // [FIX-G1] Master TCG 走 IPC
+        if (g_is_slave) {
+            send(g_fd_push, tmp, needed, 0);
+        } else {
+            send_diff_via_ipc(tmp, needed);
+        }
         free(tmp);
         pthread_mutex_unlock(&g_aggregator.lock);
         return;
@@ -13669,11 +13744,18 @@ void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
         g_fd_req = atoi(env_req);
         g_fd_push = atoi(env_push);
         g_slave_id = env_id ? atoi(env_id) : 0;
-        
+
         printf("[WaveVM-User] V29 Wavelet Engine Active (Slave ID: %d)\n", g_slave_id);
-        
+
         g_threads_running = true;
         pthread_create(&g_listen_thread, NULL, mem_push_listener_thread, NULL);
+        pthread_create(&g_harvester_thread, NULL, diff_harvester_thread_fn, NULL);
+    }
+    // [FIX-G1] Master TCG 模式：无 WVM_SOCK_PUSH 但仍需启动 harvester
+    // Listener 由 wavevm-all.c 的 wavevm_master_ipc_thread 处理，此处只启 harvester
+    else if (!kvm_enabled()) {
+        printf("[WaveVM-User] V31 Master TCG Harvester Active (IPC Diff Path)\n");
+        g_threads_running = true;
         pthread_create(&g_harvester_thread, NULL, diff_harvester_thread_fn, NULL);
     }
 

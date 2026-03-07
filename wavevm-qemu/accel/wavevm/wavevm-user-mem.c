@@ -43,7 +43,8 @@ static int g_is_slave = 0;
 static int g_fd_req = -1;  
 static __thread int t_req_sock = -1;
 static __thread uint8_t t_net_buf[WVM_MAX_PACKET_SIZE];
-static int g_fd_push = -1; 
+static int g_fd_push = -1;
+static int g_ipc_diff_sock = -1; // [FIX-G1] Master TCG harvester 专用 IPC socket
 static void *g_ram_base = NULL;
 static size_t g_ram_size = 0;
 static uint32_t g_slave_id = 0;
@@ -162,7 +163,11 @@ static void defer_ro_protect(uint64_t gpa) {
 
 // 发送 PUSH 包 (Diff 或 Zero)
 static void send_push_packet(uint64_t gpa, uint64_t version, void *data, uint16_t size, uint8_t flags) {
-    if (g_fd_push < 0) return;
+    if (g_is_slave && g_fd_push < 0) return;
+    if (!g_is_slave && g_ipc_diff_sock < 0) {
+        g_ipc_diff_sock = internal_connect_master();
+        if (g_ipc_diff_sock < 0) return;
+    }
     size_t pl_len = sizeof(struct wvm_diff_log) + size;
     size_t pkt_len = sizeof(struct wvm_header) + pl_len;
     uint8_t *buf = malloc(pkt_len);
@@ -188,7 +193,12 @@ static void send_push_packet(uint64_t gpa, uint64_t version, void *data, uint16_
     if (size > 0 && data) memcpy(log->data, data, size);
 
     hdr->crc32 = htonl(calculate_crc32(buf, pkt_len));
-    send(g_fd_push, buf, pkt_len, 0);
+    // [FIX-G1] Master TCG 走 IPC
+    if (g_is_slave) {
+        send(g_fd_push, buf, pkt_len, 0);
+    } else {
+        send_diff_via_ipc(buf, pkt_len);
+    }
     free(buf);
 }
 
@@ -770,12 +780,45 @@ static struct {
     .lock = PTHREAD_MUTEX_INITIALIZER 
 };
 
+// [FIX-G1] Master TCG 模式：将 diff 数据封装为 IPC 发给 Master Daemon
+// 每个聚合包内可能有多个 wvm_header 子包（聚合格式），需要拆包后逐个以 IPC 发送
+static void send_diff_via_ipc(void *buf, size_t len) {
+    if (g_ipc_diff_sock < 0) {
+        g_ipc_diff_sock = internal_connect_master();
+        if (g_ipc_diff_sock < 0) return;
+    }
+    // 遍历聚合缓冲区中的每个子包
+    size_t off = 0;
+    while (off + sizeof(struct wvm_header) <= len) {
+        struct wvm_header *sub = (struct wvm_header *)((uint8_t *)buf + off);
+        uint16_t pl = ntohs(sub->payload_len);
+        size_t sub_len = sizeof(struct wvm_header) + pl;
+        if (off + sub_len > len) break;
+        // 只取 payload 部分（wvm_diff_log），封装为 IPC
+        wvm_ipc_header_t ipc_hdr = { .type = WVM_IPC_TYPE_COMMIT_DIFF, .len = pl };
+        void *payload = (uint8_t *)sub + sizeof(struct wvm_header);
+        // 发送 IPC header + payload（两次 write，由于是流式 socket 合并发送）
+        if (write(g_ipc_diff_sock, &ipc_hdr, sizeof(ipc_hdr)) < 0 ||
+            write(g_ipc_diff_sock, payload, pl) < 0) {
+            // 连接断开，尝试重连
+            close(g_ipc_diff_sock);
+            g_ipc_diff_sock = internal_connect_master();
+            break; // 放弃本轮剩余包
+        }
+        off += sub_len;
+    }
+}
+
 // 发送函数：将缓冲区推向网络
 static void flush_aggregator(void) {
     if (g_aggregator.curr_offset == 0) return;
-    // 使用 send 发往 g_fd_push。由于 t_req_sock 的 connect 逻辑，这里直接发。
-    if (send(g_fd_push, g_aggregator.buf, g_aggregator.curr_offset, 0) < 0) {
-        // 网络拥塞处理：如果发送失败，我们也只能清空，版本号一致性由 FORCE_SYNC 保证
+    // [FIX-G1] Master TCG 走 IPC, Slave 走 UDP push socket
+    if (g_is_slave) {
+        if (send(g_fd_push, g_aggregator.buf, g_aggregator.curr_offset, 0) < 0) {
+            // 网络拥塞处理：如果发送失败，清空，版本号一致性由 FORCE_SYNC 保证
+        }
+    } else {
+        send_diff_via_ipc(g_aggregator.buf, g_aggregator.curr_offset);
     }
     g_aggregator.curr_offset = 0;
 }
@@ -810,7 +853,12 @@ static void add_to_aggregator(uint64_t gpa, uint64_t version, uint16_t off, uint
         l->size = htons(sz);
         if (sz > 0) memcpy(l->data, data, sz);
         h->crc32 = htonl(calculate_crc32(tmp, needed));
-        send(g_fd_push, tmp, needed, 0);
+        // [FIX-G1] Master TCG 走 IPC
+        if (g_is_slave) {
+            send(g_fd_push, tmp, needed, 0);
+        } else {
+            send_diff_via_ipc(tmp, needed);
+        }
         free(tmp);
         pthread_mutex_unlock(&g_aggregator.lock);
         return;
@@ -1249,11 +1297,18 @@ void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
         g_fd_req = atoi(env_req);
         g_fd_push = atoi(env_push);
         g_slave_id = env_id ? atoi(env_id) : 0;
-        
+
         printf("[WaveVM-User] V29 Wavelet Engine Active (Slave ID: %d)\n", g_slave_id);
-        
+
         g_threads_running = true;
         pthread_create(&g_listen_thread, NULL, mem_push_listener_thread, NULL);
+        pthread_create(&g_harvester_thread, NULL, diff_harvester_thread_fn, NULL);
+    }
+    // [FIX-G1] Master TCG 模式：无 WVM_SOCK_PUSH 但仍需启动 harvester
+    // Listener 由 wavevm-all.c 的 wavevm_master_ipc_thread 处理，此处只启 harvester
+    else if (!kvm_enabled()) {
+        printf("[WaveVM-User] V31 Master TCG Harvester Active (IPC Diff Path)\n");
+        g_threads_running = true;
         pthread_create(&g_harvester_thread, NULL, diff_harvester_thread_fn, NULL);
     }
 

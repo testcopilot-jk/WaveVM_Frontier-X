@@ -1018,7 +1018,7 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
     // 远程 ACK 是 wvm_mem_ack_payload（含 version + 4KB data），
     // 不能直接把 4KB 页缓冲传给 req_ctx，否则 version 会丢失或发生越界风险。
     struct wvm_mem_ack_payload ack_payload;
-    uint64_t rid = g_ops->alloc_req_id(&ack_payload);
+    uint64_t rid = g_ops->alloc_req_id(&ack_payload, sizeof(ack_payload));
     if (rid == (uint64_t)-1) return -1;
 
     // 2. 构造 MSG_MEM_READ 包
@@ -1181,7 +1181,7 @@ int wvm_rpc_call(uint16_t msg_type, void *payload, int len, uint32_t target_id, 
     if (!net_rx_buf) return -ENOMEM;
 
     // 2. 分配请求ID
-    uint64_t rid = g_ops->alloc_req_id(net_rx_buf);
+    uint64_t rid = g_ops->alloc_req_id(net_rx_buf, WVM_MAX_PACKET_SIZE);
     if (rid == (uint64_t)-1) {
         g_ops->free_packet(net_rx_buf);
         return -EBUSY;

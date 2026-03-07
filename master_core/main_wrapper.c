@@ -40,6 +40,24 @@ uint8_t g_my_vm_id = 0;  // Multi-VM: 默认 0，向后兼容
 #define MAX_QEMU_CLIENTS 8
 #define NUM_BCAST_WORKERS 8
 
+/* [FIX-G2] 坚如磐石的循环读取，处理 Partial Read 和 EINTR */
+static ssize_t read_exact(int fd, void *buf, size_t len) {
+    size_t received = 0;
+    char *ptr = (char *)buf;
+    while (received < len) {
+        ssize_t ret = read(fd, ptr + received, len - received);
+        if (ret > 0) {
+            received += ret;
+        } else if (ret == 0) {
+            return -1; // EOF: 对端关闭
+        } else {
+            if (errno == EINTR) continue; // 信号中断，重试
+            return -1; // 真正的错误
+        }
+    }
+    return (ssize_t)received;
+}
+
 // 初始种子节点
 #define MAX_SEEDS 8
 static struct sockaddr_in g_seeds[MAX_SEEDS];
@@ -254,14 +272,11 @@ void* client_handler(void *socket_desc) {
     uint8_t payload_buf[sizeof(struct wvm_ipc_cpu_run_req)]; // Use largest possible payload
 
     while (1) {
-        ssize_t hdr_n = read(qemu_fd, &ipc_hdr, sizeof(ipc_hdr));
-        if (hdr_n != (ssize_t)sizeof(ipc_hdr)) {
-            if (hdr_n == 0) {
-                fprintf(stderr, "[IPC] peer closed before header fd=%d\n", qemu_fd);
-            } else {
-                fprintf(stderr, "[IPC] header read short fd=%d n=%zd errno=%d\n",
-                        qemu_fd, hdr_n, errno);
-            }
+        // [FIX-G2] 使用 read_exact 处理 partial read
+        ssize_t hdr_n = read_exact(qemu_fd, &ipc_hdr, sizeof(ipc_hdr));
+        if (hdr_n < 0) {
+            fprintf(stderr, "[IPC] header read failed fd=%d errno=%d\n",
+                    qemu_fd, errno);
             break;
         }
         if (ipc_hdr.len > sizeof(payload_buf)) {
@@ -278,10 +293,11 @@ void* client_handler(void *socket_desc) {
             continue;
         }
         
-        ssize_t payload_n = read(qemu_fd, payload_buf, ipc_hdr.len);
-        if (payload_n != (ssize_t)ipc_hdr.len) {
-            fprintf(stderr, "[IPC] payload read short fd=%d type=%u need=%u got=%zd errno=%d\n",
-                    qemu_fd, (unsigned)ipc_hdr.type, (unsigned)ipc_hdr.len, payload_n, errno);
+        // [FIX-G2] 使用 read_exact 处理 partial read
+        ssize_t payload_n = read_exact(qemu_fd, payload_buf, ipc_hdr.len);
+        if (payload_n < 0) {
+            fprintf(stderr, "[IPC] payload read failed fd=%d type=%u need=%u errno=%d\n",
+                    qemu_fd, (unsigned)ipc_hdr.type, (unsigned)ipc_hdr.len, errno);
             break;
         }
 
@@ -322,7 +338,7 @@ void* client_handler(void *socket_desc) {
                 // [FIX] 1. 分配 RX Buffer 接收远端真实数据
                 size_t rx_buf_size = sizeof(struct wvm_block_payload) + req->len;
                 uint8_t *rx_buf = malloc(rx_buf_size);
-                uint64_t rid = u_ops.alloc_req_id(rx_buf);
+                uint64_t rid = u_ops.alloc_req_id(rx_buf, (uint32_t)rx_buf_size);
                 
                 uint8_t *pkt = u_ops.alloc_packet(pkt_len, 0);
                 if (pkt && rid != (uint64_t)-1) {

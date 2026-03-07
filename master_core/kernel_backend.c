@@ -107,8 +107,9 @@ static DEFINE_PER_CPU(struct id_pool_t, g_id_pool);
 
 // 请求上下文：增加等待队列以支持异步休眠
 struct req_ctx_t {
-    void *rx_buffer;       
-    uint32_t generation;   
+    void *rx_buffer;
+    uint32_t generation;
+    uint32_t max_len; // [FIX-G3] 记录 rx_buffer 最大可用长度
     volatile int done;
     wait_queue_head_t wq; // [New] 内核任务在此休眠
     struct task_struct *waiter; // [New] 记录等待的任务 (用于调试或唤醒检查)
@@ -266,7 +267,7 @@ static void k_invalidate_meta_atomic(uint64_t gpa) {
  * [关键逻辑] 采用 Per-CPU 变量技术，每个逻辑核拥有独立的 ID 池。利用 Generation 机制检测网络乱序导致的 ABA 冲突。
  * [后果] 这一步是 Mode A 支持百万 TPS 的基石。它消除了传统分布式系统中全局 ID 产生器的串行化瓶颈。
  */
-static uint64_t k_alloc_req_id(void *rx_buffer) {
+static uint64_t k_alloc_req_id(void *rx_buffer, uint32_t buffer_size) {
     uint64_t id = (uint64_t)-1;
     unsigned long flags;
     int cpu = get_cpu();
@@ -283,6 +284,7 @@ static uint64_t k_alloc_req_id(void *rx_buffer) {
             if (g_req_ctx[combined_idx].generation == 0) g_req_ctx[combined_idx].generation = 1;
             id = ((uint64_t)g_req_ctx[combined_idx].generation << 32) | combined_idx;
             WRITE_ONCE(g_req_ctx[combined_idx].rx_buffer, rx_buffer);
+            g_req_ctx[combined_idx].max_len = buffer_size; // [FIX-G3]
             WRITE_ONCE(g_req_ctx[combined_idx].done, 0);
             smp_wmb(); 
         } else { pool->head--; }
@@ -622,7 +624,7 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
         }
 
         // 2. 分配请求 ID
-        rid = k_alloc_req_id(bounce_buf);
+        rid = k_alloc_req_id(bounce_buf, (uint32_t)ack_payload_size);
         if (rid == (uint64_t)-1) {
             kfree(bounce_buf);
             kfree(meta);
@@ -1185,7 +1187,10 @@ static void internal_process_single_packet(struct wvm_header *hdr, uint32_t src_
             if ((rid >> 32) == ctx->generation) {
                 if (ctx->rx_buffer) {
                     // V29 的 Payload 包含 Version，结构体变了，但 memcpy 逻辑通用
+                    // [FIX-G3] 截断保护：防止恶意/错乱包溢出 rx_buffer
                     size_t copy_len = ntohs(hdr->payload_len);
+                    if (copy_len > ctx->max_len)
+                        copy_len = ctx->max_len;
                     memcpy(ctx->rx_buffer, payload, copy_len);
                 }
                 WRITE_ONCE(ctx->done, 1);

@@ -647,12 +647,12 @@ static int wavevm_init_machine_user(WaveVMAccelState *s, MachineState *ms) {
         wavevm_setup_memory_region(ms->ram, ms->ram_size, shm_fd);
         close(shm_fd);
         
-        // Start KVM Sync Thread (Only needed for KVM Master)
+        // [FIX-G4] IPC 监听线程必须无条件启动 (KVM + TCG 都需要接收 Invalidate)
+        // dirty_sync_thread 仅 KVM 需要 (TCG 由 user-mem harvester 处理)
+        s->sync_thread_running = true;
+        qemu_thread_create(&s->ipc_thread, "wvm-ipc-rx", wavevm_master_ipc_thread, s, QEMU_THREAD_DETACHED);
         if (kvm_enabled()) {
-            s->sync_thread_running = true;
             qemu_thread_create(&s->sync_thread, "wvm-sync", wavevm_dirty_sync_thread, s, QEMU_THREAD_DETACHED);
-            // 启动 IPC 监听线程 (处理 VFIO 中断)
-            qemu_thread_create(&s->ipc_thread, "wvm-ipc-rx", wavevm_master_ipc_thread, s, QEMU_THREAD_DETACHED);
         }
     }
         

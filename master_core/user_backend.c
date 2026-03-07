@@ -101,9 +101,10 @@ extern void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint
 extern void broadcast_push_to_qemu(uint16_t msg_type, void* payload, int len);
 
 // --- 请求ID管理结构 ---
-struct u_req_ctx_t { 
-    void *rx_buffer; 
-    uint64_t full_id; 
+struct u_req_ctx_t {
+    void *rx_buffer;
+    uint64_t full_id;
+    uint32_t max_len; // [FIX-G3] 记录 rx_buffer 的最大可用长度
     volatile int status; // 0=Pending, 1=Done
     pthread_mutex_t lock;
 };
@@ -314,25 +315,26 @@ static void u_free_large_table(void *ptr) {
  * [关键逻辑] 实现基于 Generation（代数）的防止 ABA 机制。即便 ID 发生回绕，过时的包也不会误触发新的请求回调。
  * [后果] 如果没有 ID 追踪，网络乱序回包可能导致 CPU 读到错误的内存快照，产生静默数据破坏（Silent Data Corruption）。
  */
-static uint64_t u_alloc_req_id(void *rx_buffer) {
+static uint64_t u_alloc_req_id(void *rx_buffer, uint32_t buffer_size) {
     uint64_t id;
     int idx;
     int attempts = 0;
-    
+
     // 尝试多次获取 ID，避免在高并发下死锁
     while (attempts < MAX_INFLIGHT_REQS * 2) {
         id = __sync_fetch_and_add(&g_id_counter, 1);
         if (id == 0) id = __sync_fetch_and_add(&g_id_counter, 1);
-        
+
         idx = id % MAX_INFLIGHT_REQS;
-        
+
         if (pthread_mutex_trylock(&g_u_req_ctx[idx].lock) == 0) {
             if (g_u_req_ctx[idx].rx_buffer == NULL) {
                 g_u_req_ctx[idx].rx_buffer = rx_buffer;
-                g_u_req_ctx[idx].full_id = id; 
+                g_u_req_ctx[idx].full_id = id;
+                g_u_req_ctx[idx].max_len = buffer_size; // [FIX-G3]
                 g_u_req_ctx[idx].status = 0;
                 pthread_mutex_unlock(&g_u_req_ctx[idx].lock);
-                return id; 
+                return id;
             }
             pthread_mutex_unlock(&g_u_req_ctx[idx].lock);
         }
@@ -940,10 +942,14 @@ static void* rx_thread_loop(void *arg) {
                                   g_u_req_ctx[idx].rx_buffer ? 1 : 0);
                         }
                         if (g_u_req_ctx[idx].rx_buffer && g_u_req_ctx[idx].full_id == rid) {
-                    
+
                             // MSG_MEM_ACK 必须保留完整 payload（含 version），
                             // 由上层按各自语义解析，避免版本号在此层被静默丢弃。
-                            memcpy(g_u_req_ctx[idx].rx_buffer, payload, p_len);
+                            // [FIX-G3] 截断保护：防止恶意/错乱包溢出 rx_buffer
+                            uint32_t copy_len = p_len;
+                            if (copy_len > g_u_req_ctx[idx].max_len)
+                                copy_len = g_u_req_ctx[idx].max_len;
+                            memcpy(g_u_req_ctx[idx].rx_buffer, payload, copy_len);
                             g_u_req_ctx[idx].status = 1;
                             if (msg_type == MSG_VCPU_EXIT) {
                                 u_log("[RX VCPU_EXIT] matched rid=%llu -> status=1",
