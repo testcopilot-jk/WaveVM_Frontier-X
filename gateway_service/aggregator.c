@@ -158,9 +158,15 @@ static int load_slave_config(const char *path) {
 }
 
 // Sends a raw datagram to a specific downstream node address.
+// [FIX-M8] 快照 node->addr 防止与 learn_route 竞争导致部分读取
 static int raw_send_to_downstream(int fd, gateway_node_t *node, void *data, int len) {
-    if (!node || node->addr.sin_port == 0) return -EHOSTUNREACH; 
-    return sendto(fd, data, len, MSG_DONTWAIT, (struct sockaddr*)&node->addr, sizeof(node->addr));
+    if (!node) return -EHOSTUNREACH;
+    struct sockaddr_in addr_snap;
+    pthread_mutex_lock(&node->lock);
+    addr_snap = node->addr;
+    pthread_mutex_unlock(&node->lock);
+    if (addr_snap.sin_port == 0) return -EHOSTUNREACH;
+    return sendto(fd, data, len, MSG_DONTWAIT, (struct sockaddr*)&addr_snap, sizeof(addr_snap));
 }
 
 /* 
@@ -365,7 +371,10 @@ static void learn_route(uint32_t slave_id, struct sockaddr_in *addr) {
     }
     
     if (node && !node->static_pinned) {
+        // [FIX-M8] 同时持有 node->lock 保护 addr 写入，与读端保持一致
+        pthread_mutex_lock(&node->lock);
         node->addr = *addr;
+        pthread_mutex_unlock(&node->lock);
         // printf("[Gateway-Auto] Updated Route Node: %u\n", slave_id);
     }
     pthread_rwlock_unlock(&g_map_lock);
@@ -454,9 +463,17 @@ static void* gateway_worker(void *arg) {
              * misclassification loops in multi-hop or same-host multi-instance
              * deployments. Fallback to upstream only when no local route exists.
              */
-            uint32_t route_id = source_id; // 兼容旧包：没有目标信息时按旧字段转发
+            // [FIX-M7] 当 target_id 无效时不再 fallback 到 source_id，
+            // 防止 AUTO_ROUTE 包被回送给发送者形成环路
+            uint32_t route_id;
             if (WVM_IS_VALID_TARGET(target_id)) {
                 route_id = target_id;
+            } else {
+                // 无有效目标，直接交给 upstream 处理
+                int tx_fd = (g_upstream_tx_socket >= 0) ? g_upstream_tx_socket : local_fd;
+                sendto(tx_fd, ptr, pkt_len, MSG_DONTWAIT,
+                       (struct sockaddr*)&g_upstream_addr, sizeof(g_upstream_addr));
+                continue;
             }
 
             int r = internal_push(local_fd, route_id, ptr, pkt_len);

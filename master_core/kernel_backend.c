@@ -874,9 +874,10 @@ static vm_fault_t wvm_page_mkwrite(struct vm_fault *vmf) {
     task->timestamp = k_get_time_us();
 
     // 3. 加入队列
-    spin_lock(&g_diff_lock);
+    // [FIX-M3] 统一使用 spin_lock_bh，与取出端保持一致，防止 softirq 死锁
+    spin_lock_bh(&g_diff_lock);
     list_add_tail(&task->list, &g_diff_queue);
-    spin_unlock(&g_diff_lock);
+    spin_unlock_bh(&g_diff_lock);
 
     // 4. 唤醒提交线程
     wake_up_interruptible(&g_diff_wq);
@@ -1286,7 +1287,8 @@ static struct dsm_driver_ops k_ops = {
     .check_req_status = k_check_req_status,
     .cpu_relax = k_cpu_relax,
     .get_random = k_get_random,
-    .yield_cpu_short_time = k_yield_short
+    .yield_cpu_short_time = k_yield_short,
+    .send_packet_async = k_send_packet_async
 };
 
 // [V29] 存储全局 mapping 以便 unmap 使用
@@ -1377,7 +1379,8 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
         for (int i = 0; i < head.count; i++) {
             // start_index 即 Slot ID
             // Logic Core 会根据 slot 0/1 更新 g_total_nodes / g_my_node_id
-            wvm_set_mem_mapping(head.start_index + i, (uint16_t)buf[i]);
+            // [FIX-M5] 移除 uint16_t 截断，保留完整 uint32_t
+            wvm_set_mem_mapping(head.start_index + i, buf[i]);
         }
         
         vfree(buf);
@@ -1537,6 +1540,8 @@ static void __exit wavevm_exit(void) {
         if (pool->ids) vfree(pool->ids);
     }
     vfree(g_req_ctx);
+    // [FIX-M4] 销毁 slab 缓存，防止模块卸载后内存泄漏
+    if (wvm_pkt_cache) kmem_cache_destroy(wvm_pkt_cache);
 }
 
 module_init(wavevm_init);

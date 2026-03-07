@@ -851,6 +851,7 @@ static void* rx_thread_loop(void *arg) {
                         }
                         // 跨度过大，可能是由于网络分区（Split-brain）后节点归队
                         // 这种情况下不能处理该包，应等待视图同步
+                        offset += current_pkt_len;
                         continue;
                     }
                     // 校验通过，恢复 CRC

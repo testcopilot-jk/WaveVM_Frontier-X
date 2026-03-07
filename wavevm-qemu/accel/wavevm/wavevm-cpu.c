@@ -218,10 +218,14 @@ static void wavevm_handle_io(CPUState *cpu) {
     struct kvm_run *run = cpu->kvm_run;
     uint16_t port = run->io.port;
     void *data = (uint8_t *)run + run->io.data_offset;
-    
-    address_space_rw(&address_space_io, port, MEMTXATTRS_UNSPECIFIED,
-                     data, run->io.size,
-                     run->io.direction == KVM_EXIT_IO_OUT);
+    int is_write = (run->io.direction == KVM_EXIT_IO_OUT);
+
+    /* [FIX] 处理 string I/O (REP INS/OUTS)：count 可能 > 1，需逐个迭代 */
+    for (uint32_t i = 0; i < run->io.count; i++) {
+        address_space_rw(&address_space_io, port, MEMTXATTRS_UNSPECIFIED,
+                         data, run->io.size, is_write);
+        data = (uint8_t *)data + run->io.size;
+    }
 }
 
 static void wavevm_handle_mmio(CPUState *cpu) {

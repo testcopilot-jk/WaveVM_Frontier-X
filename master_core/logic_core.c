@@ -820,7 +820,8 @@ void* broadcast_worker_thread(void* arg) {
  */
 static void broadcast_to_subscribers(page_meta_t *page, uint16_t msg_type, void *payload, int len, uint8_t flags) {
     // 遍历订阅者的
-    for (int i = 0; i < 256; i++) {
+    int seg_mask_count = ((WVM_MAX_SLAVES / 64) + 63) / 64; /* segment_mask 有效元素数 */
+    for (int i = 0; i < seg_mask_count; i++) {
         uint64_t mask = page->segment_mask[i];
         if (mask == 0) continue;
 
@@ -1031,7 +1032,7 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
     hdr->magic = htonl(WVM_MAGIC);
     hdr->msg_type = htons(MSG_MEM_READ);
     hdr->payload_len = htons(8);
-    hdr->slave_id = htonl(dir_node);
+    hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
     hdr->req_id = WVM_HTONLL(rid);
     hdr->qos_level = 1; // 缺页必须走快车道
 
@@ -1275,13 +1276,12 @@ int wvm_rpc_call(uint16_t msg_type, void *payload, int len, uint32_t target_id, 
     g_ops->free_packet(buffer); // 释放发送Buffer
 
     // 从接收Buffer中提取数据
-    struct wvm_header *ack_hdr = (struct wvm_header *)net_rx_buf;
-    void* ack_payload = net_rx_buf + sizeof(struct wvm_header);
-    uint16_t ack_len = ntohs(ack_hdr->payload_len);
-    
+    // [FIX] RX 侧只复制了 payload（不含 header），所以 net_rx_buf 直接就是 payload
     if (rx_buffer && rx_len > 0) {
-        size_t copy_len = (size_t)rx_len < (size_t)ack_len ? (size_t)rx_len : (size_t)ack_len;
-        memcpy(rx_buffer, ack_payload, copy_len);
+        /* alloc_req_id 注册了 max_len = WVM_MAX_PACKET_SIZE，
+         * RX 回调写入的是纯 payload，长度已由 RX 侧截断到 max_len。
+         * 这里直接按 rx_len 复制即可。 */
+        memcpy(rx_buffer, net_rx_buf, (size_t)rx_len);
     }
 
     if (msg_type == MSG_VCPU_RUN && rx_buffer != NULL) {
@@ -1543,8 +1543,10 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                     // 2. Counter 必须是连续的
                     if (commit_epoch != g_curr_epoch || commit_counter != local_counter) {
                         // 版本冲突！拒绝并强制同步
+                        // [FIX-H8] 传 NULL 让 force_sync_client 走安全的重新查找+拷贝路径，
+                        // 避免释放锁后解引用 page 指针导致的数据竞争
                         pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
-                        force_sync_client(gpa, page, src_id);
+                        force_sync_client(gpa, NULL, src_id);
                         return;
                     }
                 
@@ -1792,7 +1794,7 @@ void wvm_logic_broadcast_rpc(void *full_pkt_data, int full_pkt_len, uint16_t msg
             memcpy(data_copy, payload, payload_len);
             broadcast_task_t *t = &shard->queue[shard->tail & BCAST_Q_MASK];
             t->msg_type = msg_type;
-            t->target_id = target_id;
+            t->target_id = WVM_ENCODE_ID(g_my_vm_id, target_id);
             t->len = payload_len;
             t->data_ptr = data_copy;
             

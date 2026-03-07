@@ -132,7 +132,7 @@ static int get_chunk_fd_safe(uint64_t chunk_id) {
     if (fd < 0) {
         // Fallback: 如果文件系统不支持 O_DIRECT (如 tmpfs)，回退到普通模式
         if (errno == EINVAL) fd = open(path, O_RDWR | O_CREAT, 0644);
-        else {
+        if (fd < 0) {
             pthread_mutex_unlock(&g_fd_lock);
             return -1;
         }
@@ -166,6 +166,8 @@ static int robust_sendto(int fd, const void *buf, size_t len, struct sockaddr_in
         ssize_t sent = sendto(fd, buf, len, MSG_DONTWAIT, (struct sockaddr*)dest, sizeof(*dest));
         
         if (sent > 0) return 0; // 发送成功
+
+        if (sent == 0) { retries++; continue; } /* sendto 返回 0：零长度包，计入重试 */
 
         if (sent < 0) {
             if (errno == EINTR) continue; // 被信号中断，立即重试
@@ -621,7 +623,12 @@ static void emergency_send_dirty_page(uint64_t gpa, const uint8_t *hva) {
     wh->crc32 = 0;
     wh->crc32 = htonl(calculate_crc32(tx_buf, total_len));
 
-    robust_sendto(t_emergency_sock, tx_buf, total_len, &g_master_addr);
+    // [FIX-M2] 加锁读取 g_master_addr，防止与 RX 线程竞争
+    struct sockaddr_in master_snap;
+    pthread_spin_lock(&g_master_lock);
+    master_snap = g_master_addr;
+    pthread_spin_unlock(&g_master_lock);
+    robust_sendto(t_emergency_sock, tx_buf, total_len, &master_snap);
 }
 
 /* 
@@ -675,8 +682,13 @@ void* dirty_sync_sender_thread(void* arg) {
         wh->crc32 = 0;
         wh->crc32 = htonl(calculate_crc32(tx_buf, total_len));
 
+        // [FIX-M2] 加锁快照 g_master_addr，防止与 RX 线程竞争
+        struct sockaddr_in master_snap;
+        pthread_spin_lock(&g_master_lock);
+        master_snap = g_master_addr;
+        pthread_spin_unlock(&g_master_lock);
         // 使用 robust_sendto 发送，它内部包含了反压处理逻辑
-        robust_sendto(sockfd, tx_buf, total_len, &g_master_addr);
+        robust_sendto(sockfd, tx_buf, total_len, &master_snap);
         
         // 任务完成，释放内存
         free(task);
@@ -849,7 +861,7 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
             }
         }
         if (ret == 0) break;
-    } while (ret > 0 || ret == -EINTR);
+    } while (ret == -1 && errno == EINTR);
 
     if (g_wvm_dev_fd < 0) { 
         // [V28.5 FIXED] KVM Dirty Log Sync (Full Implementation)
@@ -1240,8 +1252,12 @@ void* kvm_worker_thread(void *arg) {
             if (h->magic != htonl(WVM_MAGIC)) continue;
             
             pthread_spin_lock(&g_master_lock);
-            if (g_master_addr.sin_port != c[i].sin_port || g_master_addr.sin_addr.s_addr != c[i].sin_addr.s_addr) {
-                g_master_addr = c[i];
+            int addr_changed = (g_master_addr.sin_port != c[i].sin_port || g_master_addr.sin_addr.s_addr != c[i].sin_addr.s_addr);
+            g_master_addr = c[i];
+            pthread_spin_unlock(&g_master_lock);
+
+            // [FIX-M1] mutex 操作移到 spinlock 外部，防止持 spinlock 时阻塞
+            if (addr_changed) {
                 pthread_mutex_lock(&g_master_mutex);
                 if (!g_master_ready) {
                     g_master_ready = 1;
@@ -1249,8 +1265,6 @@ void* kvm_worker_thread(void *arg) {
                 }
                 pthread_mutex_unlock(&g_master_mutex);
             }
-            g_master_addr = c[i]; 
-            pthread_spin_unlock(&g_master_lock); 
 
             uint16_t type = ntohs(h->msg_type);
             ntoh_header(h);

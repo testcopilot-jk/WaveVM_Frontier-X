@@ -151,7 +151,8 @@ static void flush_lazy_ro_queue(void) {
     if (t_lazy_count == 0) return;
     for (int i = 0; i < t_lazy_count; i++) {
         uint64_t gpa = t_lazy_ro_queue[i];
-        mprotect((uint8_t*)g_ram_base + gpa, 4096, PROT_READ);
+        void *hva = gpa_to_hva_safe(gpa);
+        if (hva) mprotect(hva, 4096, PROT_READ);
     }
     t_lazy_count = 0;
 }
@@ -301,10 +302,12 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
             // 边界检查：防止恶意包导致 Segfault
             if (offset + size > 4096) return;
 
-            // 1. 临时开放写权限
-            mprotect((uint8_t*)g_ram_base + gpa, 4096, PROT_READ | PROT_WRITE);
+            // 1. 安全 GPA→HVA 转换（兼容 PCI hole 多段 RAM）
+            void *page_hva = gpa_to_hva_safe(gpa);
+            if (!page_hva) return;
+            mprotect(page_hva, 4096, PROT_READ | PROT_WRITE);
             // 2. 应用增量数据
-            memcpy((uint8_t*)g_ram_base + gpa + offset, log->data, size);
+            memcpy((uint8_t*)page_hva + offset, log->data, size);
             // 3. 放入惰性锁回队列 (性能优化)
             defer_ro_protect(gpa);
             
@@ -317,7 +320,8 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
             // 此时内存状态已不可信，必须强制失效
             // 下次访问触发 sigsegv -> request_page_sync (V28 Pull) 拉取最新全量
             if (!kvm_enabled()) {
-                mprotect((uint8_t*)g_ram_base + gpa, 4096, PROT_NONE);
+                void *inv_hva = gpa_to_hva_safe(gpa);
+                if (inv_hva) mprotect(inv_hva, 4096, PROT_NONE);
             }
 
             // 将本地版本置 0，确保下次 Pull 回来的数据（无论版本多少）都能成功覆盖
@@ -337,8 +341,10 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
         uint64_t push_ver = WVM_NTOHLL(full->version);
         
         if (is_newer_version(get_local_page_version(gpa), push_ver)) {
-            mprotect((uint8_t*)g_ram_base + gpa, 4096, PROT_READ | PROT_WRITE);
-            memcpy((uint8_t*)g_ram_base + gpa, full->data, 4096);
+            void *page_hva = gpa_to_hva_safe(gpa);
+            if (!page_hva) return;
+            mprotect(page_hva, 4096, PROT_READ | PROT_WRITE);
+            memcpy(page_hva, full->data, 4096);
             
             // 惰性锁回
             defer_ro_protect(gpa);
@@ -359,8 +365,10 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
             uint64_t gpa = WVM_NTOHLL(regions[i].gpa);
             uint64_t r_len = WVM_NTOHLL(regions[i].len);
             if (gpa + r_len <= g_ram_size) {
-                mprotect((uint8_t*)g_ram_base + gpa, r_len, PROT_READ | PROT_WRITE);
-                memset((uint8_t*)g_ram_base + gpa, val, r_len);
+                void *rpc_hva = gpa_to_hva_safe(gpa);
+                if (!rpc_hva) continue;
+                mprotect(rpc_hva, r_len, PROT_READ | PROT_WRITE);
+                memset(rpc_hva, val, r_len);
                 // [FIX] 同步 Prophet 版本号，否则后续 diff 引擎认为该页没变过，
                 //       导致远端节点版本断层无法收敛。
                 for (uint64_t pg = gpa & ~0xFFFULL; pg < gpa + r_len; pg += 4096) {
@@ -573,7 +581,9 @@ static void kvm_proactive_page_fetch(uint64_t gpa) {
          * 由于 request_page_sync 接受 fault_addr (HVA) 参数，
          * 这里构造 HVA 并直接调用它。
          */
-        uintptr_t fault_addr = (uintptr_t)g_ram_base + gpa;
+        void *fetch_hva = gpa_to_hva_safe(gpa);
+        if (!fetch_hva) return;
+        uintptr_t fault_addr = (uintptr_t)fetch_hva;
         request_page_sync(fault_addr, false);
     }
 }
@@ -583,9 +593,10 @@ static void kvm_proactive_page_fetch(uint64_t gpa) {
 // =============================================================
 
 static int request_page_sync(uintptr_t fault_addr, bool is_write) {
-    uint64_t gpa = fault_addr - (uintptr_t)g_ram_base;
-    gpa &= ~4095ULL; 
-    uintptr_t aligned_addr = (uintptr_t)g_ram_base + gpa;
+    uint64_t gpa = hva_to_gpa_safe(fault_addr);
+    if (gpa == (uint64_t)-1) return -1;
+    gpa &= ~4095ULL;
+    uintptr_t aligned_addr = fault_addr & ~4095ULL;
     
     // --- Master Mode (IPC) ---
     if (!g_is_slave) {
@@ -1029,7 +1040,7 @@ static void *diff_harvester_thread_fn(void *arg) {
         // 2. 遍历处理脏页
         WritablePage *curr = batch_head;
         while (curr) {
-            void *page_addr = (uint8_t*)g_ram_base + curr->gpa;
+            void *page_addr = gpa_to_hva_safe(curr->gpa);
             if (!page_addr) { 
                 // 错误处理：释放资源并跳过
                 WritablePage *nxt = curr->next; curr = nxt;
@@ -1320,7 +1331,8 @@ static void *mem_push_listener_thread(void *arg) {
                             // 严重乱序：回退到 Pull 模式
                             // 这种情况下必须立即锁回，不能 Lazy，因为状态已重置
                             if (!kvm_enabled()) {
-                                mprotect((uint8_t*)g_ram_base + gpa, 4096, PROT_NONE);
+                                void *inv_hva2 = gpa_to_hva_safe(gpa);
+                                if (inv_hva2) mprotect(inv_hva2, 4096, PROT_NONE);
                             }
                             set_local_page_version(gpa, 0);
                             // [FIX-F3] KVM 下主动拉取，替代 SIGSEGV 驱动的缺页
@@ -1421,7 +1433,7 @@ void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
     if (!kvm_enabled()) {
         struct sigaction sa;
         memset(&sa, 0, sizeof(sa));
-        sa.sa_flags = SA_SIGINFO | SA_NODEFER; 
+        sa.sa_flags = SA_SIGINFO; // [FIX-M6] 移除 SA_NODEFER，防止 handler 内递归 SIGSEGV 导致栈溢出
         sa.sa_sigaction = sigsegv_handler;
         sigemptyset(&sa.sa_mask);
         sigaction(SIGSEGV, &sa, NULL);

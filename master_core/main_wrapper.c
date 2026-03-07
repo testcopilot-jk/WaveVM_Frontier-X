@@ -174,7 +174,8 @@ void load_swarm_config(const char *filename) {
     
     // 第二轮：填补剩余空位 (Round-Robin)
     int node_cursor = 0;
-    while (current_vcpu < 4096) {
+    // [FIX-H9] 防止 phys_node_count==0 时除零
+    while (phys_node_count > 0 && current_vcpu < 4096) {
         wvm_set_cpu_mapping(current_vcpu++, phys_nodes[node_cursor].vnode_start);
         node_cursor = (node_cursor + 1) % phys_node_count;
     }
@@ -190,10 +191,19 @@ void load_swarm_config(const char *filename) {
  */
 static void handle_ipc_fault(int qemu_fd, struct wvm_ipc_fault_req* req) {
     struct wvm_ipc_fault_ack ack; // 使用扩展后的 ACK 结构
+
+    // [FIX-H7] GPA 边界检查，防止越界访问共享内存
+    if (req->gpa + 4096 > g_shm_size) {
+        ack.status = -EFAULT;
+        ack.version = 0;
+        write(qemu_fd, &ack, sizeof(ack));
+        return;
+    }
+
     void *target_page_addr = (uint8_t*)g_shm_ptr + req->gpa;
-    
+
     ack.status = wvm_handle_page_fault_logic(req->gpa, target_page_addr, &ack.version);
-    
+
     write(qemu_fd, &ack, sizeof(ack));
 }
 
