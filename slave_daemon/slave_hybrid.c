@@ -1039,9 +1039,12 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
     if (hdr->msg_type == MSG_BLOCK_WRITE) {
         memcpy(aligned_buf, blk->data, data_len);
         ssize_t written = pwrite(fd, aligned_buf, data_len, offset);
-        
+
         hdr->msg_type = htons(MSG_BLOCK_ACK);
-        hdr->payload_len = 0;
+        hdr->payload_len = htons(0);
+        hdr->magic = htonl(WVM_MAGIC);
+        hdr->slave_id = htonl(hdr->slave_id);
+        hdr->target_id = htonl(hdr->target_id);
         if (written != data_len) {
             hdr->flags |= WVM_FLAG_ERROR;
         }
@@ -1056,17 +1059,20 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
         uint8_t *tx = malloc(resp_len);
         if (tx) {
             struct wvm_header *rh = (struct wvm_header*)tx;
-            *rh = *hdr; 
+            *rh = *hdr;
             rh->msg_type = htons(MSG_BLOCK_ACK);
             rh->payload_len = htons(sizeof(struct wvm_block_payload) + data_len);
-            
+            rh->magic = htonl(WVM_MAGIC);
+            rh->slave_id = htonl(hdr->slave_id);
+            rh->target_id = htonl(hdr->target_id);
+
             struct wvm_block_payload *rp = (struct wvm_block_payload*)(tx + sizeof(*hdr));
             rp->lba = blk->lba;
             rp->count = blk->count;
-            
+
             ssize_t r = pread(fd, aligned_buf, data_len, offset);
             if (r > 0) memcpy(rp->data, aligned_buf, r);
-            
+
             // [FIX] 发送前必须重算 CRC32
             rh->crc32 = 0;
             rh->crc32 = htonl(calculate_crc32(tx, resp_len));
@@ -1076,9 +1082,12 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
     } else if (hdr->msg_type == MSG_BLOCK_FLUSH) {
         int ret = fdatasync(fd);
         hdr->msg_type = htons(MSG_BLOCK_ACK);
-        hdr->payload_len = 0;
+        hdr->payload_len = htons(0);
+        hdr->magic = htonl(WVM_MAGIC);
+        hdr->slave_id = htonl(hdr->slave_id);
+        hdr->target_id = htonl(hdr->target_id);
         if (ret < 0) hdr->flags |= WVM_FLAG_ERROR;
-        
+
         // [FIX] 发送前必须重算 CRC32
         hdr->crc32 = 0;
         hdr->crc32 = htonl(calculate_crc32(hdr, sizeof(*hdr)));

@@ -215,6 +215,7 @@ static void *wavevm_master_ipc_thread(void *arg) {
         }
         // 2. 处理内存失效 (MESI Invalidate)
         else if (hdr.type == WVM_IPC_TYPE_MEM_WRITE) {
+            if (hdr.len < (int)sizeof(struct wvm_ipc_write_req)) continue;
             struct wvm_ipc_write_req *req = (struct wvm_ipc_write_req *)payload_buf;
             // 约定：len=0 表示 Invalidate
             if (req->len == 0) {
@@ -231,6 +232,7 @@ static void *wavevm_master_ipc_thread(void *arg) {
             }
         }
         else if (hdr.type == WVM_IPC_TYPE_INVALIDATE) { // Type 6
+            if (hdr.len < (int)sizeof(struct wvm_header)) continue;
             // 解包内部的 wvm_header
             struct wvm_header *net_hdr = (struct wvm_header *)payload_buf;
             void *net_payload = payload_buf + sizeof(struct wvm_header);

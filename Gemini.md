@@ -7478,6 +7478,11 @@ struct dsm_driver_ops u_ops = {
 
 // --- 初始化入口 ---
 int user_backend_init(int my_node_id, int port) {
+    if (my_node_id < 0 || my_node_id >= WVM_MAX_GATEWAYS) {
+        fprintf(stderr, "[WaveVM] user_backend_init: node_id %d out of range [0, %d)\n",
+                my_node_id, WVM_MAX_GATEWAYS);
+        return -1;
+    }
     g_my_node_id = my_node_id;
     g_local_port = port;
     srand(time(NULL));
@@ -9300,34 +9305,40 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
     if (hdr->msg_type == MSG_BLOCK_WRITE) {
         memcpy(aligned_buf, blk->data, data_len);
         ssize_t written = pwrite(fd, aligned_buf, data_len, offset);
-        
+
         hdr->msg_type = htons(MSG_BLOCK_ACK);
-        hdr->payload_len = 0;
+        hdr->payload_len = htons(0);
+        hdr->magic = htonl(WVM_MAGIC);
+        hdr->slave_id = htonl(hdr->slave_id);
+        hdr->target_id = htonl(hdr->target_id);
         if (written != data_len) {
             hdr->flags |= WVM_FLAG_ERROR;
         }
-        
+
         // [FIX] 发送前必须重算 CRC32
         hdr->crc32 = 0;
         hdr->crc32 = htonl(calculate_crc32(hdr, sizeof(*hdr)));
         sendto(sockfd, hdr, sizeof(*hdr), 0, (struct sockaddr*)client, sizeof(*client));
-    
+
     } else if (hdr->msg_type == MSG_BLOCK_READ) {
         size_t resp_len = sizeof(struct wvm_header) + sizeof(struct wvm_block_payload) + data_len;
         uint8_t *tx = malloc(resp_len);
         if (tx) {
             struct wvm_header *rh = (struct wvm_header*)tx;
-            *rh = *hdr; 
+            *rh = *hdr;
             rh->msg_type = htons(MSG_BLOCK_ACK);
             rh->payload_len = htons(sizeof(struct wvm_block_payload) + data_len);
-            
+            rh->magic = htonl(WVM_MAGIC);
+            rh->slave_id = htonl(hdr->slave_id);
+            rh->target_id = htonl(hdr->target_id);
+
             struct wvm_block_payload *rp = (struct wvm_block_payload*)(tx + sizeof(*hdr));
             rp->lba = blk->lba;
             rp->count = blk->count;
-            
+
             ssize_t r = pread(fd, aligned_buf, data_len, offset);
             if (r > 0) memcpy(rp->data, aligned_buf, r);
-            
+
             // [FIX] 发送前必须重算 CRC32
             rh->crc32 = 0;
             rh->crc32 = htonl(calculate_crc32(tx, resp_len));
@@ -9337,9 +9348,12 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
     } else if (hdr->msg_type == MSG_BLOCK_FLUSH) {
         int ret = fdatasync(fd);
         hdr->msg_type = htons(MSG_BLOCK_ACK);
-        hdr->payload_len = 0;
+        hdr->payload_len = htons(0);
+        hdr->magic = htonl(WVM_MAGIC);
+        hdr->slave_id = htonl(hdr->slave_id);
+        hdr->target_id = htonl(hdr->target_id);
         if (ret < 0) hdr->flags |= WVM_FLAG_ERROR;
-        
+
         // [FIX] 发送前必须重算 CRC32
         hdr->crc32 = 0;
         hdr->crc32 = htonl(calculate_crc32(hdr, sizeof(*hdr)));
@@ -10742,6 +10756,7 @@ static void *wavevm_master_ipc_thread(void *arg) {
         }
         // 2. 处理内存失效 (MESI Invalidate)
         else if (hdr.type == WVM_IPC_TYPE_MEM_WRITE) {
+            if (hdr.len < (int)sizeof(struct wvm_ipc_write_req)) continue;
             struct wvm_ipc_write_req *req = (struct wvm_ipc_write_req *)payload_buf;
             // 约定：len=0 表示 Invalidate
             if (req->len == 0) {
@@ -10758,6 +10773,7 @@ static void *wavevm_master_ipc_thread(void *arg) {
             }
         }
         else if (hdr.type == WVM_IPC_TYPE_INVALIDATE) { // Type 6
+            if (hdr.len < (int)sizeof(struct wvm_header)) continue;
             // 解包内部的 wvm_header
             struct wvm_header *net_hdr = (struct wvm_header *)payload_buf;
             void *net_payload = payload_buf + sizeof(struct wvm_header);
@@ -12695,6 +12711,7 @@ static uint64_t get_local_page_version(uint64_t gpa) {
 static void set_local_page_version(uint64_t gpa, uint64_t version) {
     if (!g_ver_root) {
         g_ver_root = calloc(L1_SIZE, sizeof(uint64_t *));
+        if (!g_ver_root) return; // OOM: 静默放弃版本追踪，不会崩溃
     }
 
     uint64_t pfn = gpa >> PAGE_SHIFT;
@@ -12703,6 +12720,7 @@ static void set_local_page_version(uint64_t gpa, uint64_t version) {
 
     if (g_ver_root[l1_idx] == NULL) {
         g_ver_root[l1_idx] = calloc(L2_SIZE, sizeof(uint64_t));
+        if (!g_ver_root[l1_idx]) return; // OOM: 同上
     }
     __atomic_store_n(&g_ver_root[l1_idx][l2_idx], version, __ATOMIC_RELEASE);
 }

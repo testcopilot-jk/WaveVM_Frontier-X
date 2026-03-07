@@ -416,6 +416,7 @@ static uint64_t get_local_page_version(uint64_t gpa) {
 static void set_local_page_version(uint64_t gpa, uint64_t version) {
     if (!g_ver_root) {
         g_ver_root = calloc(L1_SIZE, sizeof(uint64_t *));
+        if (!g_ver_root) return; // OOM: 静默放弃版本追踪，不会崩溃
     }
 
     uint64_t pfn = gpa >> PAGE_SHIFT;
@@ -424,6 +425,7 @@ static void set_local_page_version(uint64_t gpa, uint64_t version) {
 
     if (g_ver_root[l1_idx] == NULL) {
         g_ver_root[l1_idx] = calloc(L2_SIZE, sizeof(uint64_t));
+        if (!g_ver_root[l1_idx]) return; // OOM: 同上
     }
     __atomic_store_n(&g_ver_root[l1_idx][l2_idx], version, __ATOMIC_RELEASE);
 }

@@ -1060,6 +1060,11 @@ struct dsm_driver_ops u_ops = {
 
 // --- 初始化入口 ---
 int user_backend_init(int my_node_id, int port) {
+    if (my_node_id < 0 || my_node_id >= WVM_MAX_GATEWAYS) {
+        fprintf(stderr, "[WaveVM] user_backend_init: node_id %d out of range [0, %d)\n",
+                my_node_id, WVM_MAX_GATEWAYS);
+        return -1;
+    }
     g_my_node_id = my_node_id;
     g_local_port = port;
     srand(time(NULL));
