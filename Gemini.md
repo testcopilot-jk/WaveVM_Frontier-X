@@ -9729,8 +9729,8 @@ void spawn_tcg_processes(int base_id) {
             setenv("WVM_SOCK_PUSH", fd_p, 1); 
             setenv("WVM_ROLE", "SLAVE", 1);
             char id_str[32];
-            snprintf(id_str, sizeof(id_str), "%ld", base_id + i); 
-            setenv("WVM_SLAVE_ID", id_str, 1); 
+            snprintf(id_str, sizeof(id_str), "%u", WVM_ENCODE_ID(g_slave_vm_id, base_id + i));
+            setenv("WVM_SLAVE_ID", id_str, 1);
 
             const char *shm_path = getenv("WVM_SHM_FILE");
             if (shm_path) {
