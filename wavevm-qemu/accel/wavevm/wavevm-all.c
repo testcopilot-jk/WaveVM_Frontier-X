@@ -650,6 +650,11 @@ static int wavevm_init_machine_user(WaveVMAccelState *s, MachineState *ms) {
         // [FIX-G4] IPC 监听线程必须无条件启动 (KVM + TCG 都需要接收 Invalidate)
         // dirty_sync_thread 仅 KVM 需要 (TCG 由 user-mem harvester 处理)
         s->sync_thread_running = true;
+
+        // [FIX-F1] 初始化 Block IO 持久连接状态
+        s->block_io_sock = -1;
+        qemu_mutex_init(&s->block_io_lock);
+
         qemu_thread_create(&s->ipc_thread, "wvm-ipc-rx", wavevm_master_ipc_thread, s, QEMU_THREAD_DETACHED);
         if (kvm_enabled()) {
             qemu_thread_create(&s->sync_thread, "wvm-sync", wavevm_dirty_sync_thread, s, QEMU_THREAD_DETACHED);
@@ -1069,21 +1074,30 @@ struct wvm_ipc_block_req {
  */
 int wvm_send_ipc_block_io(uint64_t lba, void *buf, uint32_t len, int is_write) {
     WaveVMAccelState *s = WAVEVM_ACCEL(current_machine->accelerator);
-    
-    // 1. 建立独立连接 (Thread-Safe)
-    int fd = -1;
+
+    // 1. Slave 模式不直接发起存储请求
     char *role = getenv("WVM_ROLE");
-    
-    // 如果是 Slave 模式，master_sock 是继承来的 UDP socket，不能用于 IPC
-    // Slave 模式下 Block IO 应该走本地转发，但目前架构主要支持 Master 发起 Block IO
     if (role && strcmp(role, "SLAVE") == 0) {
-        return -1; // Slave 不直接发起存储请求
-    } else {
-        // Master 模式：建立临时 IPC 连接
-        fd = connect_to_master_helper();
+        return -1;
     }
 
-    if (fd < 0) return -1;
+    // [FIX-F1] 使用持久 IPC 连接，避免每次 Block IO 都 connect() -> Master pthread_create()
+    // 旧代码每次调用 connect_to_master_helper() 创建新连接，Master 侧每个 accept()
+    // 都 spawn 新线程，5000 IOPS 下秒创 5000 线程导致系统崩溃。
+    // 修复方案：保持一条持久连接，用 mutex 序列化请求。Block IO 本身是同步等待的，
+    // 串行化不会额外降低吞吐，反而消除了连接建立/销毁开销。
+    qemu_mutex_lock(&s->block_io_lock);
+
+    // 惰性初始化 + 断线重连
+    if (s->block_io_sock < 0) {
+        s->block_io_sock = connect_to_master_helper();
+        if (s->block_io_sock < 0) {
+            qemu_mutex_unlock(&s->block_io_lock);
+            return -1;
+        }
+    }
+
+    int fd = s->block_io_sock;
 
     // 2. 计算包大小
     size_t meta_size = sizeof(struct wvm_ipc_block_req);
@@ -1093,7 +1107,7 @@ int wvm_send_ipc_block_io(uint64_t lba, void *buf, uint32_t len, int is_write) {
     // 3. 分配缓冲区
     uint8_t *buffer = g_malloc(total_size);
     if (!buffer) {
-        close(fd);
+        qemu_mutex_unlock(&s->block_io_lock);
         return -1;
     }
 
@@ -1118,22 +1132,24 @@ int wvm_send_ipc_block_io(uint64_t lba, void *buf, uint32_t len, int is_write) {
         ret = -1;
     }
 
-    // 7. [关键修复] 等待 Daemon 的同步确认与数据回传
-    // 之前这里被漏掉了，或者是逻辑写错了导致死锁
+    // 7. 等待 Daemon 的同步确认与数据回传
     uint8_t ack_byte;
-    if (read_all(fd, &ack_byte, 1) < 0 || ack_byte == 0) { 
-        // 读不到 ACK 或者 ACK 为 0 (失败)
+    if (ret == 0 && (read_all(fd, &ack_byte, 1) < 0 || ack_byte == 0)) {
         ret = -1;
-    } else if (!is_write && buf && len > 0) {
-        // [FIX] 如果是读盘，真正的磁盘数据是由 Daemon 顺着 IPC 发回来的，必须收！
-        // 如果这里不收，QEMU 里的 buffer 就是空的，Guest 读到的全是 0
+    } else if (ret == 0 && !is_write && buf && len > 0) {
         if (read_all(fd, buf, len) < 0) {
             ret = -1;
         }
     }
-    
+
     g_free(buffer);
-    close(fd);
-    
-    return ret; 
+
+    // [FIX-F1] 如果通信失败，关闭连接以便下次重建（断线重连）
+    if (ret < 0) {
+        close(s->block_io_sock);
+        s->block_io_sock = -1;
+    }
+
+    qemu_mutex_unlock(&s->block_io_lock);
+    return ret;
 }

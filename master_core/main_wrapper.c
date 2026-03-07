@@ -700,6 +700,20 @@ int main(int argc, char **argv) {
             continue;
         }
 
+        // [FIX-F1] 防御性检查：在 accept 后立即检查连接数上限，防止线程爆炸。
+        // 旧代码无条件 pthread_create，仅在 client_handler 内部检查 MAX_QEMU_CLIENTS，
+        // 但线程已经创建完毕。此处前置检查，超限直接拒绝连接。
+        pthread_mutex_lock(&g_client_lock);
+        int current_count = g_client_count;
+        pthread_mutex_unlock(&g_client_lock);
+
+        if (current_count >= MAX_QEMU_CLIENTS) {
+            fprintf(stderr, "[IPC] WARN: MAX_QEMU_CLIENTS(%d) reached, rejecting fd=%d\n",
+                    MAX_QEMU_CLIENTS, client_fd);
+            close(client_fd);
+            continue;
+        }
+
         // 为每个 QEMU 连接创建一个处理线程
         pthread_t thread_id;
         int *new_sock = malloc(sizeof(int));

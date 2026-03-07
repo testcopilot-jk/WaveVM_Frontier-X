@@ -267,8 +267,12 @@ static void buffer_future_packet(uint64_t gpa, uint64_t version, uint16_t type, 
     pthread_spin_unlock(&g_reorder_lock);
 }
 
-/* 
- * [物理意图] 接收并应用来自 P2P 网络的“真理推送”，更新本地物理内存。
+/* [FIX-F3] Forward declaration: KVM proactive page fetch (defined after request_page_sync) */
+static void kvm_proactive_page_fetch(uint64_t gpa);
+static int request_page_sync(uintptr_t fault_addr, bool is_write);
+
+/*
+ * [物理意图] 接收并应用来自 P2P 网络的"真理推送"，更新本地物理内存。
  * [关键逻辑] 执行严格的版本判定（is_next_version）：顺序包直接 memcpy，版本断层包则强制失效（Invalidate）本地映射。
  * [后果] 实现了 MESI 协议的远程写入动作。它保证了即便在乱序网络下，本地 vCPU 看到的内存也是单调递增的一致性状态。
  */
@@ -314,9 +318,15 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
             if (!kvm_enabled()) {
                 mprotect((uint8_t*)g_ram_base + gpa, 4096, PROT_NONE);
             }
-            
+
             // 将本地版本置 0，确保下次 Pull 回来的数据（无论版本多少）都能成功覆盖
-            set_local_page_version(gpa, 0); 
+            set_local_page_version(gpa, 0);
+
+            // [FIX-F3] KVM 模式下 mprotect(PROT_NONE) 被跳过，guest 不会触发 SIGSEGV，
+            // 必须主动拉取最新页面，否则 guest 永远读到 stale 数据。
+            if (kvm_enabled()) {
+                kvm_proactive_page_fetch(gpa);
+            }
         }
     }
     // --- 分支 2: 全页推送 / 强制同步 ---
@@ -484,8 +494,71 @@ void wvm_set_ttl_interval(int ms) {
     // 留空：不再启动 V28 的收割者线程
 }
 
-void wvm_register_volatile_ram(uint64_t gpa, uint64_t size) { 
+void wvm_register_volatile_ram(uint64_t gpa, uint64_t size) {
     // 留空：不再维护易失性区域链表
+}
+
+/* [FIX-F3] KVM 主动页面拉取：KVM 模式下 mprotect(PROT_NONE) 不可用的替代方案。
+ *
+ * 背景：TCG 模式通过 mprotect(PROT_NONE) + SIGSEGV 触发缺页拉取。
+ * KVM 模式下 PROT_NONE 会导致 EPT violation 风暴，所以所有 mprotect(PROT_NONE) 调用
+ * 都被 !kvm_enabled() 守卫跳过。
+ *
+ * 问题：当版本断层发生时，set_local_page_version(gpa, 0) 被调用，但因为没有
+ * mprotect(PROT_NONE)，guest 不会触发缺页，旧数据会被永久读取。
+ *
+ * 修复：在 KVM 模式下检测到版本断层时，主动通过 IPC 向 Master 发起同步页面拉取，
+ * 将最新数据写入 HVA 并更新版本号。不依赖 guest 触发的 SIGSEGV。
+ */
+static void kvm_proactive_page_fetch(uint64_t gpa) {
+    if (!g_ram_base) return;
+
+    /* 使用线程局部 IPC socket (与 request_page_sync Master 路径相同) */
+    if (!g_is_slave) {
+        /* Master 模式：通过本地 IPC socket 请求 */
+        if (t_com_sock == -1) {
+            t_com_sock = internal_connect_master();
+            if (t_com_sock < 0) {
+                fprintf(stderr, "[FIX-F3] KVM proactive fetch: IPC connect failed for GPA 0x%"
+                        PRIx64 "\n", gpa);
+                return;
+            }
+        }
+
+        struct wvm_ipc_fault_req req = { .gpa = gpa, .len = 4096, .vcpu_id = 0 };
+        struct wvm_ipc_header_t ipc_hdr = { .type = WVM_IPC_TYPE_MEM_FAULT, .len = sizeof(req) };
+        struct iovec iov[2] = { {&ipc_hdr, sizeof(ipc_hdr)}, {&req, sizeof(req)} };
+        struct msghdr msg = { .msg_iov = iov, .msg_iovlen = 2 };
+
+        if (sendmsg(t_com_sock, &msg, 0) < 0) {
+            /* 连接断开，关闭以便下次重建 */
+            close(t_com_sock);
+            t_com_sock = -1;
+            fprintf(stderr, "[FIX-F3] KVM proactive fetch: IPC send failed for GPA 0x%"
+                    PRIx64 "\n", gpa);
+            return;
+        }
+
+        struct wvm_ipc_fault_ack ack;
+        if (read_exact(t_com_sock, &ack, sizeof(ack)) < 0) {
+            close(t_com_sock);
+            t_com_sock = -1;
+            fprintf(stderr, "[FIX-F3] KVM proactive fetch: IPC recv failed for GPA 0x%"
+                    PRIx64 "\n", gpa);
+            return;
+        }
+
+        if (ack.status == 0) {
+            set_local_page_version(gpa, ack.version);
+        }
+    } else {
+        /* Slave 模式：复用 request_page_sync 的 UDP 路径。
+         * 由于 request_page_sync 接受 fault_addr (HVA) 参数，
+         * 这里构造 HVA 并直接调用它。
+         */
+        uintptr_t fault_addr = (uintptr_t)g_ram_base + gpa;
+        request_page_sync(fault_addr, false);
+    }
 }
 
 // =============================================================
@@ -1158,6 +1231,10 @@ static void *mem_push_listener_thread(void *arg) {
                         mprotect(hva, 4096, PROT_NONE);
                     }
                     set_local_page_version(stale_gpa, 0);
+                    // [FIX-F3] KVM 模式下主动拉取过期重排缓冲区中的页面
+                    if (kvm_enabled()) {
+                        kvm_proactive_page_fetch(stale_gpa);
+                    }
                 }
             }
             pthread_spin_unlock(&g_reorder_lock);
@@ -1221,6 +1298,10 @@ static void *mem_push_listener_thread(void *arg) {
                                 mprotect((uint8_t*)g_ram_base + gpa, 4096, PROT_NONE);
                             }
                             set_local_page_version(gpa, 0);
+                            // [FIX-F3] KVM 下主动拉取，替代 SIGSEGV 驱动的缺页
+                            if (kvm_enabled()) {
+                                kvm_proactive_page_fetch(gpa);
+                            }
                         }
                     }
                 } 

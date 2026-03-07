@@ -75,7 +75,7 @@ typedef struct {
 } dirty_page_task_t;
 
 // MPSC 环形队列
-#define MPSC_QUEUE_SIZE 1024 // 可缓存 1024 个脏页（4MB），足以应对网络瞬时抖动
+#define MPSC_QUEUE_SIZE 8192 // [FIX-F2] 扩容 1024->8192 (32MB)，减少溢出概率
 static dirty_page_task_t* g_mpsc_queue[MPSC_QUEUE_SIZE];
 static volatile uint32_t g_mpsc_head = 0;
 static volatile uint32_t g_mpsc_tail = 0;
@@ -585,6 +585,45 @@ void init_thread_local_vcpu(int vcpu_id) {
 static __thread unsigned long *t_dirty_bitmap_cache = NULL;
 static __thread size_t t_dirty_bitmap_size = 0;
 
+/* [FIX-F2] 紧急内联发送：当 MPSC 队列已满或 malloc 失败时，阻塞式直接发送脏页。
+ * 这是最后的安全网——绝不能在 KVM_GET_DIRTY_LOG 已清除硬件 dirty bit 后丢弃页面。
+ * 性能会下降（阻塞 vCPU 所在线程），但数据不会丢失。
+ */
+static __thread int t_emergency_sock = -1;
+
+static void emergency_send_dirty_page(uint64_t gpa, const uint8_t *hva) {
+    if (t_emergency_sock < 0) {
+        t_emergency_sock = socket(AF_INET, SOCK_DGRAM, 0);
+        if (t_emergency_sock < 0) {
+            fprintf(stderr, "[FIX-F2] FATAL: cannot create emergency socket, dirty page 0x%"
+                    PRIx64 " LOST\n", gpa);
+            return;
+        }
+    }
+
+    uint8_t tx_buf[sizeof(struct wvm_header) + 8 + 4096];
+    memset(tx_buf, 0, sizeof(struct wvm_header));
+    struct wvm_header *wh = (struct wvm_header *)tx_buf;
+    size_t total_len = sizeof(tx_buf);
+
+    wh->magic = htonl(WVM_MAGIC);
+    wh->msg_type = htons(MSG_MEM_WRITE);
+    wh->payload_len = htons(8 + 4096);
+    wh->slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
+    wh->target_id = htonl(WVM_NODE_AUTO_ROUTE);
+    wh->req_id = 0;
+    wh->qos_level = 0;
+
+    uint64_t net_gpa = WVM_HTONLL(gpa);
+    memcpy(tx_buf + sizeof(*wh), &net_gpa, 8);
+    memcpy(tx_buf + sizeof(*wh) + 8, hva, 4096);
+
+    wh->crc32 = 0;
+    wh->crc32 = htonl(calculate_crc32(tx_buf, total_len));
+
+    robust_sendto(t_emergency_sock, tx_buf, total_len, &g_master_addr);
+}
+
 /* 
  * [物理意图] 充当远程执行节点的“脏页回写引擎”，实现计算与同步的解耦。
  * [关键逻辑] 作为 MPSC 队列的唯一消费者，将各个 vCPU 产生的脏页任务（Dirty Pages）进行有序的异步网络发送。
@@ -840,11 +879,17 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
 
                         uint32_t next_tail = (g_mpsc_tail + 1) % MPSC_QUEUE_SIZE;
                         if (next_tail == g_mpsc_head) {
+                            // [FIX-F2] 队列已满：绝不丢弃！KVM_GET_DIRTY_LOG 已清除硬件 dirty bit，
+                            // 如果这里 continue，该页永远不会再被标记为 dirty，数据永久丢失。
+                            // 改为紧急内联发送（阻塞式），牺牲延迟保数据。
+                            emergency_send_dirty_page(gpa, hva);
                             continue;
                         }
 
                         dirty_page_task_t* task = malloc(sizeof(dirty_page_task_t));
                         if (!task) {
+                            // [FIX-F2] malloc 失败同理：不能丢弃已清除 dirty bit 的页面
+                            emergency_send_dirty_page(gpa, hva);
                             continue;
                         }
 

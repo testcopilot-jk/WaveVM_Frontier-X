@@ -8307,6 +8307,20 @@ int main(int argc, char **argv) {
             continue;
         }
 
+        // [FIX-F1] 防御性检查：在 accept 后立即检查连接数上限，防止线程爆炸。
+        // 旧代码无条件 pthread_create，仅在 client_handler 内部检查 MAX_QEMU_CLIENTS，
+        // 但线程已经创建完毕。此处前置检查，超限直接拒绝连接。
+        pthread_mutex_lock(&g_client_lock);
+        int current_count = g_client_count;
+        pthread_mutex_unlock(&g_client_lock);
+
+        if (current_count >= MAX_QEMU_CLIENTS) {
+            fprintf(stderr, "[IPC] WARN: MAX_QEMU_CLIENTS(%d) reached, rejecting fd=%d\n",
+                    MAX_QEMU_CLIENTS, client_fd);
+            close(client_fd);
+            continue;
+        }
+
         // 为每个 QEMU 连接创建一个处理线程
         pthread_t thread_id;
         int *new_sock = malloc(sizeof(int));
@@ -8430,7 +8444,7 @@ typedef struct {
 } dirty_page_task_t;
 
 // MPSC 环形队列
-#define MPSC_QUEUE_SIZE 1024 // 可缓存 1024 个脏页（4MB），足以应对网络瞬时抖动
+#define MPSC_QUEUE_SIZE 8192 // [FIX-F2] 扩容 1024->8192 (32MB)，减少溢出概率
 static dirty_page_task_t* g_mpsc_queue[MPSC_QUEUE_SIZE];
 static volatile uint32_t g_mpsc_head = 0;
 static volatile uint32_t g_mpsc_tail = 0;
@@ -8940,7 +8954,46 @@ void init_thread_local_vcpu(int vcpu_id) {
 static __thread unsigned long *t_dirty_bitmap_cache = NULL;
 static __thread size_t t_dirty_bitmap_size = 0;
 
-/* 
+/* [FIX-F2] 紧急内联发送：当 MPSC 队列已满或 malloc 失败时，阻塞式直接发送脏页。
+ * 这是最后的安全网——绝不能在 KVM_GET_DIRTY_LOG 已清除硬件 dirty bit 后丢弃页面。
+ * 性能会下降（阻塞 vCPU 所在线程），但数据不会丢失。
+ */
+static __thread int t_emergency_sock = -1;
+
+static void emergency_send_dirty_page(uint64_t gpa, const uint8_t *hva) {
+    if (t_emergency_sock < 0) {
+        t_emergency_sock = socket(AF_INET, SOCK_DGRAM, 0);
+        if (t_emergency_sock < 0) {
+            fprintf(stderr, "[FIX-F2] FATAL: cannot create emergency socket, dirty page 0x%"
+                    PRIx64 " LOST\n", gpa);
+            return;
+        }
+    }
+
+    uint8_t tx_buf[sizeof(struct wvm_header) + 8 + 4096];
+    memset(tx_buf, 0, sizeof(struct wvm_header));
+    struct wvm_header *wh = (struct wvm_header *)tx_buf;
+    size_t total_len = sizeof(tx_buf);
+
+    wh->magic = htonl(WVM_MAGIC);
+    wh->msg_type = htons(MSG_MEM_WRITE);
+    wh->payload_len = htons(8 + 4096);
+    wh->slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
+    wh->target_id = htonl(WVM_NODE_AUTO_ROUTE);
+    wh->req_id = 0;
+    wh->qos_level = 0;
+
+    uint64_t net_gpa = WVM_HTONLL(gpa);
+    memcpy(tx_buf + sizeof(*wh), &net_gpa, 8);
+    memcpy(tx_buf + sizeof(*wh) + 8, hva, 4096);
+
+    wh->crc32 = 0;
+    wh->crc32 = htonl(calculate_crc32(tx_buf, total_len));
+
+    robust_sendto(t_emergency_sock, tx_buf, total_len, &g_master_addr);
+}
+
+/*
  * [物理意图] 充当远程执行节点的“脏页回写引擎”，实现计算与同步的解耦。
  * [关键逻辑] 作为 MPSC 队列的唯一消费者，将各个 vCPU 产生的脏页任务（Dirty Pages）进行有序的异步网络发送。
  * [后果] 它解决了“同步锁死”问题。vCPU 可以在执行完指令后立即继续，无需等待网络 ACK，极大提升了远程主频。
@@ -9195,11 +9248,17 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
 
                         uint32_t next_tail = (g_mpsc_tail + 1) % MPSC_QUEUE_SIZE;
                         if (next_tail == g_mpsc_head) {
+                            // [FIX-F2] 队列已满：绝不丢弃！KVM_GET_DIRTY_LOG 已清除硬件 dirty bit，
+                            // 如果这里 continue，该页永远不会再被标记为 dirty，数据永久丢失。
+                            // 改为紧急内联发送（阻塞式），牺牲延迟保数据。
+                            emergency_send_dirty_page(gpa, hva);
                             continue;
                         }
 
                         dirty_page_task_t* task = malloc(sizeof(dirty_page_task_t));
                         if (!task) {
+                            // [FIX-F2] malloc 失败同理：不能丢弃已清除 dirty bit 的页面
+                            emergency_send_dirty_page(gpa, hva);
                             continue;
                         }
 
@@ -11322,12 +11381,17 @@ static int wavevm_init_machine_user(WaveVMAccelState *s, MachineState *ms) {
         // [FIX-G4] IPC 监听线程必须无条件启动 (KVM + TCG 都需要接收 Invalidate)
         // dirty_sync_thread 仅 KVM 需要 (TCG 由 user-mem harvester 处理)
         s->sync_thread_running = true;
+
+        // [FIX-F1] 初始化 Block IO 持久连接状态
+        s->block_io_sock = -1;
+        qemu_mutex_init(&s->block_io_lock);
+
         qemu_thread_create(&s->ipc_thread, "wvm-ipc-rx", wavevm_master_ipc_thread, s, QEMU_THREAD_DETACHED);
         if (kvm_enabled()) {
             qemu_thread_create(&s->sync_thread, "wvm-sync", wavevm_dirty_sync_thread, s, QEMU_THREAD_DETACHED);
         }
     }
-        
+
     g_user_ram_size_hint = ms->ram_size;
     // 初始化拦截信号。某些机型在此时 ms->ram 仍可能为空，需做兜底查找。
     void *ram_ptr = NULL;
@@ -11741,21 +11805,30 @@ struct wvm_ipc_block_req {
  */
 int wvm_send_ipc_block_io(uint64_t lba, void *buf, uint32_t len, int is_write) {
     WaveVMAccelState *s = WAVEVM_ACCEL(current_machine->accelerator);
-    
-    // 1. 建立独立连接 (Thread-Safe)
-    int fd = -1;
+
+    // 1. Slave 模式不直接发起存储请求
     char *role = getenv("WVM_ROLE");
-    
-    // 如果是 Slave 模式，master_sock 是继承来的 UDP socket，不能用于 IPC
-    // Slave 模式下 Block IO 应该走本地转发，但目前架构主要支持 Master 发起 Block IO
     if (role && strcmp(role, "SLAVE") == 0) {
-        return -1; // Slave 不直接发起存储请求
-    } else {
-        // Master 模式：建立临时 IPC 连接
-        fd = connect_to_master_helper();
+        return -1;
     }
 
-    if (fd < 0) return -1;
+    // [FIX-F1] 使用持久 IPC 连接，避免每次 Block IO 都 connect() -> Master pthread_create()
+    // 旧代码每次调用 connect_to_master_helper() 创建新连接，Master 侧每个 accept()
+    // 都 spawn 新线程，5000 IOPS 下秒创 5000 线程导致系统崩溃。
+    // 修复方案：保持一条持久连接，用 mutex 序列化请求。Block IO 本身是同步等待的，
+    // 串行化不会额外降低吞吐，反而消除了连接建立/销毁开销。
+    qemu_mutex_lock(&s->block_io_lock);
+
+    // 惰性初始化 + 断线重连
+    if (s->block_io_sock < 0) {
+        s->block_io_sock = connect_to_master_helper();
+        if (s->block_io_sock < 0) {
+            qemu_mutex_unlock(&s->block_io_lock);
+            return -1;
+        }
+    }
+
+    int fd = s->block_io_sock;
 
     // 2. 计算包大小
     size_t meta_size = sizeof(struct wvm_ipc_block_req);
@@ -11765,7 +11838,7 @@ int wvm_send_ipc_block_io(uint64_t lba, void *buf, uint32_t len, int is_write) {
     // 3. 分配缓冲区
     uint8_t *buffer = g_malloc(total_size);
     if (!buffer) {
-        close(fd);
+        qemu_mutex_unlock(&s->block_io_lock);
         return -1;
     }
 
@@ -11790,24 +11863,26 @@ int wvm_send_ipc_block_io(uint64_t lba, void *buf, uint32_t len, int is_write) {
         ret = -1;
     }
 
-    // 7. [关键修复] 等待 Daemon 的同步确认与数据回传
-    // 之前这里被漏掉了，或者是逻辑写错了导致死锁
+    // 7. 等待 Daemon 的同步确认与数据回传
     uint8_t ack_byte;
-    if (read_all(fd, &ack_byte, 1) < 0 || ack_byte == 0) { 
-        // 读不到 ACK 或者 ACK 为 0 (失败)
+    if (ret == 0 && (read_all(fd, &ack_byte, 1) < 0 || ack_byte == 0)) {
         ret = -1;
-    } else if (!is_write && buf && len > 0) {
-        // [FIX] 如果是读盘，真正的磁盘数据是由 Daemon 顺着 IPC 发回来的，必须收！
-        // 如果这里不收，QEMU 里的 buffer 就是空的，Guest 读到的全是 0
+    } else if (ret == 0 && !is_write && buf && len > 0) {
         if (read_all(fd, buf, len) < 0) {
             ret = -1;
         }
     }
-    
+
     g_free(buffer);
-    close(fd);
-    
-    return ret; 
+
+    // [FIX-F1] 如果通信失败，关闭连接以便下次重建（断线重连）
+    if (ret < 0) {
+        close(s->block_io_sock);
+        s->block_io_sock = -1;
+    }
+
+    qemu_mutex_unlock(&s->block_io_lock);
+    return ret;
 }
 ```
 
@@ -12714,8 +12789,12 @@ static void buffer_future_packet(uint64_t gpa, uint64_t version, uint16_t type, 
     pthread_spin_unlock(&g_reorder_lock);
 }
 
-/* 
- * [物理意图] 接收并应用来自 P2P 网络的“真理推送”，更新本地物理内存。
+/* [FIX-F3] Forward declaration: KVM proactive page fetch (defined after request_page_sync) */
+static void kvm_proactive_page_fetch(uint64_t gpa);
+static int request_page_sync(uintptr_t fault_addr, bool is_write);
+
+/*
+ * [物理意图] 接收并应用来自 P2P 网络的"真理推送"，更新本地物理内存。
  * [关键逻辑] 执行严格的版本判定（is_next_version）：顺序包直接 memcpy，版本断层包则强制失效（Invalidate）本地映射。
  * [后果] 实现了 MESI 协议的远程写入动作。它保证了即便在乱序网络下，本地 vCPU 看到的内存也是单调递增的一致性状态。
  */
@@ -12763,7 +12842,13 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
             }
             
             // 将本地版本置 0，确保下次 Pull 回来的数据（无论版本多少）都能成功覆盖
-            set_local_page_version(gpa, 0); 
+            set_local_page_version(gpa, 0);
+
+            // [FIX-F3] KVM 模式下 mprotect(PROT_NONE) 被跳过，guest 不会触发 SIGSEGV，
+            // 必须主动拉取最新页面，否则 guest 永远读到 stale 数据。
+            if (kvm_enabled()) {
+                kvm_proactive_page_fetch(gpa);
+            }
         }
     }
     // --- 分支 2: 全页推送 / 强制同步 ---
@@ -12931,8 +13016,71 @@ void wvm_set_ttl_interval(int ms) {
     // 留空：不再启动 V28 的收割者线程
 }
 
-void wvm_register_volatile_ram(uint64_t gpa, uint64_t size) { 
+void wvm_register_volatile_ram(uint64_t gpa, uint64_t size) {
     // 留空：不再维护易失性区域链表
+}
+
+/* [FIX-F3] KVM 主动页面拉取：KVM 模式下 mprotect(PROT_NONE) 不可用的替代方案。
+ *
+ * 背景：TCG 模式通过 mprotect(PROT_NONE) + SIGSEGV 触发缺页拉取。
+ * KVM 模式下 PROT_NONE 会导致 EPT violation 风暴，所以所有 mprotect(PROT_NONE) 调用
+ * 都被 !kvm_enabled() 守卫跳过。
+ *
+ * 问题：当版本断层发生时，set_local_page_version(gpa, 0) 被调用，但因为没有
+ * mprotect(PROT_NONE)，guest 不会触发缺页，旧数据会被永久读取。
+ *
+ * 修复：在 KVM 模式下检测到版本断层时，主动通过 IPC 向 Master 发起同步页面拉取，
+ * 将最新数据写入 HVA 并更新版本号。不依赖 guest 触发的 SIGSEGV。
+ */
+static void kvm_proactive_page_fetch(uint64_t gpa) {
+    if (!g_ram_base) return;
+
+    /* 使用线程局部 IPC socket (与 request_page_sync Master 路径相同) */
+    if (!g_is_slave) {
+        /* Master 模式：通过本地 IPC socket 请求 */
+        if (t_com_sock == -1) {
+            t_com_sock = internal_connect_master();
+            if (t_com_sock < 0) {
+                fprintf(stderr, "[FIX-F3] KVM proactive fetch: IPC connect failed for GPA 0x%"
+                        PRIx64 "\n", gpa);
+                return;
+            }
+        }
+
+        struct wvm_ipc_fault_req req = { .gpa = gpa, .len = 4096, .vcpu_id = 0 };
+        struct wvm_ipc_header_t ipc_hdr = { .type = WVM_IPC_TYPE_MEM_FAULT, .len = sizeof(req) };
+        struct iovec iov[2] = { {&ipc_hdr, sizeof(ipc_hdr)}, {&req, sizeof(req)} };
+        struct msghdr msg = { .msg_iov = iov, .msg_iovlen = 2 };
+
+        if (sendmsg(t_com_sock, &msg, 0) < 0) {
+            /* 连接断开，关闭以便下次重建 */
+            close(t_com_sock);
+            t_com_sock = -1;
+            fprintf(stderr, "[FIX-F3] KVM proactive fetch: IPC send failed for GPA 0x%"
+                    PRIx64 "\n", gpa);
+            return;
+        }
+
+        struct wvm_ipc_fault_ack ack;
+        if (read_exact(t_com_sock, &ack, sizeof(ack)) < 0) {
+            close(t_com_sock);
+            t_com_sock = -1;
+            fprintf(stderr, "[FIX-F3] KVM proactive fetch: IPC recv failed for GPA 0x%"
+                    PRIx64 "\n", gpa);
+            return;
+        }
+
+        if (ack.status == 0) {
+            set_local_page_version(gpa, ack.version);
+        }
+    } else {
+        /* Slave 模式：复用 request_page_sync 的 UDP 路径。
+         * 由于 request_page_sync 接受 fault_addr (HVA) 参数，
+         * 这里构造 HVA 并直接调用它。
+         */
+        uintptr_t fault_addr = (uintptr_t)g_ram_base + gpa;
+        request_page_sync(fault_addr, false);
+    }
 }
 
 // =============================================================
@@ -13605,6 +13753,10 @@ static void *mem_push_listener_thread(void *arg) {
                         mprotect(hva, 4096, PROT_NONE);
                     }
                     set_local_page_version(stale_gpa, 0);
+                    // [FIX-F3] KVM 模式下主动拉取过期重排缓冲区中的页面
+                    if (kvm_enabled()) {
+                        kvm_proactive_page_fetch(stale_gpa);
+                    }
                 }
             }
             pthread_spin_unlock(&g_reorder_lock);
@@ -13668,6 +13820,10 @@ static void *mem_push_listener_thread(void *arg) {
                                 mprotect((uint8_t*)g_ram_base + gpa, 4096, PROT_NONE);
                             }
                             set_local_page_version(gpa, 0);
+                            // [FIX-F3] KVM 下主动拉取，替代 SIGSEGV 驱动的缺页
+                            if (kvm_enabled()) {
+                                kvm_proactive_page_fetch(gpa);
+                            }
                         }
                     }
                 } 
@@ -14272,6 +14428,10 @@ index 000000000..2c90c9447
 +    bool sync_thread_running;
 +    QemuThread net_thread;
 +    int master_sock;
++
++    /* [FIX-F1] Block IO 持久连接：避免每次 IO 都 connect()+pthread_create() 导致线程爆炸 */
++    int block_io_sock;               /* 持久 IPC 连接，-1 = 未初始化 */
++    QemuMutex block_io_lock;         /* 序列化 Block IO 请求（同一时刻只允许一个 IO 在途） */
 +} WaveVMAccelState;
 +
 +extern int g_wvm_local_split;
@@ -16099,3 +16259,89 @@ static int internal_push(int fd, uint32_t slave_id, void *data, int len) {
 |------|---------|--------|
 | `dirty_sync_sender_thread` | MSG_MEM_WRITE | `wh->target_id = htonl(WVM_NODE_AUTO_ROUTE);` |
 
+## 2026-03-07 Gemini 第三轮审计 — 3 Fatal 修复记录
+
+### 背景
+
+Gemini 第三轮审计在 V31 代码中识别出 3 个致命级架构缺陷（均为前两轮未触及的深层问题）。本次修复涉及 5 个文件，+189/-29 行。
+
+| # | 级别 | 简称 | 根因 |
+|---|------|------|------|
+| F1 | **FATAL** | Thread Bomb | 每次 Block IO 创建新 IPC 连接 → Master 每次 accept + pthread_create → 5000 IOPS 下秒创 5000 线程 |
+| F2 | **FATAL** | KVM Dirty Page Loss | `KVM_GET_DIRTY_LOG` 原子清除硬件 dirty bit 后，MPSC 队列满时 `continue` 静默丢弃 → 页面永久丢失 |
+| F3 | **FATAL** | KVM Mode B Consistency Hole | 版本断层时 `mprotect(PROT_NONE)` 被 KVM 守卫跳过，但无替代拉取机制 → Guest 永久读 stale 数据 |
+
+### 修复 F1：Thread Bomb — Block IO 线程爆炸
+
+**问题根因**：
+
+- `wavevm-all.c` 的 `wvm_send_ipc_block_io()` 每次调用 `connect_to_master_helper()` 创建新 Unix socket
+- `main_wrapper.c` 的 `accept()` 循环对每个连接无条件 `pthread_create()`，仅在 `client_handler` 内部检查 `MAX_QEMU_CLIENTS=8`，但线程已创建
+- 5000 IOPS → 5000 threads/sec → `g_qemu_clients[8]` 溢出 + 40GB/sec 虚拟地址空间消耗
+
+**修复方案（持久连接 + 防御性拒绝）**：
+
+**修改文件 1**：`wavevm-qemu/accel/wavevm/wavevm-accel.h`
+
+- `WaveVMAccelState` 新增 `block_io_sock`（持久 IPC fd）+ `block_io_lock`（QemuMutex）
+
+**修改文件 2**：`wavevm-qemu/accel/wavevm/wavevm-all.c`（2 处）
+
+| 函数 | 修复内容 |
+|------|---------|
+| `wavevm_init_machine_user` | 初始化 `s->block_io_sock = -1` + `qemu_mutex_init(&s->block_io_lock)` |
+| `wvm_send_ipc_block_io` | 全函数重写：改为持久连接 + mutex 序列化 + 断线重连 |
+
+**修改文件 3**：`master_core/main_wrapper.c`（1 处）
+
+| 函数 | 修复内容 |
+|------|---------|
+| `main()` accept 循环 | `accept()` 后立即检查 `g_client_count >= MAX_QEMU_CLIENTS`，超限 `close(client_fd)` 拒绝 |
+
+### 修复 F2：KVM Dirty Page Data Loss — 脏页永久丢失
+
+**问题根因**：
+
+- `KVM_GET_DIRTY_LOG` ioctl 是**破坏性读取**：返回 dirty bitmap 的同时**原子清除**硬件 dirty bit
+- `slave_hybrid.c:handle_kvm_run_stateless()` 遍历 bitmap 入队时，若 `MPSC_QUEUE_SIZE=1024` 已满，执行 `continue` 丢弃
+- 丢弃的页面硬件 dirty bit 已被清除，下次 `KVM_GET_DIRTY_LOG` 不会再返回 → **数据永久丢失**
+- `malloc` 失败同理
+
+**修复方案（紧急内联发送 + 扩容）**：
+
+**修改文件**：`slave_daemon/slave_hybrid.c`（3 处）
+
+| 修改点 | 修复内容 |
+|--------|---------|
+| `MPSC_QUEUE_SIZE` | 1024 → 8192，减少溢出概率 |
+| 新增 `emergency_send_dirty_page()` | Thread-Local UDP socket 阻塞式直发，作为队列满/malloc 失败的安全网 |
+| `handle_kvm_run_stateless` 入队路径 | 队列满和 malloc 失败时调用 `emergency_send_dirty_page(gpa, hva)` 而非静默 `continue` |
+
+### 修复 F3：KVM Mode B Consistency Hole — 版本断层下的静默数据腐败
+
+**问题根因**：
+
+- TCG 模式下版本断层恢复链：`set_local_page_version(gpa, 0)` → `mprotect(PROT_NONE)` → Guest 下次访问触发 `SIGSEGV` → `request_page_sync()` 拉取正确页面
+- KVM 模式下 `mprotect(PROT_NONE)` 会导致 EPT violation 风暴（Guest OS VM Exit 暴涨），所有调用点被 `!kvm_enabled()` 守卫跳过
+- 跳过后版本已置 0，但无替代拉取机制 → Guest 永久读 stale 数据
+- 后续 Diff 推送可能在 stale base 上应用 → **静默内存腐败** → Guest 内核 Panic
+
+**修复方案（KVM 主动拉取）**：
+
+**修改文件**：`wavevm-qemu/accel/wavevm/wavevm-user-mem.c`（5 处）
+
+| 修改点 | 修复内容 |
+|--------|---------|
+| 新增前向声明 | `static void kvm_proactive_page_fetch(uint64_t gpa);` + `static int request_page_sync(...)` |
+| 新增 `kvm_proactive_page_fetch()` | KVM 下通过 IPC（Master）/ UDP（Slave）主动拉取页面，替代 SIGSEGV 驱动的被动拉取 |
+| `wvm_apply_remote_push` Gap 分支 | `set_local_page_version(gpa, 0)` 后追加 `if (kvm_enabled()) kvm_proactive_page_fetch(gpa)` |
+| Listener 严重乱序分支 | 同上 |
+| Reorder buffer 200ms 过期清理 | 同上 |
+
+### Guest 侧与 vNUMA/GPU DMA 影响评估
+
+三项修复均不影响 vNUMA 绑定和 GPU DMA 路径：
+
+- **F1**：纯 IPC socket 层改动，不涉及内存分配或 IOMMU 映射
+- **F2**：`emergency_send_dirty_page` 使用 `wvm_gpa_to_hva(gpa)` 取得的 HVA 指针，VFIO IOMMU 映射关系不变
+- **F3**：`kvm_proactive_page_fetch` 仅影响 CPU 侧 EPT 管理的内存一致性。GPU DMA 写入走 VFIO 物理直通路径（`enable_bus_master` + IOMMU），不经过 `mprotect` 版本追踪机制
