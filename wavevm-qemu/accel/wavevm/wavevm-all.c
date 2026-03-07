@@ -349,6 +349,12 @@ static void *wavevm_slave_net_thread(void *arg) {
             if (len >= sizeof(struct wvm_header)) {
                 struct wvm_header *hdr = (struct wvm_header *)buf;
                 void *payload = buf + sizeof(struct wvm_header);
+
+                // [安全] Magic 校验，丢弃非 WaveVM 包
+                if (ntohl(hdr->magic) != WVM_MAGIC) {
+                    continue;
+                }
+
                 // [字节序] 从网络字节序解码到主机序
                 uint16_t msg_type = ntohs(hdr->msg_type);
                 uint16_t pkt_payload_len = ntohs(hdr->payload_len);
@@ -389,6 +395,7 @@ static void *wavevm_slave_net_thread(void *arg) {
                 }
                 // 3. 远程执行 (Master -> Slave)
                 else if (msg_type == MSG_VCPU_RUN) {
+                    if (actual_payload < (int)sizeof(struct wvm_ipc_cpu_run_req)) continue;
                     struct wvm_ipc_cpu_run_req *req = (struct wvm_ipc_cpu_run_req *)payload;
                     qemu_mutex_lock_iothread(); // TCG 必须持有 BQL
                     CPUState *cpu = first_cpu;
