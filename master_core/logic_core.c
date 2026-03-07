@@ -780,7 +780,8 @@ void* broadcast_worker_thread(void* arg) {
                 hdr->magic = htonl(WVM_MAGIC);
                 hdr->msg_type = htons(task_copy.msg_type);
                 hdr->payload_len = htons(task_copy.len);
-                hdr->slave_id = htonl(task_copy.target_id);
+                hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+                hdr->target_id = htonl(task_copy.target_id);
                 hdr->req_id = 0;
                 // 全页推送走慢车道，Diff 走快车道
                 hdr->qos_level = (task_copy.msg_type == MSG_PAGE_PUSH_FULL) ? 0 : 1;

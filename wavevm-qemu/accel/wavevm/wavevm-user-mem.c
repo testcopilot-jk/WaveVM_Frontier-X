@@ -1155,6 +1155,8 @@ void wvm_set_client_sync_mode(int batch_size, int auto_tune) {
  * [后果] 确保了分布式内存的“强顺序一致性”。它防止了在执行关键 IO 指令（如 GPU 命令提交）时，内存数据尚未同步完成的情况。
  */
 static long wait_for_directory_ack_safe(void) {
+    // Master TCG 模式走 IPC，本地不需要网络栅栏
+    if (!g_is_slave) return 100;
     if (g_fd_push < 0) return -1;
 
     // 1. 准备发送 PING
@@ -1163,6 +1165,7 @@ static long wait_for_directory_ack_safe(void) {
     hdr.magic = htonl(WVM_MAGIC);
     hdr.msg_type = htons(MSG_PING);
     hdr.slave_id = htonl(g_slave_id);
+    hdr.target_id = htonl(WVM_NODE_AUTO_ROUTE);
     hdr.req_id = WVM_HTONLL(SYNC_MAGIC); // 特殊标记
 
     // 2. 【关键】先加锁，重置状态位

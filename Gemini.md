@@ -3881,7 +3881,8 @@ void* broadcast_worker_thread(void* arg) {
                 hdr->magic = htonl(WVM_MAGIC);
                 hdr->msg_type = htons(task_copy.msg_type);
                 hdr->payload_len = htons(task_copy.len);
-                hdr->slave_id = htonl(task_copy.target_id);
+                hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+                hdr->target_id = htonl(task_copy.target_id);
                 hdr->req_id = 0;
                 // 全页推送走慢车道，Diff 走快车道
                 hdr->qos_level = (task_copy.msg_type == MSG_PAGE_PUSH_FULL) ? 0 : 1;
@@ -10345,7 +10346,8 @@ void wvm_vfio_poll_irqs(int master_sock, struct sockaddr_in *master_addr) {
                 hdr.magic = htonl(WVM_MAGIC);
                 hdr.msg_type = htons(MSG_VFIO_IRQ);
                 hdr.payload_len = 0;
-                hdr.slave_id = 0; 
+                hdr.slave_id = htonl(WVM_NODE_AUTO_ROUTE);
+                hdr.target_id = htonl(WVM_NODE_AUTO_ROUTE);
                 hdr.req_id = 0;
                 hdr.qos_level = 1; 
                 
@@ -13686,6 +13688,8 @@ void wvm_set_client_sync_mode(int batch_size, int auto_tune) {
  * [后果] 确保了分布式内存的“强顺序一致性”。它防止了在执行关键 IO 指令（如 GPU 命令提交）时，内存数据尚未同步完成的情况。
  */
 static long wait_for_directory_ack_safe(void) {
+    // Master TCG 模式走 IPC，本地不需要网络栅栏
+    if (!g_is_slave) return 100;
     if (g_fd_push < 0) return -1;
 
     // 1. 准备发送 PING
@@ -13694,6 +13698,7 @@ static long wait_for_directory_ack_safe(void) {
     hdr.magic = htonl(WVM_MAGIC);
     hdr.msg_type = htons(MSG_PING);
     hdr.slave_id = htonl(g_slave_id);
+    hdr.target_id = htonl(WVM_NODE_AUTO_ROUTE);
     hdr.req_id = WVM_HTONLL(SYNC_MAGIC); // 特殊标记
 
     // 2. 【关键】先加锁，重置状态位

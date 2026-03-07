@@ -372,7 +372,8 @@ void wvm_vfio_poll_irqs(int master_sock, struct sockaddr_in *master_addr) {
                 hdr.magic = htonl(WVM_MAGIC);
                 hdr.msg_type = htons(MSG_VFIO_IRQ);
                 hdr.payload_len = 0;
-                hdr.slave_id = 0; 
+                hdr.slave_id = htonl(WVM_NODE_AUTO_ROUTE);
+                hdr.target_id = htonl(WVM_NODE_AUTO_ROUTE);
                 hdr.req_id = 0;
                 hdr.qos_level = 1; 
                 
