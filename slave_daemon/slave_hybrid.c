@@ -1131,6 +1131,7 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
     // [FIX] 验证 count*512 不超过实际 payload 数据（防越界读）
     if (hdr->msg_type == MSG_BLOCK_WRITE) {
         uint16_t actual_pl = hdr->payload_len; // 已被 ntoh_header 转为 host order
+        if (actual_pl < sizeof(struct wvm_block_payload)) return; // 防无符号下溢
         if (data_len > actual_pl - sizeof(struct wvm_block_payload)) return;
     }
     

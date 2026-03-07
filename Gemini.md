@@ -9515,6 +9515,7 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
     // [FIX] 验证 count*512 不超过实际 payload 数据（防越界读）
     if (hdr->msg_type == MSG_BLOCK_WRITE) {
         uint16_t actual_pl = hdr->payload_len; // 已被 ntoh_header 转为 host order
+        if (actual_pl < sizeof(struct wvm_block_payload)) return; // 防无符号下溢
         if (data_len > actual_pl - sizeof(struct wvm_block_payload)) return;
     }
 
@@ -11503,6 +11504,16 @@ static void wavevm_region_add(MemoryListener *listener, MemoryRegionSection *sec
         if (wavevm_user_mode_enabled() && start_gpa == 0 && !g_user_mem_inited) {
             wavevm_user_mem_init(hva, g_user_ram_size_hint ? g_user_ram_size_hint : size);
             g_user_mem_inited = true;
+        }
+
+        /* [FIX] Mode A: 每次新增 RAM block 都实时同步给内核模块，
+         * 修复 wavevm_init_machine 中 wavevm_sync_topology 先于 RAM 创建的时序问题。
+         * 若不实时同步，wvm_fault_handler 的 g_mem_slots 为空 → VM_FAULT_SIGBUS → exit=17。 */
+        if (!wavevm_user_mode_enabled()) {
+            WaveVMAccelState *ws = WAVEVM_ACCEL(current_machine->accelerator);
+            if (ws->dev_fd >= 0) {
+                wavevm_sync_topology(ws->dev_fd);
+            }
         }
     }
 }

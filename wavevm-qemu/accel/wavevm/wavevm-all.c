@@ -725,6 +725,16 @@ static void wavevm_region_add(MemoryListener *listener, MemoryRegionSection *sec
             wavevm_user_mem_init(hva, g_user_ram_size_hint ? g_user_ram_size_hint : size);
             g_user_mem_inited = true;
         }
+
+        /* [FIX] Mode A: 每次新增 RAM block 都实时同步给内核模块，
+         * 修复 wavevm_init_machine 中 wavevm_sync_topology 先于 RAM 创建的时序问题。
+         * 若不实时同步，wvm_fault_handler 的 g_mem_slots 为空 → VM_FAULT_SIGBUS → exit=17。 */
+        if (!wavevm_user_mode_enabled()) {
+            WaveVMAccelState *ws = WAVEVM_ACCEL(current_machine->accelerator);
+            if (ws->dev_fd >= 0) {
+                wavevm_sync_topology(ws->dev_fd);
+            }
+        }
     }
 }
 
