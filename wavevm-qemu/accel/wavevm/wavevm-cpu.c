@@ -542,8 +542,16 @@ static void *wavevm_cpu_thread_fn(void *arg) {
                 
                 struct kvm_run *run = cpu->kvm_run;
                 switch (run->exit_reason) {
-                    case KVM_EXIT_IO: wavevm_handle_io(cpu); break;
-                    case KVM_EXIT_MMIO: wavevm_handle_mmio(cpu); break;
+                    case KVM_EXIT_IO:
+                        qemu_mutex_lock_iothread();
+                        wavevm_handle_io(cpu);
+                        qemu_mutex_unlock_iothread();
+                        break;
+                    case KVM_EXIT_MMIO:
+                        qemu_mutex_lock_iothread();
+                        wavevm_handle_mmio(cpu);
+                        qemu_mutex_unlock_iothread();
+                        break;
                     case KVM_EXIT_SHUTDOWN: 
                         qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
                         goto out;

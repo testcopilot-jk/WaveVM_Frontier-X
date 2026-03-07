@@ -360,6 +360,12 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
             if (gpa + r_len <= g_ram_size) {
                 mprotect((uint8_t*)g_ram_base + gpa, r_len, PROT_READ | PROT_WRITE);
                 memset((uint8_t*)g_ram_base + gpa, val, r_len);
+                // [FIX] 同步 Prophet 版本号，否则后续 diff 引擎认为该页没变过，
+                //       导致远端节点版本断层无法收敛。
+                for (uint64_t pg = gpa & ~0xFFFULL; pg < gpa + r_len; pg += 4096) {
+                    uint64_t v = get_local_page_version(pg);
+                    set_local_page_version(pg, v + 1);
+                }
                 // tb_flush 在 wavevm-all.c 的 IPC 处理路径中已执行，此处不重复
             }
         }
@@ -988,16 +994,27 @@ static void *diff_harvester_thread_fn(void *arg) {
         usleep(1000); // 1ms 采集周期
 
         // KVM 模式：基于脏页日志收割，不依赖 SIGSEGV/PROT_NONE。
+        // [FIX] 遍历 g_mem_blocks 而非 flat 0~g_ram_size，
+        //       并用 qemu_ram_addr_from_host 将 HVA 转为正确的 ram_addr_t，
+        //       修复 PCI hole (3G-4G) 导致的 gpa != ram_addr_t 问题。
         if (kvm_enabled()) {
-            for (uint64_t gpa = 0; gpa + 4096 <= g_ram_size; gpa += 4096) {
-                if (!cpu_physical_memory_test_and_clear_dirty(gpa, 4096, DIRTY_MEMORY_MIGRATION)) {
-                    continue;
-                }
+            for (int bi = 0; bi < g_block_count; bi++) {
+                GVMRamBlock *blk = &g_mem_blocks[bi];
+                /* 将 block 起始 HVA 转为 ram_addr_t 基址（一次性，避免每页调用） */
+                ram_addr_t ram_base = qemu_ram_addr_from_host((void *)blk->hva_start);
+                if (ram_base == RAM_ADDR_INVALID) continue;
 
-                void *hva = (uint8_t *)g_ram_base + gpa;
-                uint64_t ver = get_local_page_version(gpa);
-                add_to_aggregator(gpa, ver + 1, 0, 4096, hva, 0);
-                set_local_page_version(gpa, ver + 1);
+                for (uint64_t off = 0; off + 4096 <= blk->size; off += 4096) {
+                    ram_addr_t ra = ram_base + off;
+                    if (!cpu_physical_memory_test_and_clear_dirty(ra, 4096, DIRTY_MEMORY_MIGRATION)) {
+                        continue;
+                    }
+                    uint64_t gpa = blk->gpa_start + off;
+                    void *hva = (void *)(blk->hva_start + off);
+                    uint64_t ver = get_local_page_version(gpa);
+                    add_to_aggregator(gpa, ver + 1, 0, 4096, hva, 0);
+                    set_local_page_version(gpa, ver + 1);
+                }
             }
             flush_aggregator();
             continue;
