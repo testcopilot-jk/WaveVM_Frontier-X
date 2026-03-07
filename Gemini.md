@@ -10866,36 +10866,39 @@ static void *wavevm_slave_net_thread(void *arg) {
             if (len >= sizeof(struct wvm_header)) {
                 struct wvm_header *hdr = (struct wvm_header *)buf;
                 void *payload = buf + sizeof(struct wvm_header);
+                // [字节序] 从网络字节序解码到主机序
+                uint16_t msg_type = ntohs(hdr->msg_type);
+                uint16_t pkt_payload_len = ntohs(hdr->payload_len);
 
                 // 1. 内存写 (Master -> Slave)
-                if (hdr->msg_type == MSG_MEM_WRITE) {
-                    qemu_mutex_lock_iothread(); 
-                    if (hdr->payload_len > 8) {
-                        uint64_t gpa = *(uint64_t *)payload;
-                        uint32_t data_len = hdr->payload_len - 8;
+                if (msg_type == MSG_MEM_WRITE) {
+                    qemu_mutex_lock_iothread();
+                    if (pkt_payload_len > 8) {
+                        uint64_t gpa = WVM_NTOHLL(*(uint64_t *)payload);
+                        uint32_t data_len = pkt_payload_len - 8;
                         void *data_ptr = (uint8_t *)payload + 8;
                         cpu_physical_memory_write(gpa, data_ptr, data_len);
                     }
                     qemu_mutex_unlock_iothread();
-                    hdr->msg_type = MSG_MEM_ACK;
+                    hdr->msg_type = htons(MSG_MEM_ACK);
                     hdr->payload_len = 0;
-                    sendto(s->master_sock, buf, sizeof(struct wvm_header), 0, 
+                    sendto(s->master_sock, buf, sizeof(struct wvm_header), 0,
                           (struct sockaddr *)&addrs[i], sizeof(struct sockaddr_in));
                 }
                 // 2. 内存读 (Master -> Slave)
-                else if (hdr->msg_type == MSG_MEM_READ) {
-                    uint64_t gpa = *(uint64_t *)payload;
-                    uint32_t read_len = 4096; 
+                else if (msg_type == MSG_MEM_READ) {
+                    uint64_t gpa = WVM_NTOHLL(*(uint64_t *)payload);
+                    uint32_t read_len = 4096;
                     if (sizeof(struct wvm_header) + read_len <= MAX_PKT_SIZE) {
                         cpu_physical_memory_read(gpa, payload, read_len);
-                        hdr->msg_type = MSG_MEM_ACK;
-                        hdr->payload_len = read_len;
-                        sendto(s->master_sock, buf, sizeof(struct wvm_header) + read_len, 0, 
+                        hdr->msg_type = htons(MSG_MEM_ACK);
+                        hdr->payload_len = htons(read_len);
+                        sendto(s->master_sock, buf, sizeof(struct wvm_header) + read_len, 0,
                               (struct sockaddr *)&addrs[i], sizeof(struct sockaddr_in));
                     }
                 }
                 // 3. 远程执行 (Master -> Slave)
-                else if (hdr->msg_type == MSG_VCPU_RUN) {
+                else if (msg_type == MSG_VCPU_RUN) {
                     struct wvm_ipc_cpu_run_req *req = (struct wvm_ipc_cpu_run_req *)payload;
                     qemu_mutex_lock_iothread(); // TCG 必须持有 BQL
                     CPUState *cpu = first_cpu;
@@ -11053,7 +11056,7 @@ static void *wavevm_slave_net_thread(void *arg) {
                     qemu_mutex_unlock_iothread();
                     sendto(s->master_sock, buf, msgs[i].msg_len, 0, 
                           (struct sockaddr *)&addrs[i], sizeof(struct sockaddr_in));
-                } else if (hdr->msg_type == MSG_PING) {
+                } else if (msg_type == MSG_PING) {
                     // [FIX] 透传 PING 给 Gateway/Master，由真正的 Owner 回复 ACK
                     sendto(s->master_sock, buf, sizeof(struct wvm_header), 0, 
                           (struct sockaddr *)&addrs[i], sizeof(struct sockaddr_in));
