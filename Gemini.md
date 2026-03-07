@@ -9311,15 +9311,16 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
         hdr->magic = htonl(WVM_MAGIC);
         hdr->slave_id = htonl(hdr->slave_id);
         hdr->target_id = htonl(hdr->target_id);
+        hdr->req_id = WVM_HTONLL(hdr->req_id);
         if (written != data_len) {
             hdr->flags |= WVM_FLAG_ERROR;
         }
-
+        
         // [FIX] 发送前必须重算 CRC32
         hdr->crc32 = 0;
         hdr->crc32 = htonl(calculate_crc32(hdr, sizeof(*hdr)));
         sendto(sockfd, hdr, sizeof(*hdr), 0, (struct sockaddr*)client, sizeof(*client));
-
+    
     } else if (hdr->msg_type == MSG_BLOCK_READ) {
         size_t resp_len = sizeof(struct wvm_header) + sizeof(struct wvm_block_payload) + data_len;
         uint8_t *tx = malloc(resp_len);
@@ -9331,6 +9332,7 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
             rh->magic = htonl(WVM_MAGIC);
             rh->slave_id = htonl(hdr->slave_id);
             rh->target_id = htonl(hdr->target_id);
+            rh->req_id = WVM_HTONLL(hdr->req_id);
 
             struct wvm_block_payload *rp = (struct wvm_block_payload*)(tx + sizeof(*hdr));
             rp->lba = blk->lba;
@@ -9352,6 +9354,7 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
         hdr->magic = htonl(WVM_MAGIC);
         hdr->slave_id = htonl(hdr->slave_id);
         hdr->target_id = htonl(hdr->target_id);
+        hdr->req_id = WVM_HTONLL(hdr->req_id);
         if (ret < 0) hdr->flags |= WVM_FLAG_ERROR;
 
         // [FIX] 发送前必须重算 CRC32
@@ -10853,6 +10856,21 @@ static void *wavevm_kernel_irq_thread(void *arg) {
     return NULL;
 }
 
+// Validate GPA range against actual QEMU RAM mapping (handles discontiguous RAM segments).
+static bool wavevm_gpa_range_valid(uint64_t gpa, uint32_t len, bool is_write)
+{
+    hwaddr map_len = len;
+    void *host_addr = cpu_physical_memory_map(gpa, &map_len, is_write ? 1 : 0);
+    if (!host_addr || map_len < len) {
+        if (host_addr) {
+            cpu_physical_memory_unmap(host_addr, map_len, is_write ? 1 : 0, 0);
+        }
+        return false;
+    }
+    cpu_physical_memory_unmap(host_addr, map_len, is_write ? 1 : 0, 0);
+    return true;
+}
+
 // Slave 网络处理线程 (支持 KVM 和 TCG 双模)
 static void *wavevm_slave_net_thread(void *arg) {
     WaveVMAccelState *s = (WaveVMAccelState *)arg;
@@ -10915,11 +10933,7 @@ static void *wavevm_slave_net_thread(void *arg) {
                         uint64_t gpa = WVM_NTOHLL(*(uint64_t *)payload);
                         uint32_t data_len = pkt_payload_len - 8;
                         void *data_ptr = (uint8_t *)payload + 8;
-                        bool gpa_ok = true;
-                        if (g_primary_ram_size) {
-                            gpa_ok = (gpa < g_primary_ram_size) &&
-                                     (data_len <= g_primary_ram_size - gpa);
-                        }
+                        bool gpa_ok = wavevm_gpa_range_valid(gpa, data_len, true);
                         if (gpa_ok) {
                             cpu_physical_memory_write(gpa, data_ptr, data_len);
                         }
@@ -10935,11 +10949,7 @@ static void *wavevm_slave_net_thread(void *arg) {
                     if (pkt_payload_len < 8) continue; // 至少需要 8 字节的 gpa
                     uint64_t gpa = WVM_NTOHLL(*(uint64_t *)payload);
                     uint32_t read_len = 4096;
-                    bool gpa_ok = true;
-                    if (g_primary_ram_size) {
-                        gpa_ok = (gpa < g_primary_ram_size) &&
-                                 (read_len <= g_primary_ram_size - gpa);
-                    }
+                    bool gpa_ok = wavevm_gpa_range_valid(gpa, read_len, false);
                     if (!gpa_ok) {
                         hdr->msg_type = htons(MSG_MEM_ACK);
                         hdr->payload_len = 0;

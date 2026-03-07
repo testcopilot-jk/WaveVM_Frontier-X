@@ -1045,6 +1045,7 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
         hdr->magic = htonl(WVM_MAGIC);
         hdr->slave_id = htonl(hdr->slave_id);
         hdr->target_id = htonl(hdr->target_id);
+        hdr->req_id = WVM_HTONLL(hdr->req_id);
         if (written != data_len) {
             hdr->flags |= WVM_FLAG_ERROR;
         }
@@ -1065,6 +1066,7 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
             rh->magic = htonl(WVM_MAGIC);
             rh->slave_id = htonl(hdr->slave_id);
             rh->target_id = htonl(hdr->target_id);
+            rh->req_id = WVM_HTONLL(hdr->req_id);
 
             struct wvm_block_payload *rp = (struct wvm_block_payload*)(tx + sizeof(*hdr));
             rp->lba = blk->lba;
@@ -1086,6 +1088,7 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
         hdr->magic = htonl(WVM_MAGIC);
         hdr->slave_id = htonl(hdr->slave_id);
         hdr->target_id = htonl(hdr->target_id);
+        hdr->req_id = WVM_HTONLL(hdr->req_id);
         if (ret < 0) hdr->flags |= WVM_FLAG_ERROR;
 
         // [FIX] 发送前必须重算 CRC32
