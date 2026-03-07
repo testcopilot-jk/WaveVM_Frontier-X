@@ -994,9 +994,12 @@ static void* rx_thread_loop(void *arg) {
                             // 这里的 payload_len 是网络包里的长度，需要传给 IPC
                             broadcast_push_to_qemu(msg_type, payload, p_len);
                         }
-                        else if (msg_type == MSG_MEM_READ) { 
-                            handle_slave_read(sockfd, &src_addrs[i], hdr); 
-                        } 
+                        /* [FIX] MSG_MEM_READ 不再在此拦截。
+                         * 旧代码调用 handle_slave_read 从本地 g_shm_ptr 读取，但 Mode B 下
+                         * g_shm_ptr 与 QEMU 的 g_ram_base 不实时同步（自己不接收自己的 PUSH），
+                         * 会返回 stale data 并携带新版本号，导致全网一致性崩溃。
+                         * 现在让它落入最后的 else { wvm_logic_process_packet } 由 Directory 正确处理。
+                         */
                         else if (msg_type == MSG_VFIO_IRQ) {
                             // [FIX] 收到中断包，必须通过 IPC 转发给本地 QEMU
                             broadcast_irq_to_qemu();

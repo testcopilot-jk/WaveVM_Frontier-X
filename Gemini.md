@@ -6383,10 +6383,12 @@ static int __init wavevm_init(void) {
     init_rwsem(&g_mapping_sem);
 
     /*
-     * Use online CPU count for sizing/initialization to keep module load feasible
-     * on kernels with very large CONFIG_NR_CPUS.
+     * [FIX] 必须用 nr_cpu_ids 而非 num_online_cpus()。
+     * get_cpu() 返回的是逻辑 CPU ID（可能不连续），例如 CPU 0,1,4,5 在线时
+     * num_online_cpus()=4 但 get_cpu() 可能返回 5，导致 combined_idx 越界。
+     * nr_cpu_ids 是内核保证的最大 CPU ID + 1，覆盖所有可能的 get_cpu() 返回值。
      */
-    g_req_ctx_count = (size_t)num_online_cpus() * (size_t)MAX_IDS_PER_CPU;
+    g_req_ctx_count = (size_t)nr_cpu_ids * (size_t)MAX_IDS_PER_CPU;
     g_req_ctx = vzalloc(sizeof(struct req_ctx_t) * g_req_ctx_count);
     if (!g_req_ctx) return -ENOMEM;
     for (size_t i = 0; i < g_req_ctx_count; i++) init_waitqueue_head(&g_req_ctx[i].wq);
@@ -7479,9 +7481,12 @@ static void* rx_thread_loop(void *arg) {
                             // 这里的 payload_len 是网络包里的长度，需要传给 IPC
                             broadcast_push_to_qemu(msg_type, payload, p_len);
                         }
-                        else if (msg_type == MSG_MEM_READ) { 
-                            handle_slave_read(sockfd, &src_addrs[i], hdr); 
-                        } 
+                        /* [FIX] MSG_MEM_READ 不再在此拦截。
+                         * 旧代码调用 handle_slave_read 从本地 g_shm_ptr 读取，但 Mode B 下
+                         * g_shm_ptr 与 QEMU 的 g_ram_base 不实时同步（自己不接收自己的 PUSH），
+                         * 会返回 stale data 并携带新版本号，导致全网一致性崩溃。
+                         * 现在让它落入最后的 else { wvm_logic_process_packet } 由 Directory 正确处理。
+                         */
                         else if (msg_type == MSG_VFIO_IRQ) {
                             // [FIX] 收到中断包，必须通过 IPC 转发给本地 QEMU
                             broadcast_irq_to_qemu();
@@ -9246,15 +9251,6 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
                         uint8_t *hva = wvm_gpa_to_hva(gpa);
                         if (!hva) continue;
 
-                        uint32_t next_tail = (g_mpsc_tail + 1) % MPSC_QUEUE_SIZE;
-                        if (next_tail == g_mpsc_head) {
-                            // [FIX-F2] 队列已满：绝不丢弃！KVM_GET_DIRTY_LOG 已清除硬件 dirty bit，
-                            // 如果这里 continue，该页永远不会再被标记为 dirty，数据永久丢失。
-                            // 改为紧急内联发送（阻塞式），牺牲延迟保数据。
-                            emergency_send_dirty_page(gpa, hva);
-                            continue;
-                        }
-
                         dirty_page_task_t* task = malloc(sizeof(dirty_page_task_t));
                         if (!task) {
                             // [FIX-F2] malloc 失败同理：不能丢弃已清除 dirty bit 的页面
@@ -9265,7 +9261,20 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
                         task->gpa = gpa;
                         memcpy(task->data, hva, 4096);
 
+                        /* [FIX] next_tail 计算和满队检查必须在锁内。
+                         * 旧代码在锁外读 g_mpsc_tail 算 next_tail，多线程下
+                         * 两个线程会算出相同的 next_tail 并覆盖同一个槽位。
+                         * 当前 total_threads=1 不会触发，但扩展并发后必崩。
+                         */
                         pthread_mutex_lock(&g_mpsc_lock);
+                        uint32_t next_tail = (g_mpsc_tail + 1) % MPSC_QUEUE_SIZE;
+                        if (next_tail == g_mpsc_head) {
+                            pthread_mutex_unlock(&g_mpsc_lock);
+                            // [FIX-F2] 队列已满：紧急内联发送
+                            free(task);
+                            emergency_send_dirty_page(gpa, hva);
+                            continue;
+                        }
                         g_mpsc_queue[g_mpsc_tail] = task;
                         g_mpsc_tail = next_tail;
                         pthread_mutex_unlock(&g_mpsc_lock);
@@ -12592,7 +12601,7 @@ typedef struct WritablePage {
 #define PAGE_POOL_SIZE 4096
 static WritablePage g_page_pool[PAGE_POOL_SIZE];
 static void* g_image_pool[PAGE_POOL_SIZE]; // 预分配快照空间
-static atomic_int g_pool_idx = 0;
+static atomic_uint g_pool_idx = 0; /* [FIX] 必须无符号，防止 21 亿次写缺页后有符号溢出导致负数取模越界 */
 
 static volatile bool g_threads_running = false;
 static pthread_t g_listen_thread;
@@ -12869,11 +12878,22 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
     }
     // --- 分支 3: Prophet RPC (V29 新增) ---
     else if (msg_type == MSG_RPC_BATCH_MEMSET) {
-        // RPC 指令通常意味着大范围内存变动，这里不做 Lazy 处理
-        // 让 wavevm-all.c 里的 tb_flush 去处理一致性
-        // 这里主要负责更新版本号（如果有必要）
-        // 但注意：Prophet 的执行是在 handle_rpc_batch_execution 里直接写内存的
-        // 这里收到的只是通知，通常不需要做 mprotect 操作，除非为了 invalidation
+        // [FIX] Daemon 的 handle_rpc_batch_execution 只修改了 g_shm_ptr，
+        // 但 QEMU TCG 模式使用独立的匿名 RAM (g_ram_base)，必须同步执行物理填充，
+        // 否则 Guest 看到的内存不会被清零，Prophet 指令形同虚设。
+        struct wvm_rpc_batch_memset *batch = (struct wvm_rpc_batch_memset *)payload;
+        uint32_t count = ntohl(batch->count);
+        uint32_t val = ntohl(batch->val);
+        struct wvm_rpc_region *regions = (struct wvm_rpc_region *)(batch + 1);
+        for (uint32_t i = 0; i < count; i++) {
+            uint64_t gpa = WVM_NTOHLL(regions[i].gpa);
+            uint64_t r_len = WVM_NTOHLL(regions[i].len);
+            if (gpa + r_len <= g_ram_size) {
+                mprotect((uint8_t*)g_ram_base + gpa, r_len, PROT_READ | PROT_WRITE);
+                memset((uint8_t*)g_ram_base + gpa, val, r_len);
+                // tb_flush 在 wavevm-all.c 的 IPC 处理路径中已执行，此处不重复
+            }
+        }
     }
 }
 

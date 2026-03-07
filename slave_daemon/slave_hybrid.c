@@ -877,15 +877,6 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
                         uint8_t *hva = wvm_gpa_to_hva(gpa);
                         if (!hva) continue;
 
-                        uint32_t next_tail = (g_mpsc_tail + 1) % MPSC_QUEUE_SIZE;
-                        if (next_tail == g_mpsc_head) {
-                            // [FIX-F2] 队列已满：绝不丢弃！KVM_GET_DIRTY_LOG 已清除硬件 dirty bit，
-                            // 如果这里 continue，该页永远不会再被标记为 dirty，数据永久丢失。
-                            // 改为紧急内联发送（阻塞式），牺牲延迟保数据。
-                            emergency_send_dirty_page(gpa, hva);
-                            continue;
-                        }
-
                         dirty_page_task_t* task = malloc(sizeof(dirty_page_task_t));
                         if (!task) {
                             // [FIX-F2] malloc 失败同理：不能丢弃已清除 dirty bit 的页面
@@ -896,7 +887,20 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
                         task->gpa = gpa;
                         memcpy(task->data, hva, 4096);
 
+                        /* [FIX] next_tail 计算和满队检查必须在锁内。
+                         * 旧代码在锁外读 g_mpsc_tail 算 next_tail，多线程下
+                         * 两个线程会算出相同的 next_tail 并覆盖同一个槽位。
+                         * 当前 total_threads=1 不会触发，但扩展并发后必崩。
+                         */
                         pthread_mutex_lock(&g_mpsc_lock);
+                        uint32_t next_tail = (g_mpsc_tail + 1) % MPSC_QUEUE_SIZE;
+                        if (next_tail == g_mpsc_head) {
+                            pthread_mutex_unlock(&g_mpsc_lock);
+                            // [FIX-F2] 队列已满：紧急内联发送
+                            free(task);
+                            emergency_send_dirty_page(gpa, hva);
+                            continue;
+                        }
                         g_mpsc_queue[g_mpsc_tail] = task;
                         g_mpsc_tail = next_tail;
                         pthread_mutex_unlock(&g_mpsc_lock);

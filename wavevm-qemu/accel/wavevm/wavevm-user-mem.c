@@ -70,7 +70,7 @@ typedef struct WritablePage {
 #define PAGE_POOL_SIZE 4096
 static WritablePage g_page_pool[PAGE_POOL_SIZE];
 static void* g_image_pool[PAGE_POOL_SIZE]; // 预分配快照空间
-static atomic_int g_pool_idx = 0;
+static atomic_uint g_pool_idx = 0; /* [FIX] 必须无符号，防止 21 亿次写缺页后有符号溢出导致负数取模越界 */
 
 static volatile bool g_threads_running = false;
 static pthread_t g_listen_thread;
@@ -347,11 +347,22 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
     }
     // --- 分支 3: Prophet RPC (V29 新增) ---
     else if (msg_type == MSG_RPC_BATCH_MEMSET) {
-        // RPC 指令通常意味着大范围内存变动，这里不做 Lazy 处理
-        // 让 wavevm-all.c 里的 tb_flush 去处理一致性
-        // 这里主要负责更新版本号（如果有必要）
-        // 但注意：Prophet 的执行是在 handle_rpc_batch_execution 里直接写内存的
-        // 这里收到的只是通知，通常不需要做 mprotect 操作，除非为了 invalidation
+        // [FIX] Daemon 的 handle_rpc_batch_execution 只修改了 g_shm_ptr，
+        // 但 QEMU TCG 模式使用独立的匿名 RAM (g_ram_base)，必须同步执行物理填充，
+        // 否则 Guest 看到的内存不会被清零，Prophet 指令形同虚设。
+        struct wvm_rpc_batch_memset *batch = (struct wvm_rpc_batch_memset *)payload;
+        uint32_t count = ntohl(batch->count);
+        uint32_t val = ntohl(batch->val);
+        struct wvm_rpc_region *regions = (struct wvm_rpc_region *)(batch + 1);
+        for (uint32_t i = 0; i < count; i++) {
+            uint64_t gpa = WVM_NTOHLL(regions[i].gpa);
+            uint64_t r_len = WVM_NTOHLL(regions[i].len);
+            if (gpa + r_len <= g_ram_size) {
+                mprotect((uint8_t*)g_ram_base + gpa, r_len, PROT_READ | PROT_WRITE);
+                memset((uint8_t*)g_ram_base + gpa, val, r_len);
+                // tb_flush 在 wavevm-all.c 的 IPC 处理路径中已执行，此处不重复
+            }
+        }
     }
 }
 

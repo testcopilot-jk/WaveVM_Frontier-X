@@ -1464,10 +1464,12 @@ static int __init wavevm_init(void) {
     init_rwsem(&g_mapping_sem);
 
     /*
-     * Use online CPU count for sizing/initialization to keep module load feasible
-     * on kernels with very large CONFIG_NR_CPUS.
+     * [FIX] 必须用 nr_cpu_ids 而非 num_online_cpus()。
+     * get_cpu() 返回的是逻辑 CPU ID（可能不连续），例如 CPU 0,1,4,5 在线时
+     * num_online_cpus()=4 但 get_cpu() 可能返回 5，导致 combined_idx 越界。
+     * nr_cpu_ids 是内核保证的最大 CPU ID + 1，覆盖所有可能的 get_cpu() 返回值。
      */
-    g_req_ctx_count = (size_t)num_online_cpus() * (size_t)MAX_IDS_PER_CPU;
+    g_req_ctx_count = (size_t)nr_cpu_ids * (size_t)MAX_IDS_PER_CPU;
     g_req_ctx = vzalloc(sizeof(struct req_ctx_t) * g_req_ctx_count);
     if (!g_req_ctx) return -ENOMEM;
     for (size_t i = 0; i < g_req_ctx_count; i++) init_waitqueue_head(&g_req_ctx[i].wq);
