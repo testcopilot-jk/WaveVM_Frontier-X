@@ -9191,13 +9191,13 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
  * [后果] 保证了 Slave 侧物理内存与全网真理的一致。若响应失败，Slave 会持有一份陈旧的数据副本，导致计算错误。
  */
 void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *hdr, void *payload) {
-    uint16_t type = hdr->msg_type;
+    uint16_t type = hdr->msg_type; 
     uint64_t gpa;
 
     if (type == MSG_INVALIDATE || type == MSG_DOWNGRADE) {
         gpa = hdr->target_gpa; // ntoh_header 已将 union req_id/target_gpa 转为 host order
     } else {
-        if (hdr->payload_len < 8) return;
+        if (hdr->payload_len < 8) return; 
         // [FIX] 安全读取 Payload 中的 GPA
         gpa = wvm_get_u64_unaligned(payload);
     }
@@ -9224,7 +9224,7 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
         tx_hdr->crc32 = 0;
         tx_hdr->crc32 = htonl(calculate_crc32(tx, sizeof(tx)));
         robust_sendto(sockfd, tx, sizeof(tx), client);
-    }
+    } 
     else if (type == MSG_MEM_WRITE) {
         if (hdr->payload_len >= 8+4096) {
             memcpy(hva, (uint8_t*)payload+8, 4096);
@@ -9235,7 +9235,7 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
     }
     else if (type == MSG_DOWNGRADE) {
         if (hdr->payload_len < 16) return;
-
+        
         // [FIX] 安全读取 Payload 中的复杂数据
         uint64_t requester_u64 = wvm_get_u64_unaligned(payload);
         uint64_t orig_req_id;
@@ -9263,6 +9263,9 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
         if (robust_sendto(sockfd, tx, sizeof(tx), client) == 0) {
             // 只有确保网络层已经接纳了这个包，才敢擦除本地物理内存
             madvise(hva, 4096, MADV_DONTNEED);
+        } else {
+            // 如果发不出去，宁可让 Master 稍后重试，也不要擦除数据
+            //fprintf(stderr, "[WVM-Slave] Critical: Failed to send back data for GPA %lx, aborting unmap\n", gpa);
         }
     }
     else if (type == MSG_FETCH_AND_INVALIDATE) {
