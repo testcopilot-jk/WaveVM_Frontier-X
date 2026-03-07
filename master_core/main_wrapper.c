@@ -58,6 +58,24 @@ static ssize_t read_exact(int fd, void *buf, size_t len) {
     return (ssize_t)received;
 }
 
+/* [FIX] 循环写，处理 partial write 和 EINTR，避免 IPC 流错位 */
+static ssize_t write_exact(int fd, const void *buf, size_t len) {
+    size_t sent = 0;
+    const char *ptr = (const char *)buf;
+    while (sent < len) {
+        ssize_t ret = write(fd, ptr + sent, len - sent);
+        if (ret > 0) {
+            sent += ret;
+        } else if (ret == 0) {
+            return -1;
+        } else {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+    }
+    return (ssize_t)sent;
+}
+
 // 初始种子节点
 #define MAX_SEEDS 8
 static struct sockaddr_in g_seeds[MAX_SEEDS];
@@ -196,7 +214,7 @@ static void handle_ipc_fault(int qemu_fd, struct wvm_ipc_fault_req* req) {
     if (req->gpa + 4096 > g_shm_size) {
         ack.status = -EFAULT;
         ack.version = 0;
-        write(qemu_fd, &ack, sizeof(ack));
+        write_exact(qemu_fd, &ack, sizeof(ack));
         return;
     }
 
@@ -204,7 +222,7 @@ static void handle_ipc_fault(int qemu_fd, struct wvm_ipc_fault_req* req) {
 
     ack.status = wvm_handle_page_fault_logic(req->gpa, target_page_addr, &ack.version);
 
-    write(qemu_fd, &ack, sizeof(ack));
+    write_exact(qemu_fd, &ack, sizeof(ack));
 }
 
 static void handle_ipc_cpu_run(int qemu_fd, struct wvm_ipc_cpu_run_req* req) {
@@ -220,7 +238,7 @@ static void handle_ipc_cpu_run(int qemu_fd, struct wvm_ipc_cpu_run_req* req) {
             req->slave_id, &ack.ctx, sizeof(ack.ctx));
     }
     ack.mode_tcg = req->mode_tcg;
-    write(qemu_fd, &ack, sizeof(ack));
+    write_exact(qemu_fd, &ack, sizeof(ack));
 }
 
 /* 
@@ -244,7 +262,7 @@ void broadcast_push_to_qemu(uint16_t msg_type, void* payload, int len) {
     
     pthread_mutex_lock(&g_client_lock);
     for (int i = 0; i < g_client_count; i++) {
-        write(g_qemu_clients[i], buffer, sizeof(ipc_hdr) + ipc_hdr.len);
+        write_exact(g_qemu_clients[i], buffer, sizeof(ipc_hdr) + ipc_hdr.len);
     }
     pthread_mutex_unlock(&g_client_lock);
     free(buffer);
@@ -257,7 +275,7 @@ void broadcast_irq_to_qemu(void) {
     
     pthread_mutex_lock(&g_client_lock);
     for (int i = 0; i < g_client_count; i++) {
-        write(g_qemu_clients[i], &ipc_hdr, sizeof(ipc_hdr));
+        write_exact(g_qemu_clients[i], &ipc_hdr, sizeof(ipc_hdr));
     }
     pthread_mutex_unlock(&g_client_lock);
 }
@@ -391,17 +409,17 @@ void* client_handler(void *socket_desc) {
                     
                     // [FIX] 4. 向 QEMU 发送 ACK 唤醒 vCPU
                     uint8_t ack_byte = success ? 1 : 0;
-                    write(qemu_fd, &ack_byte, 1);
+                    write_exact(qemu_fd, &ack_byte, 1);
                     
                     // 如果是读操作，把远端拿回来的数据塞回给 QEMU
                     if (success && !req->is_write) {
                         struct wvm_block_payload *rx_p = (struct wvm_block_payload *)rx_buf;
-                        write(qemu_fd, rx_p->data, req->len);
+                        write_exact(qemu_fd, rx_p->data, req->len);
                     }
                 } else {
                     // 内存不足，直接回复失败，防止 QEMU 死锁
                     uint8_t ack_byte = 0;
-                    write(qemu_fd, &ack_byte, 1);
+                    write_exact(qemu_fd, &ack_byte, 1);
                 }
                 
                 if (pkt) u_ops.free_packet(pkt);

@@ -1235,6 +1235,7 @@ sysctl -w net.core.netdev_max_backlog=10000 > /dev/null
 
 echo "[+] Network device backlog queue increased."
 echo "[SUCCESS] Kernel parameters are tuned for V29 'Wavelet' deployment."
+
 ```
 
 ---
@@ -1337,6 +1338,7 @@ echo "[SUCCESS] Kernel parameters are tuned for V29 'Wavelet' deployment."
 #define WVM_DEFAULT_SHM_PATH "/wavevm_ram"
 
 #endif // WAVEVM_CONFIG_H
+
 ```
 
 **文件**: `common_include/platform_defs.h`
@@ -1366,6 +1368,7 @@ echo "[SUCCESS] Kernel parameters are tuned for V29 'Wavelet' deployment."
 #endif
 
 #endif // PLATFORM_DEFS_H
+
 ```
 
 **文件**: `common_include/wavevm_protocol.h`
@@ -1708,6 +1711,7 @@ static void wvm_translate_kvm_to_tcg(struct kvm_regs *k, struct kvm_sregs *s, wv
 }
 
 #endif // WAVEVM_PROTOCOL_H
+
 ```
 
 **文件**: `common_include/wavevm_ioctl.h`
@@ -1762,6 +1766,7 @@ struct wvm_ioctl_mem_layout {
 #define IOCTL_UPDATE_EPOCH _IOW('G', 20, uint32_t)
 
 #endif // WAVEVM_IOCTL_H
+
 ```
 
 **文件**: `common_include/crc32.h`
@@ -1836,6 +1841,7 @@ static inline uint32_t calculate_crc32(const void* data, size_t length) {
 
 #endif // CRC32_H
 #endif // __SSE4_2__
+
 ```
 
 **文件**: `common_include/uthash.h`
@@ -2978,6 +2984,7 @@ typedef struct UT_hash_handle {
 } UT_hash_handle;
 
 #endif /* UTHASH_H */
+
 ```
 
 ---
@@ -3023,6 +3030,7 @@ struct dsm_driver_ops {
 
 extern struct dsm_driver_ops *g_ops;
 #endif
+
 ```
 
 ---
@@ -3095,6 +3103,7 @@ void wvm_set_mem_mapping(int slot, uint32_t value);
 void wvm_set_cpu_mapping(int vcpu_index, uint32_t slave_id);
 
 #endif // LOGIC_CORE_H
+
 ```
 **文件**: `master_core/logic_core.c`
 
@@ -3921,7 +3930,8 @@ void* broadcast_worker_thread(void* arg) {
  */
 static void broadcast_to_subscribers(page_meta_t *page, uint16_t msg_type, void *payload, int len, uint8_t flags) {
     // 遍历订阅者的
-    for (int i = 0; i < 256; i++) {
+    int seg_mask_count = ((WVM_MAX_SLAVES / 64) + 63) / 64; /* segment_mask 有效元素数 */
+    for (int i = 0; i < seg_mask_count; i++) {
         uint64_t mask = page->segment_mask[i];
         if (mask == 0) continue;
 
@@ -4046,7 +4056,6 @@ static void force_sync_client(uint64_t gpa, page_meta_t* page, uint32_t client_i
         g_ops->free_packet(buffer);
         return;
     }
-
     // [FIX] 基于令牌桶思想的秒级节流
     long current_sec = g_ops->get_time_us() / 1000000;
     long last_sec = atomic_load(&g_force_sync_last_sec);
@@ -4058,13 +4067,13 @@ static void force_sync_client(uint64_t gpa, page_meta_t* page, uint32_t client_i
 
     if (atomic_fetch_add(&g_force_sync_counter, 1) >= MAX_FORCE_SYNC_PER_SEC) {
         // 超出带宽配额，直接丢弃。
-        // 客户端因收不到回复，会保持旧版本，下次 COMMIT 依然会失败，实现"天然重试"
-        return;
+        // 客户端因收不到回复，会保持旧版本，下次 COMMIT 依然会失败，实现“天然重试”
+        return; 
     }
 
     size_t pl_size = sizeof(struct wvm_full_page_push);
     size_t pkt_len = sizeof(struct wvm_header) + pl_size;
-
+    
     uint8_t *buffer = g_ops->alloc_packet(pkt_len, 1);
     if (!buffer) return;
 
@@ -4079,7 +4088,7 @@ static void force_sync_client(uint64_t gpa, page_meta_t* page, uint32_t client_i
     struct wvm_full_page_push *push = (struct wvm_full_page_push*)(buffer + sizeof(*hdr));
     push->gpa = WVM_HTONLL(gpa);
     // 此时持有页锁，version是安全的
-    push->version = WVM_HTONLL(page->version);
+    push->version = WVM_HTONLL(page->version); 
     memcpy(push->data, page->base_page_data, 4096);
 
     // [Fix #2] client_id 是裸 node_id，发包时需要编码为 composite ID
@@ -4133,7 +4142,7 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
     hdr->magic = htonl(WVM_MAGIC);
     hdr->msg_type = htons(MSG_MEM_READ);
     hdr->payload_len = htons(8);
-    hdr->slave_id = htonl(dir_node);
+    hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
     hdr->req_id = WVM_HTONLL(rid);
     hdr->qos_level = 1; // 缺页必须走快车道
 
@@ -4377,13 +4386,12 @@ int wvm_rpc_call(uint16_t msg_type, void *payload, int len, uint32_t target_id, 
     g_ops->free_packet(buffer); // 释放发送Buffer
 
     // 从接收Buffer中提取数据
-    struct wvm_header *ack_hdr = (struct wvm_header *)net_rx_buf;
-    void* ack_payload = net_rx_buf + sizeof(struct wvm_header);
-    uint16_t ack_len = ntohs(ack_hdr->payload_len);
-    
+    // [FIX] RX 侧只复制了 payload（不含 header），所以 net_rx_buf 直接就是 payload
     if (rx_buffer && rx_len > 0) {
-        size_t copy_len = (size_t)rx_len < (size_t)ack_len ? (size_t)rx_len : (size_t)ack_len;
-        memcpy(rx_buffer, ack_payload, copy_len);
+        /* alloc_req_id 注册了 max_len = WVM_MAX_PACKET_SIZE，
+         * RX 回调写入的是纯 payload，长度已由 RX 侧截断到 max_len。
+         * 这里直接按 rx_len 复制即可。 */
+        memcpy(rx_buffer, net_rx_buf, (size_t)rx_len);
     }
 
     if (msg_type == MSG_VCPU_RUN && rx_buffer != NULL) {
@@ -4645,8 +4653,10 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                     // 2. Counter 必须是连续的
                     if (commit_epoch != g_curr_epoch || commit_counter != local_counter) {
                         // 版本冲突！拒绝并强制同步
+                        // [FIX-H8] 传 NULL 让 force_sync_client 走安全的重新查找+拷贝路径，
+                        // 避免释放锁后解引用 page 指针导致的数据竞争
                         pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
-                        force_sync_client(gpa, page, src_id);
+                        force_sync_client(gpa, NULL, src_id);
                         return;
                     }
                 
@@ -4761,7 +4771,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
 
                     // CRC32 由 send_packet 后端自动计算，此处无需手动填
                     ack_hdr->crc32 = 0;
-
+                    
                     g_ops->send_packet(ack_buf, ack_len, source_node_id);
                     g_ops->free_packet(ack_buf);
                 }
@@ -4894,7 +4904,7 @@ void wvm_logic_broadcast_rpc(void *full_pkt_data, int full_pkt_len, uint16_t msg
             memcpy(data_copy, payload, payload_len);
             broadcast_task_t *t = &shard->queue[shard->tail & BCAST_Q_MASK];
             t->msg_type = msg_type;
-            t->target_id = target_id;
+            t->target_id = WVM_ENCODE_ID(g_my_vm_id, target_id);
             t->len = payload_len;
             t->data_ptr = data_copy;
             
@@ -4909,6 +4919,7 @@ void wvm_logic_broadcast_rpc(void *full_pkt_data, int full_pkt_len, uint16_t msg
     }
     pthread_rwlock_unlock(&g_view_lock);
 }
+
 ```
 
 ---
@@ -5206,7 +5217,7 @@ static uint64_t k_alloc_req_id(void *rx_buffer, uint32_t buffer_size) {
             WRITE_ONCE(g_req_ctx[combined_idx].rx_buffer, rx_buffer);
             g_req_ctx[combined_idx].max_len = buffer_size; // [FIX-G3]
             WRITE_ONCE(g_req_ctx[combined_idx].done, 0);
-            smp_wmb();
+            smp_wmb(); 
         } else { pool->head--; }
     }
 out:
@@ -5794,9 +5805,10 @@ static vm_fault_t wvm_page_mkwrite(struct vm_fault *vmf) {
     task->timestamp = k_get_time_us();
 
     // 3. 加入队列
-    spin_lock(&g_diff_lock);
+    // [FIX-M3] 统一使用 spin_lock_bh，与取出端保持一致，防止 softirq 死锁
+    spin_lock_bh(&g_diff_lock);
     list_add_tail(&task->list, &g_diff_queue);
-    spin_unlock(&g_diff_lock);
+    spin_unlock_bh(&g_diff_lock);
 
     // 4. 唤醒提交线程
     wake_up_interruptible(&g_diff_wq);
@@ -6206,7 +6218,8 @@ static struct dsm_driver_ops k_ops = {
     .check_req_status = k_check_req_status,
     .cpu_relax = k_cpu_relax,
     .get_random = k_get_random,
-    .yield_cpu_short_time = k_yield_short
+    .yield_cpu_short_time = k_yield_short,
+    .send_packet_async = k_send_packet_async
 };
 
 // [V29] 存储全局 mapping 以便 unmap 使用
@@ -6297,7 +6310,8 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
         for (int i = 0; i < head.count; i++) {
             // start_index 即 Slot ID
             // Logic Core 会根据 slot 0/1 更新 g_total_nodes / g_my_node_id
-            wvm_set_mem_mapping(head.start_index + i, (uint16_t)buf[i]);
+            // [FIX-M5] 移除 uint16_t 截断，保留完整 uint32_t
+            wvm_set_mem_mapping(head.start_index + i, buf[i]);
         }
         
         vfree(buf);
@@ -6457,11 +6471,14 @@ static void __exit wavevm_exit(void) {
         if (pool->ids) vfree(pool->ids);
     }
     vfree(g_req_ctx);
+    // [FIX-M4] 销毁 slab 缓存，防止模块卸载后内存泄漏
+    if (wvm_pkt_cache) kmem_cache_destroy(wvm_pkt_cache);
 }
 
 module_init(wavevm_init);
 module_exit(wavevm_exit);
 MODULE_LICENSE("GPL");
+
 ```
 
 **文件**: `master_core/Kbuild`
@@ -6477,6 +6494,7 @@ wavevm-y := kernel_backend.o logic_core.o
 # 添加公共头文件路径
 # $(src) 是内核构建系统提供的变量，指向当前目录
 ccflags-y := -I$(src)/../common_include -std=gnu11
+
 ```
 
 ---
@@ -7339,6 +7357,7 @@ static void* rx_thread_loop(void *arg) {
                         }
                         // 跨度过大，可能是由于网络分区（Split-brain）后节点归队
                         // 这种情况下不能处理该包，应等待视图同步
+                        offset += current_pkt_len;
                         continue;
                     }
                     // 校验通过，恢复 CRC
@@ -7615,6 +7634,7 @@ int user_backend_init(int my_node_id, int port) {
     
     return 0;
 }
+
 ```
 
 **文件**: `master_core/main_wrapper.c`
@@ -7678,6 +7698,24 @@ static ssize_t read_exact(int fd, void *buf, size_t len) {
         }
     }
     return (ssize_t)received;
+}
+
+/* [FIX] 循环写，处理 partial write 和 EINTR，避免 IPC 流错位 */
+static ssize_t write_exact(int fd, const void *buf, size_t len) {
+    size_t sent = 0;
+    const char *ptr = (const char *)buf;
+    while (sent < len) {
+        ssize_t ret = write(fd, ptr + sent, len - sent);
+        if (ret > 0) {
+            sent += ret;
+        } else if (ret == 0) {
+            return -1;
+        } else {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+    }
+    return (ssize_t)sent;
 }
 
 // 初始种子节点
@@ -7796,7 +7834,8 @@ void load_swarm_config(const char *filename) {
     
     // 第二轮：填补剩余空位 (Round-Robin)
     int node_cursor = 0;
-    while (current_vcpu < 4096) {
+    // [FIX-H9] 防止 phys_node_count==0 时除零
+    while (phys_node_count > 0 && current_vcpu < 4096) {
         wvm_set_cpu_mapping(current_vcpu++, phys_nodes[node_cursor].vnode_start);
         node_cursor = (node_cursor + 1) % phys_node_count;
     }
@@ -7812,11 +7851,20 @@ void load_swarm_config(const char *filename) {
  */
 static void handle_ipc_fault(int qemu_fd, struct wvm_ipc_fault_req* req) {
     struct wvm_ipc_fault_ack ack; // 使用扩展后的 ACK 结构
+
+    // [FIX-H7] GPA 边界检查，防止越界访问共享内存
+    if (req->gpa + 4096 > g_shm_size) {
+        ack.status = -EFAULT;
+        ack.version = 0;
+        write_exact(qemu_fd, &ack, sizeof(ack));
+        return;
+    }
+
     void *target_page_addr = (uint8_t*)g_shm_ptr + req->gpa;
-    
+
     ack.status = wvm_handle_page_fault_logic(req->gpa, target_page_addr, &ack.version);
-    
-    write(qemu_fd, &ack, sizeof(ack));
+
+    write_exact(qemu_fd, &ack, sizeof(ack));
 }
 
 static void handle_ipc_cpu_run(int qemu_fd, struct wvm_ipc_cpu_run_req* req) {
@@ -7832,7 +7880,7 @@ static void handle_ipc_cpu_run(int qemu_fd, struct wvm_ipc_cpu_run_req* req) {
             req->slave_id, &ack.ctx, sizeof(ack.ctx));
     }
     ack.mode_tcg = req->mode_tcg;
-    write(qemu_fd, &ack, sizeof(ack));
+    write_exact(qemu_fd, &ack, sizeof(ack));
 }
 
 /* 
@@ -7856,7 +7904,7 @@ void broadcast_push_to_qemu(uint16_t msg_type, void* payload, int len) {
     
     pthread_mutex_lock(&g_client_lock);
     for (int i = 0; i < g_client_count; i++) {
-        write(g_qemu_clients[i], buffer, sizeof(ipc_hdr) + ipc_hdr.len);
+        write_exact(g_qemu_clients[i], buffer, sizeof(ipc_hdr) + ipc_hdr.len);
     }
     pthread_mutex_unlock(&g_client_lock);
     free(buffer);
@@ -7869,7 +7917,7 @@ void broadcast_irq_to_qemu(void) {
     
     pthread_mutex_lock(&g_client_lock);
     for (int i = 0; i < g_client_count; i++) {
-        write(g_qemu_clients[i], &ipc_hdr, sizeof(ipc_hdr));
+        write_exact(g_qemu_clients[i], &ipc_hdr, sizeof(ipc_hdr));
     }
     pthread_mutex_unlock(&g_client_lock);
 }
@@ -8003,17 +8051,17 @@ void* client_handler(void *socket_desc) {
                     
                     // [FIX] 4. 向 QEMU 发送 ACK 唤醒 vCPU
                     uint8_t ack_byte = success ? 1 : 0;
-                    write(qemu_fd, &ack_byte, 1);
+                    write_exact(qemu_fd, &ack_byte, 1);
                     
                     // 如果是读操作，把远端拿回来的数据塞回给 QEMU
                     if (success && !req->is_write) {
                         struct wvm_block_payload *rx_p = (struct wvm_block_payload *)rx_buf;
-                        write(qemu_fd, rx_p->data, req->len);
+                        write_exact(qemu_fd, rx_p->data, req->len);
                     }
                 } else {
                     // 内存不足，直接回复失败，防止 QEMU 死锁
                     uint8_t ack_byte = 0;
-                    write(qemu_fd, &ack_byte, 1);
+                    write_exact(qemu_fd, &ack_byte, 1);
                 }
                 
                 if (pkt) u_ops.free_packet(pkt);
@@ -8356,6 +8404,7 @@ int main(int argc, char **argv) {
 
     return 0;
 }
+
 ```
 
 **文件**: `master_core/Makefile_User`
@@ -8373,6 +8422,7 @@ $(TARGET): $(SRCS)
 
 clean:
 	rm -f $(TARGET)
+
 ```
 
 ---
@@ -8516,7 +8566,7 @@ static int get_chunk_fd_safe(uint64_t chunk_id) {
     if (fd < 0) {
         // Fallback: 如果文件系统不支持 O_DIRECT (如 tmpfs)，回退到普通模式
         if (errno == EINVAL) fd = open(path, O_RDWR | O_CREAT, 0644);
-        else {
+        if (fd < 0) {
             pthread_mutex_unlock(&g_fd_lock);
             return -1;
         }
@@ -8550,6 +8600,8 @@ static int robust_sendto(int fd, const void *buf, size_t len, struct sockaddr_in
         ssize_t sent = sendto(fd, buf, len, MSG_DONTWAIT, (struct sockaddr*)dest, sizeof(*dest));
         
         if (sent > 0) return 0; // 发送成功
+
+        if (sent == 0) { retries++; continue; } /* sendto 返回 0：零长度包，计入重试 */
 
         if (sent < 0) {
             if (errno == EINTR) continue; // 被信号中断，立即重试
@@ -9005,10 +9057,15 @@ static void emergency_send_dirty_page(uint64_t gpa, const uint8_t *hva) {
     wh->crc32 = 0;
     wh->crc32 = htonl(calculate_crc32(tx_buf, total_len));
 
-    robust_sendto(t_emergency_sock, tx_buf, total_len, &g_master_addr);
+    // [FIX-M2] 加锁读取 g_master_addr，防止与 RX 线程竞争
+    struct sockaddr_in master_snap;
+    pthread_spin_lock(&g_master_lock);
+    master_snap = g_master_addr;
+    pthread_spin_unlock(&g_master_lock);
+    robust_sendto(t_emergency_sock, tx_buf, total_len, &master_snap);
 }
 
-/*
+/* 
  * [物理意图] 充当远程执行节点的“脏页回写引擎”，实现计算与同步的解耦。
  * [关键逻辑] 作为 MPSC 队列的唯一消费者，将各个 vCPU 产生的脏页任务（Dirty Pages）进行有序的异步网络发送。
  * [后果] 它解决了“同步锁死”问题。vCPU 可以在执行完指令后立即继续，无需等待网络 ACK，极大提升了远程主频。
@@ -9059,8 +9116,13 @@ void* dirty_sync_sender_thread(void* arg) {
         wh->crc32 = 0;
         wh->crc32 = htonl(calculate_crc32(tx_buf, total_len));
 
+        // [FIX-M2] 加锁快照 g_master_addr，防止与 RX 线程竞争
+        struct sockaddr_in master_snap;
+        pthread_spin_lock(&g_master_lock);
+        master_snap = g_master_addr;
+        pthread_spin_unlock(&g_master_lock);
         // 使用 robust_sendto 发送，它内部包含了反压处理逻辑
-        robust_sendto(sockfd, tx_buf, total_len, &g_master_addr);
+        robust_sendto(sockfd, tx_buf, total_len, &master_snap);
         
         // 任务完成，释放内存
         free(task);
@@ -9233,7 +9295,7 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
             }
         }
         if (ret == 0) break;
-    } while (ret > 0 || ret == -EINTR);
+    } while (ret == -1 && errno == EINTR);
 
     if (g_wvm_dev_fd < 0) { 
         // [V28.5 FIXED] KVM Dirty Log Sync (Full Implementation)
@@ -9518,7 +9580,7 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
         if (actual_pl < sizeof(struct wvm_block_payload)) return; // 防无符号下溢
         if (data_len > actual_pl - sizeof(struct wvm_block_payload)) return;
     }
-
+    
     uint64_t chunk_id = (lba << 9) >> WVM_STORAGE_CHUNK_SHIFT;
     off_t offset = (lba << 9) & ((1UL << WVM_STORAGE_CHUNK_SHIFT) - 1);
     
@@ -9624,8 +9686,12 @@ void* kvm_worker_thread(void *arg) {
             if (h->magic != htonl(WVM_MAGIC)) continue;
             
             pthread_spin_lock(&g_master_lock);
-            if (g_master_addr.sin_port != c[i].sin_port || g_master_addr.sin_addr.s_addr != c[i].sin_addr.s_addr) {
-                g_master_addr = c[i];
+            int addr_changed = (g_master_addr.sin_port != c[i].sin_port || g_master_addr.sin_addr.s_addr != c[i].sin_addr.s_addr);
+            g_master_addr = c[i];
+            pthread_spin_unlock(&g_master_lock);
+
+            // [FIX-M1] mutex 操作移到 spinlock 外部，防止持 spinlock 时阻塞
+            if (addr_changed) {
                 pthread_mutex_lock(&g_master_mutex);
                 if (!g_master_ready) {
                     g_master_ready = 1;
@@ -9633,8 +9699,6 @@ void* kvm_worker_thread(void *arg) {
                 }
                 pthread_mutex_unlock(&g_master_mutex);
             }
-            g_master_addr = c[i]; 
-            pthread_spin_unlock(&g_master_lock); 
 
             uint16_t type = ntohs(h->msg_type);
             ntoh_header(h);
@@ -9952,6 +10016,7 @@ int main(int argc, char **argv) {
     }
     return 0;
 }
+
 ```
 
 **文件**: `slave_daemon/slave_vfio.h`
@@ -10005,6 +10070,7 @@ int wvm_vfio_intercept_mmio(uint64_t gpa, void *data, int len, int is_write);
 void wvm_vfio_poll_irqs(int master_sock, struct sockaddr_in *master_addr);
 
 #endif
+
 ```
 
 **文件**: `slave_daemon/slave_vfio.c`
@@ -10099,6 +10165,7 @@ static int enable_bus_master(int device_fd) {
  * [后果] 它是中断转发的源头。如果没有 eventfd 的正确绑定，Slave 端的显卡在完成任务后将无法通知 Master 端的 vCPU。
  */
 static int setup_irq(wvm_vfio_device_t *dev) {
+    dev->irq_fd = -1; /* 防止零初始化（0=stdin）被 poll 循环误注册 */
     // 为简单起见，且为了保证通用性，我们优先尝试启用 INTx (Legacy Interrupt)
     // 真实的 GPU 驱动通常会请求 MSI-X，这需要拦截配置空间的写操作来动态建立映射。
     // 由于 V27.0 不拦截 Config Space 写（太复杂），我们假设 Host VFIO 驱动
@@ -10256,7 +10323,7 @@ int wvm_vfio_init(const char *config_file) {
         if (strncmp(line, "DEVICE", 6) == 0) {
             if (parsing) init_device(pci_id, group_path, bar_gpas, bar_sizes);
             
-            sscanf(line, "DEVICE %s %s", pci_id, group_path);
+            sscanf(line, "DEVICE %31s %63s", pci_id, group_path);
             memset(bar_gpas, 0, sizeof(bar_gpas));
             memset(bar_sizes, 0, sizeof(bar_sizes));
             parsing = 1;
@@ -10405,6 +10472,7 @@ void wvm_vfio_poll_irqs(int master_sock, struct sockaddr_in *master_addr) {
     }
     close(epfd);
 }
+
 ```
 
 **文件**: `slave_daemon/Makefile`
@@ -10422,6 +10490,7 @@ $(TARGET): $(SRCS)
 
 clean:
 	rm -f $(TARGET)
+
 ```
 
 ---
@@ -10442,6 +10511,7 @@ $(TARGET): main.c
 
 clean:
 	rm -f $(TARGET)
+
 ```
 
 **文件**: `ctl_tool/main.c`
@@ -10671,6 +10741,7 @@ int main(int argc, char **argv) {
     close(dev_fd);
     return 0;
 }
+
 ```
 
 ---
@@ -10773,6 +10844,7 @@ void wvm_tcg_set_state(CPUState *cpu, wvm_tcg_context_t *ctx) {
 }
 
 #endif
+
 ```
 
 **文件**: `wavevm-qemu/accel/wavevm/wavevm-all.c`
@@ -11111,7 +11183,7 @@ static bool wavevm_gpa_range_valid(uint64_t gpa, uint32_t len, bool is_write)
 static void *wavevm_slave_net_thread(void *arg) {
     WaveVMAccelState *s = (WaveVMAccelState *)arg;
     #define BATCH_SIZE 64
-    #define MAX_PKT_SIZE 8192 
+    #define MAX_PKT_SIZE 8192
 
     struct mmsghdr msgs[BATCH_SIZE];
     struct iovec iovecs[BATCH_SIZE];
@@ -11426,7 +11498,7 @@ static int wavevm_init_machine_user(WaveVMAccelState *s, MachineState *ms) {
 
         wavevm_setup_memory_region(ms->ram, ms->ram_size, shm_fd);
         close(shm_fd);
-
+        
         // [FIX-G4] IPC 监听线程必须无条件启动 (KVM + TCG 都需要接收 Invalidate)
         // dirty_sync_thread 仅 KVM 需要 (TCG 由 user-mem harvester 处理)
         s->sync_thread_running = true;
@@ -11440,7 +11512,7 @@ static int wavevm_init_machine_user(WaveVMAccelState *s, MachineState *ms) {
             qemu_thread_create(&s->sync_thread, "wvm-sync", wavevm_dirty_sync_thread, s, QEMU_THREAD_DETACHED);
         }
     }
-
+        
     g_user_ram_size_hint = ms->ram_size;
     // 初始化拦截信号。某些机型在此时 ms->ram 仍可能为空，需做兜底查找。
     void *ram_ptr = NULL;
@@ -11943,6 +12015,7 @@ int wvm_send_ipc_block_io(uint64_t lba, void *buf, uint32_t len, int is_write) {
     qemu_mutex_unlock(&s->block_io_lock);
     return ret;
 }
+
 ```
 
 **文件**: `wavevm-qemu/accel/wavevm/wavevm-cpu.c`
@@ -12168,10 +12241,14 @@ static void wavevm_handle_io(CPUState *cpu) {
     struct kvm_run *run = cpu->kvm_run;
     uint16_t port = run->io.port;
     void *data = (uint8_t *)run + run->io.data_offset;
-    
-    address_space_rw(&address_space_io, port, MEMTXATTRS_UNSPECIFIED,
-                     data, run->io.size,
-                     run->io.direction == KVM_EXIT_IO_OUT);
+    int is_write = (run->io.direction == KVM_EXIT_IO_OUT);
+
+    /* [FIX] 处理 string I/O (REP INS/OUTS)：count 可能 > 1，需逐个迭代 */
+    for (uint32_t i = 0; i < run->io.count; i++) {
+        address_space_rw(&address_space_io, port, MEMTXATTRS_UNSPECIFIED,
+                         data, run->io.size, is_write);
+        data = (uint8_t *)data + run->io.size;
+    }
 }
 
 static void wavevm_handle_mmio(CPUState *cpu) {
@@ -12336,7 +12413,7 @@ static void wavevm_remote_exec(CPUState *cpu) {
         ioctl(cpu->kvm_fd, KVM_GET_SREGS, &ksregs);
 
         req.mode_tcg = 0;
-        
+
         wvm_kvm_context_t *kctx = &req.ctx.kvm;
         kctx->rax = kregs.rax; kctx->rbx = kregs.rbx; kctx->rcx = kregs.rcx;
         kctx->rdx = kregs.rdx; kctx->rsi = kregs.rsi; kctx->rdi = kregs.rdi;
@@ -12607,6 +12684,7 @@ void wavevm_start_vcpu_thread(CPUState *cpu) {
     
     qemu_thread_create(cpu->thread, thread_name, wavevm_cpu_thread_fn, cpu, QEMU_THREAD_JOINABLE);
 }
+
 ```
 
 **文件**: `wavevm-qemu/accel/wavevm/wavevm-user-mem.c`
@@ -12765,7 +12843,8 @@ static void flush_lazy_ro_queue(void) {
     if (t_lazy_count == 0) return;
     for (int i = 0; i < t_lazy_count; i++) {
         uint64_t gpa = t_lazy_ro_queue[i];
-        mprotect((uint8_t*)g_ram_base + gpa, 4096, PROT_READ);
+        void *hva = gpa_to_hva_safe(gpa);
+        if (hva) mprotect(hva, 4096, PROT_READ);
     }
     t_lazy_count = 0;
 }
@@ -12915,10 +12994,12 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
             // 边界检查：防止恶意包导致 Segfault
             if (offset + size > 4096) return;
 
-            // 1. 临时开放写权限
-            mprotect((uint8_t*)g_ram_base + gpa, 4096, PROT_READ | PROT_WRITE);
+            // 1. 安全 GPA→HVA 转换（兼容 PCI hole 多段 RAM）
+            void *page_hva = gpa_to_hva_safe(gpa);
+            if (!page_hva) return;
+            mprotect(page_hva, 4096, PROT_READ | PROT_WRITE);
             // 2. 应用增量数据
-            memcpy((uint8_t*)g_ram_base + gpa + offset, log->data, size);
+            memcpy((uint8_t*)page_hva + offset, log->data, size);
             // 3. 放入惰性锁回队列 (性能优化)
             defer_ro_protect(gpa);
             
@@ -12931,9 +13012,10 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
             // 此时内存状态已不可信，必须强制失效
             // 下次访问触发 sigsegv -> request_page_sync (V28 Pull) 拉取最新全量
             if (!kvm_enabled()) {
-                mprotect((uint8_t*)g_ram_base + gpa, 4096, PROT_NONE);
+                void *inv_hva = gpa_to_hva_safe(gpa);
+                if (inv_hva) mprotect(inv_hva, 4096, PROT_NONE);
             }
-            
+
             // 将本地版本置 0，确保下次 Pull 回来的数据（无论版本多少）都能成功覆盖
             set_local_page_version(gpa, 0);
 
@@ -12951,8 +13033,10 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
         uint64_t push_ver = WVM_NTOHLL(full->version);
         
         if (is_newer_version(get_local_page_version(gpa), push_ver)) {
-            mprotect((uint8_t*)g_ram_base + gpa, 4096, PROT_READ | PROT_WRITE);
-            memcpy((uint8_t*)g_ram_base + gpa, full->data, 4096);
+            void *page_hva = gpa_to_hva_safe(gpa);
+            if (!page_hva) return;
+            mprotect(page_hva, 4096, PROT_READ | PROT_WRITE);
+            memcpy(page_hva, full->data, 4096);
             
             // 惰性锁回
             defer_ro_protect(gpa);
@@ -12973,8 +13057,10 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
             uint64_t gpa = WVM_NTOHLL(regions[i].gpa);
             uint64_t r_len = WVM_NTOHLL(regions[i].len);
             if (gpa + r_len <= g_ram_size) {
-                mprotect((uint8_t*)g_ram_base + gpa, r_len, PROT_READ | PROT_WRITE);
-                memset((uint8_t*)g_ram_base + gpa, val, r_len);
+                void *rpc_hva = gpa_to_hva_safe(gpa);
+                if (!rpc_hva) continue;
+                mprotect(rpc_hva, r_len, PROT_READ | PROT_WRITE);
+                memset(rpc_hva, val, r_len);
                 // [FIX] 同步 Prophet 版本号，否则后续 diff 引擎认为该页没变过，
                 //       导致远端节点版本断层无法收敛。
                 for (uint64_t pg = gpa & ~0xFFFULL; pg < gpa + r_len; pg += 4096) {
@@ -13187,7 +13273,9 @@ static void kvm_proactive_page_fetch(uint64_t gpa) {
          * 由于 request_page_sync 接受 fault_addr (HVA) 参数，
          * 这里构造 HVA 并直接调用它。
          */
-        uintptr_t fault_addr = (uintptr_t)g_ram_base + gpa;
+        void *fetch_hva = gpa_to_hva_safe(gpa);
+        if (!fetch_hva) return;
+        uintptr_t fault_addr = (uintptr_t)fetch_hva;
         request_page_sync(fault_addr, false);
     }
 }
@@ -13197,9 +13285,10 @@ static void kvm_proactive_page_fetch(uint64_t gpa) {
 // =============================================================
 
 static int request_page_sync(uintptr_t fault_addr, bool is_write) {
-    uint64_t gpa = fault_addr - (uintptr_t)g_ram_base;
-    gpa &= ~4095ULL; 
-    uintptr_t aligned_addr = (uintptr_t)g_ram_base + gpa;
+    uint64_t gpa = hva_to_gpa_safe(fault_addr);
+    if (gpa == (uint64_t)-1) return -1;
+    gpa &= ~4095ULL;
+    uintptr_t aligned_addr = fault_addr & ~4095ULL;
     
     // --- Master Mode (IPC) ---
     if (!g_is_slave) {
@@ -13643,7 +13732,7 @@ static void *diff_harvester_thread_fn(void *arg) {
         // 2. 遍历处理脏页
         WritablePage *curr = batch_head;
         while (curr) {
-            void *page_addr = (uint8_t*)g_ram_base + curr->gpa;
+            void *page_addr = gpa_to_hva_safe(curr->gpa);
             if (!page_addr) { 
                 // 错误处理：释放资源并跳过
                 WritablePage *nxt = curr->next; curr = nxt;
@@ -13934,7 +14023,8 @@ static void *mem_push_listener_thread(void *arg) {
                             // 严重乱序：回退到 Pull 模式
                             // 这种情况下必须立即锁回，不能 Lazy，因为状态已重置
                             if (!kvm_enabled()) {
-                                mprotect((uint8_t*)g_ram_base + gpa, 4096, PROT_NONE);
+                                void *inv_hva2 = gpa_to_hva_safe(gpa);
+                                if (inv_hva2) mprotect(inv_hva2, 4096, PROT_NONE);
                             }
                             set_local_page_version(gpa, 0);
                             // [FIX-F3] KVM 下主动拉取，替代 SIGSEGV 驱动的缺页
@@ -14035,7 +14125,7 @@ void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
     if (!kvm_enabled()) {
         struct sigaction sa;
         memset(&sa, 0, sizeof(sa));
-        sa.sa_flags = SA_SIGINFO | SA_NODEFER; 
+        sa.sa_flags = SA_SIGINFO; // [FIX-M6] 移除 SA_NODEFER，防止 handler 内递归 SIGSEGV 导致栈溢出
         sa.sa_sigaction = sigsegv_handler;
         sigemptyset(&sa.sa_mask);
         sigaction(SIGSEGV, &sa, NULL);
@@ -14044,6 +14134,7 @@ void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
         mprotect(g_ram_base, g_ram_size, PROT_NONE);
     }
 }
+
 ```
 
 **文件**: `wavevm-qemu/hw/wavevm/wavevm-mem.c`
@@ -14070,6 +14161,7 @@ void wavevm_setup_memory_region(MemoryRegion *mr, uint64_t size, int fd) {
     (void)size;
     (void)fd;
 }
+
 ```
 
 **文件**: `wavevm-qemu/hw/wavevm/wavevm-gpu-stub.c`
@@ -14326,6 +14418,7 @@ static void wvm_gpu_stub_register_types(void) {
     type_register_static(&wvm_gpu_stub_info);
 }
 type_init(wvm_gpu_stub_register_types)
+
 ```
 
 **文件**: `wavevm-qemu/hw/wavevm/wavevm-block-hook.c`
@@ -14375,6 +14468,7 @@ int wavevm_blk_interceptor(uint64_t sector, QEMUIOVector *qiov, int is_write)
     g_free(linear_buf);
     return ret;
 }
+
 ```
 
 **文件**: `wavevm-qemu/qemu-wavevm.diff`
@@ -14511,7 +14605,7 @@ new file mode 100644
 index 000000000..2c90c9447
 --- /dev/null
 +++ b/accel/wavevm/wavevm-accel.h
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,41 @@
 +#pragma once
 +
 +#include "qemu/osdep.h"
@@ -14608,6 +14702,7 @@ index f099b5092..3da9023a8 100644
          }
          aml_append(cpus_dev, method);
  
+
 ```
 
 ### Step 9: 优化的网关 (Gateway)
@@ -14649,6 +14744,7 @@ int main(int argc, char **argv) {
     }
     return 0;
 }
+
 ```
 
 **文件**: `gateway_service/aggregator.h`
@@ -14701,6 +14797,7 @@ int push_to_aggregator(uint32_t slave_id, void *data, int len);
 void flush_all_buffers(void);
 
 #endif // AGGREGATOR_H
+
 ```
 
 **文件**: `gateway_service/aggregator.c`
@@ -14866,9 +14963,15 @@ static int load_slave_config(const char *path) {
 }
 
 // Sends a raw datagram to a specific downstream node address.
+// [FIX-M8] 快照 node->addr 防止与 learn_route 竞争导致部分读取
 static int raw_send_to_downstream(int fd, gateway_node_t *node, void *data, int len) {
-    if (!node || node->addr.sin_port == 0) return -EHOSTUNREACH; 
-    return sendto(fd, data, len, MSG_DONTWAIT, (struct sockaddr*)&node->addr, sizeof(node->addr));
+    if (!node) return -EHOSTUNREACH;
+    struct sockaddr_in addr_snap;
+    pthread_mutex_lock(&node->lock);
+    addr_snap = node->addr;
+    pthread_mutex_unlock(&node->lock);
+    if (addr_snap.sin_port == 0) return -EHOSTUNREACH;
+    return sendto(fd, data, len, MSG_DONTWAIT, (struct sockaddr*)&addr_snap, sizeof(addr_snap));
 }
 
 /* 
@@ -14948,7 +15051,7 @@ static int internal_push(int fd, uint32_t slave_id, void *data, int len) {
         pthread_rwlock_unlock(&g_map_lock);
         return -1;
     }
-
+    
     // 2. 获取节点级互斥锁，随后释放全局读锁
     pthread_mutex_lock(&node->lock);
     pthread_rwlock_unlock(&g_map_lock); 
@@ -15073,7 +15176,10 @@ static void learn_route(uint32_t slave_id, struct sockaddr_in *addr) {
     }
     
     if (node && !node->static_pinned) {
+        // [FIX-M8] 同时持有 node->lock 保护 addr 写入，与读端保持一致
+        pthread_mutex_lock(&node->lock);
         node->addr = *addr;
+        pthread_mutex_unlock(&node->lock);
         // printf("[Gateway-Auto] Updated Route Node: %u\n", slave_id);
     }
     pthread_rwlock_unlock(&g_map_lock);
@@ -15120,6 +15226,11 @@ static void* gateway_worker(void *arg) {
     struct iovec iovecs[BATCH_SIZE];
     struct sockaddr_in src_addrs[BATCH_SIZE];
     uint8_t *buffer_pool = malloc(BATCH_SIZE * WVM_MAX_PACKET_SIZE);
+    if (!buffer_pool) {
+        perror("[Gateway] Worker buffer_pool alloc failed");
+        close(local_fd);
+        return NULL;
+    }
 
     for (int i = 0; i < BATCH_SIZE; i++) {
         iovecs[i].iov_base = buffer_pool + (i * WVM_MAX_PACKET_SIZE);
@@ -15162,9 +15273,17 @@ static void* gateway_worker(void *arg) {
              * misclassification loops in multi-hop or same-host multi-instance
              * deployments. Fallback to upstream only when no local route exists.
              */
-            uint32_t route_id = source_id; // 兼容旧包：没有目标信息时按旧字段转发
+            // [FIX-M7] 当 target_id 无效时不再 fallback 到 source_id，
+            // 防止 AUTO_ROUTE 包被回送给发送者形成环路
+            uint32_t route_id;
             if (WVM_IS_VALID_TARGET(target_id)) {
                 route_id = target_id;
+            } else {
+                // 无有效目标，直接交给 upstream 处理
+                int tx_fd = (g_upstream_tx_socket >= 0) ? g_upstream_tx_socket : local_fd;
+                sendto(tx_fd, ptr, pkt_len, MSG_DONTWAIT,
+                       (struct sockaddr*)&g_upstream_addr, sizeof(g_upstream_addr));
+                continue;
             }
 
             int r = internal_push(local_fd, route_id, ptr, pkt_len);
@@ -15235,10 +15354,12 @@ void dynamic_add_route(uint32_t node_id, uint32_t ip, uint16_t port) {
     }
     
     if (node) {
+        pthread_mutex_lock(&node->lock);
         node->static_pinned = 1;
         node->addr.sin_family = AF_INET;
         node->addr.sin_addr.s_addr = ip;
         node->addr.sin_port = port;
+        pthread_mutex_unlock(&node->lock);
         printf("[Gateway] Route Added/Updated: Node %u -> %s:%d\n", 
                node_id, inet_ntoa(node->addr.sin_addr), ntohs(port));
     }
@@ -15318,6 +15439,7 @@ int init_aggregator(int local_port, const char *upstream_ip, int upstream_port, 
     pthread_detach(ctrl_tid);
 
     return 0;}
+
 ```
 
 **文件**: `gateway_service/Makefile`
@@ -15336,6 +15458,7 @@ $(TARGET): $(SRCS)
 
 clean:
 	rm -f $(TARGET)
+
 ```
 
 ---

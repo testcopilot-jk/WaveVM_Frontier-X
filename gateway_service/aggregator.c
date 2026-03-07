@@ -421,6 +421,11 @@ static void* gateway_worker(void *arg) {
     struct iovec iovecs[BATCH_SIZE];
     struct sockaddr_in src_addrs[BATCH_SIZE];
     uint8_t *buffer_pool = malloc(BATCH_SIZE * WVM_MAX_PACKET_SIZE);
+    if (!buffer_pool) {
+        perror("[Gateway] Worker buffer_pool alloc failed");
+        close(local_fd);
+        return NULL;
+    }
 
     for (int i = 0; i < BATCH_SIZE; i++) {
         iovecs[i].iov_base = buffer_pool + (i * WVM_MAX_PACKET_SIZE);
@@ -544,10 +549,12 @@ void dynamic_add_route(uint32_t node_id, uint32_t ip, uint16_t port) {
     }
     
     if (node) {
+        pthread_mutex_lock(&node->lock);
         node->static_pinned = 1;
         node->addr.sin_family = AF_INET;
         node->addr.sin_addr.s_addr = ip;
         node->addr.sin_port = port;
+        pthread_mutex_unlock(&node->lock);
         printf("[Gateway] Route Added/Updated: Node %u -> %s:%d\n", 
                node_id, inet_ntoa(node->addr.sin_addr), ntohs(port));
     }
