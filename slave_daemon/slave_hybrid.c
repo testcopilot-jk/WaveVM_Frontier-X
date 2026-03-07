@@ -617,6 +617,7 @@ void* dirty_sync_sender_thread(void* arg) {
         
         // 网络发送
         uint8_t tx_buf[sizeof(struct wvm_header) + 8 + 4096];
+        memset(tx_buf, 0, sizeof(struct wvm_header)); // [FIX] 清零 header 区域，防止 epoch/flags 等字段含垃圾值
         struct wvm_header *wh = (struct wvm_header *)tx_buf;
         size_t total_len = sizeof(tx_buf);
 
@@ -1004,6 +1005,8 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
         }
     }
     else if (type == MSG_FETCH_AND_INVALIDATE) {
+        // [FIX] 边界检查：需要至少 16 字节 payload（8 target + 8 req_id）
+        if (hdr->payload_len < 16) return;
         // [FIX] 安全读取
         uint64_t tmp_target = wvm_get_u64_unaligned(payload);
         uint32_t target_node = (uint32_t)tmp_target;
@@ -1050,6 +1053,11 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
     uint32_t count = ntohl(blk->count);
     if (count == 0 || count > (64U << 20) / 512) return; // 防溢出：上限 64MB
     uint32_t data_len = count * 512;
+    // [FIX] 验证 count*512 不超过实际 payload 数据（防越界读）
+    if (hdr->msg_type == MSG_BLOCK_WRITE) {
+        uint16_t actual_pl = hdr->payload_len; // 已被 ntoh_header 转为 host order
+        if (data_len > actual_pl - sizeof(struct wvm_block_payload)) return;
+    }
     
     uint64_t chunk_id = (lba << 9) >> WVM_STORAGE_CHUNK_SHIFT;
     off_t offset = (lba << 9) & ((1UL << WVM_STORAGE_CHUNK_SHIFT) - 1);

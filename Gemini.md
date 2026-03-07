@@ -3689,7 +3689,7 @@ static void request_view_from_neighbor(uint32_t peer_id) {
     hdr.magic = htonl(WVM_MAGIC);
     hdr.msg_type = htons(MSG_VIEW_PULL);
     hdr.slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
-    hdr.epoch = g_curr_epoch;
+    hdr.epoch = htonl(g_curr_epoch);
     hdr.payload_len = 0;
 
     // 发送视图请求
@@ -3718,7 +3718,7 @@ static void handle_view_pull(struct wvm_header *rx_hdr, uint32_t src_id) {
     hdr->msg_type = htons(MSG_VIEW_ACK);
     hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
     hdr->payload_len = htons(payload_len);
-    hdr->epoch = g_curr_epoch;
+    hdr->epoch = htonl(g_curr_epoch);
     hdr->node_state = g_my_node_state;
 
     struct wvm_view_payload *pl = (struct wvm_view_payload *)(buf + sizeof(*hdr));
@@ -3737,9 +3737,13 @@ static void handle_view_pull(struct wvm_header *rx_hdr, uint32_t src_id) {
     g_ops->free_packet(buf);
 }
 
-static void handle_view_ack(void *payload) {
+static void handle_view_ack(void *payload, uint16_t payload_len) {
     struct wvm_view_payload *pl = (struct wvm_view_payload *)payload;
+    if (payload_len < sizeof(struct wvm_view_payload)) return;
     uint32_t count = ntohl(pl->entry_count);
+    // [FIX] 边界检查：确保 count 不超过实际 payload 能容纳的条目数
+    uint32_t max_entries = (payload_len - sizeof(struct wvm_view_payload)) / sizeof(struct wvm_view_entry);
+    if (count > max_entries) count = max_entries;
 
     for (uint32_t i = 0; i < count; i++) {
         uint32_t nid = ntohl(pl->entries[i].node_id);
@@ -3993,6 +3997,55 @@ static atomic_long g_force_sync_last_sec = ATOMIC_VAR_INIT(0);
  * [后果] 这是系统的“最终一致性保险丝”，在网络混沌或极端竞态下保证内存状态不崩溃。
  */
 static void force_sync_client(uint64_t gpa, page_meta_t* page, uint32_t client_id) {
+    // [FIX] page 可能为 NULL（如 stale-epoch 拒绝路径尚未查表）
+    if (!page) {
+        // 尝试从目录表中查找
+        uint32_t lock_idx = get_lock_idx(gpa);
+        pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
+        page = find_or_create_page_meta(gpa);
+        if (!page) {
+            pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+            return; // 页面不存在，无法同步
+        }
+        // 复制版本和数据后立即释放锁
+        uint64_t safe_version = page->version;
+        uint8_t safe_data[4096];
+        memcpy(safe_data, page->base_page_data, 4096);
+        pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+
+        // 使用安全副本发送（跳过下方的直接解引用）
+        // [FIX] 基于令牌桶思想的秒级节流
+        long current_sec = g_ops->get_time_us() / 1000000;
+        long last_sec = atomic_load(&g_force_sync_last_sec);
+        if (current_sec != last_sec) {
+            atomic_store(&g_force_sync_last_sec, current_sec);
+            atomic_store(&g_force_sync_counter, 0);
+        }
+        if (atomic_fetch_add(&g_force_sync_counter, 1) >= MAX_FORCE_SYNC_PER_SEC) return;
+
+        size_t pl_size = sizeof(struct wvm_full_page_push);
+        size_t pkt_len = sizeof(struct wvm_header) + pl_size;
+        uint8_t *buffer = g_ops->alloc_packet(pkt_len, 1);
+        if (!buffer) return;
+
+        struct wvm_header *hdr = (struct wvm_header*)buffer;
+        hdr->magic = htonl(WVM_MAGIC);
+        hdr->msg_type = htons(MSG_FORCE_SYNC);
+        hdr->payload_len = htons(pl_size);
+        hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+        hdr->req_id = 0;
+        hdr->qos_level = 1;
+
+        struct wvm_full_page_push *push = (struct wvm_full_page_push*)(buffer + sizeof(*hdr));
+        push->gpa = WVM_HTONLL(gpa);
+        push->version = WVM_HTONLL(safe_version);
+        memcpy(push->data, safe_data, 4096);
+
+        g_ops->send_packet(buffer, pkt_len, WVM_ENCODE_ID(g_my_vm_id, client_id));
+        g_ops->free_packet(buffer);
+        return;
+    }
+
     // [FIX] 基于令牌桶思想的秒级节流
     long current_sec = g_ops->get_time_us() / 1000000;
     long last_sec = atomic_load(&g_force_sync_last_sec);
@@ -4004,13 +4057,13 @@ static void force_sync_client(uint64_t gpa, page_meta_t* page, uint32_t client_i
 
     if (atomic_fetch_add(&g_force_sync_counter, 1) >= MAX_FORCE_SYNC_PER_SEC) {
         // 超出带宽配额，直接丢弃。
-        // 客户端因收不到回复，会保持旧版本，下次 COMMIT 依然会失败，实现“天然重试”
-        return; 
+        // 客户端因收不到回复，会保持旧版本，下次 COMMIT 依然会失败，实现"天然重试"
+        return;
     }
 
     size_t pl_size = sizeof(struct wvm_full_page_push);
     size_t pkt_len = sizeof(struct wvm_header) + pl_size;
-    
+
     uint8_t *buffer = g_ops->alloc_packet(pkt_len, 1);
     if (!buffer) return;
 
@@ -4025,7 +4078,7 @@ static void force_sync_client(uint64_t gpa, page_meta_t* page, uint32_t client_i
     struct wvm_full_page_push *push = (struct wvm_full_page_push*)(buffer + sizeof(*hdr));
     push->gpa = WVM_HTONLL(gpa);
     // 此时持有页锁，version是安全的
-    push->version = WVM_HTONLL(page->version); 
+    push->version = WVM_HTONLL(page->version);
     memcpy(push->data, page->base_page_data, 4096);
 
     // [Fix #2] client_id 是裸 node_id，发包时需要编码为 composite ID
@@ -4186,10 +4239,20 @@ void wvm_prophet_abi_scanner(wvm_kvm_context_t *ctx) {
         // 使用文件中真实存在的广播接口
         struct wvm_rpc_batch_memset batch = { .val = htonl(0), .count = htonl(1) };
         struct wvm_rpc_region region = { .gpa = WVM_HTONLL(aligned_start), .len = WVM_HTONLL(acc_len) };
-        uint8_t buf[sizeof(batch) + sizeof(region)];
-        memcpy(buf, &batch, sizeof(batch));
-        memcpy(buf + sizeof(batch), &region, sizeof(region));
-        
+        // [FIX] broadcast_rpc 要求 header+payload 格式，不能只传裸 payload
+        size_t pl_size = sizeof(batch) + sizeof(region);
+        uint8_t buf[sizeof(struct wvm_header) + sizeof(batch) + sizeof(region)];
+        memset(buf, 0, sizeof(struct wvm_header)); // 清零 header 区域
+        memcpy(buf + sizeof(struct wvm_header), &batch, sizeof(batch));
+        memcpy(buf + sizeof(struct wvm_header) + sizeof(batch), &region, sizeof(region));
+
+        // 预填 header 基本字段
+        struct wvm_header *rpc_hdr = (struct wvm_header *)buf;
+        rpc_hdr->magic = htonl(WVM_MAGIC);
+        rpc_hdr->msg_type = htons(MSG_RPC_BATCH_MEMSET);
+        rpc_hdr->payload_len = htons((uint16_t)pl_size);
+        rpc_hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+
         wvm_logic_broadcast_rpc(buf, sizeof(buf), MSG_RPC_BATCH_MEMSET);
 
         // 同步 Master 侧元数据
@@ -4445,7 +4508,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             break;
             
         case MSG_VIEW_ACK:
-            handle_view_ack(payload);
+            handle_view_ack(payload, ntohs(hdr->payload_len));
             break;
 
         // --- 1. 处理拉取请求 (Pull) ---
@@ -4697,8 +4760,8 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
 
                     // CRC32 由 send_packet 后端自动计算，此处无需手动填
                     ack_hdr->crc32 = 0;
-                    
-                    g_ops->send_packet(ack_buf, ack_len, src_id);
+
+                    g_ops->send_packet(ack_buf, ack_len, source_node_id);
                     g_ops->free_packet(ack_buf);
                 }
             }
@@ -8882,6 +8945,7 @@ void* dirty_sync_sender_thread(void* arg) {
         
         // 网络发送
         uint8_t tx_buf[sizeof(struct wvm_header) + 8 + 4096];
+        memset(tx_buf, 0, sizeof(struct wvm_header)); // [FIX] 清零 header 区域，防止 epoch/flags 等字段含垃圾值
         struct wvm_header *wh = (struct wvm_header *)tx_buf;
         size_t total_len = sizeof(tx_buf);
 
@@ -9269,6 +9333,8 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
         }
     }
     else if (type == MSG_FETCH_AND_INVALIDATE) {
+        // [FIX] 边界检查：需要至少 16 字节 payload（8 target + 8 req_id）
+        if (hdr->payload_len < 16) return;
         // [FIX] 安全读取
         uint64_t tmp_target = wvm_get_u64_unaligned(payload);
         uint32_t target_node = (uint32_t)tmp_target;
@@ -9315,7 +9381,12 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
     uint32_t count = ntohl(blk->count);
     if (count == 0 || count > (64U << 20) / 512) return; // 防溢出：上限 64MB
     uint32_t data_len = count * 512;
-    
+    // [FIX] 验证 count*512 不超过实际 payload 数据（防越界读）
+    if (hdr->msg_type == MSG_BLOCK_WRITE) {
+        uint16_t actual_pl = hdr->payload_len; // 已被 ntoh_header 转为 host order
+        if (data_len > actual_pl - sizeof(struct wvm_block_payload)) return;
+    }
+
     uint64_t chunk_id = (lba << 9) >> WVM_STORAGE_CHUNK_SHIFT;
     off_t offset = (lba << 9) & ((1UL << WVM_STORAGE_CHUNK_SHIFT) - 1);
     
