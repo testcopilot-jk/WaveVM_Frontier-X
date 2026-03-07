@@ -4561,7 +4561,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                 if (WVM_GET_NODEID(wvm_get_directory_node_id(gpa)) != (uint32_t)g_my_node_id) return;
 
                 pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
-            
+
                 page_meta_t *page = find_or_create_page_meta(gpa);
 
                 if (!page) {
@@ -4625,8 +4625,8 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                         }
                     }
                 }
+                pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
             }
-            pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
             break;
         }
 

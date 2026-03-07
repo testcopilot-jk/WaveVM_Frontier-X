@@ -1524,8 +1524,8 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                         }
                     }
                 }
+                pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
             }
-            pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
             break;
         }
 
