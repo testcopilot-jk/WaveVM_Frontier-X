@@ -5485,7 +5485,7 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
     // ========================================================================
     // 分支 A: 本地缺页 (Local Fault) - 极速路径
     // ========================================================================
-    if (dir_node == g_my_node_id) {
+    if (WVM_GET_NODEID(dir_node) == (uint32_t)g_my_node_id) {
         uint64_t local_version = 0;
         
         // 建立临时内核映射进行拷贝 (原子上下文)
@@ -7933,7 +7933,7 @@ void* client_handler(void *socket_desc) {
             case WVM_IPC_TYPE_COMMIT_DIFF: {
                 // This is the new IPC type for V29
                 struct wvm_diff_log* log = (struct wvm_diff_log*)payload_buf;
-                uint32_t dir_node = wvm_get_directory_node_id(log->gpa);
+                uint32_t dir_node = wvm_get_directory_node_id(WVM_NTOHLL(log->gpa));
                 // Send MSG_COMMIT_DIFF to the correct directory node
                 u_ops.send_packet_async(MSG_COMMIT_DIFF, log, ipc_hdr.len, dir_node, 1);
                 break;

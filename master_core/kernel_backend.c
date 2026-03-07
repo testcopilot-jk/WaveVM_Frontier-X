@@ -565,7 +565,7 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
     // ========================================================================
     // 分支 A: 本地缺页 (Local Fault) - 极速路径
     // ========================================================================
-    if (dir_node == g_my_node_id) {
+    if (WVM_GET_NODEID(dir_node) == (uint32_t)g_my_node_id) {
         uint64_t local_version = 0;
         
         // 建立临时内核映射进行拷贝 (原子上下文)
