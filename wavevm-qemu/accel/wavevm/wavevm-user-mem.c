@@ -410,7 +410,6 @@ hit:
 }
 
 static WritablePage *g_writable_pages_list = NULL;
-static pthread_mutex_t g_writable_list_lock = PTHREAD_MUTEX_INITIALIZER;
 
 // 线程局部
 static __thread int t_com_sock = -1; 
@@ -1004,14 +1003,8 @@ static void *diff_harvester_thread_fn(void *arg) {
             continue;
         }
 
-        // 1. 偷走链表 (Detach List)
-        WritablePage *batch_head = NULL;
-        pthread_mutex_lock(&g_writable_list_lock);
-        if (g_writable_pages_list) {
-            batch_head = g_writable_pages_list;
-            g_writable_pages_list = NULL; 
-        }
-        pthread_mutex_unlock(&g_writable_list_lock);
+        // 1. 偷走链表 (Detach List) — 必须用原子交换，与信号处理函数的 CAS 配合
+        WritablePage *batch_head = __atomic_exchange_n(&g_writable_pages_list, NULL, __ATOMIC_ACQ_REL);
 
         if (!batch_head) continue;
 
