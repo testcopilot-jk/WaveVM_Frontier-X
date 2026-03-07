@@ -352,11 +352,17 @@ static void *wavevm_slave_net_thread(void *arg) {
                 // [字节序] 从网络字节序解码到主机序
                 uint16_t msg_type = ntohs(hdr->msg_type);
                 uint16_t pkt_payload_len = ntohs(hdr->payload_len);
+                int actual_payload = len - sizeof(struct wvm_header);
+
+                // [安全] 报文实际长度 vs 头部声明长度一致性校验
+                if (pkt_payload_len > actual_payload) {
+                    continue; // 截断包，丢弃
+                }
 
                 // 1. 内存写 (Master -> Slave)
                 if (msg_type == MSG_MEM_WRITE) {
                     qemu_mutex_lock_iothread();
-                    if (pkt_payload_len > 8) {
+                    if (pkt_payload_len > 8 && actual_payload >= pkt_payload_len) {
                         uint64_t gpa = WVM_NTOHLL(*(uint64_t *)payload);
                         uint32_t data_len = pkt_payload_len - 8;
                         void *data_ptr = (uint8_t *)payload + 8;
@@ -370,6 +376,7 @@ static void *wavevm_slave_net_thread(void *arg) {
                 }
                 // 2. 内存读 (Master -> Slave)
                 else if (msg_type == MSG_MEM_READ) {
+                    if (pkt_payload_len < 8) continue; // 至少需要 8 字节的 gpa
                     uint64_t gpa = WVM_NTOHLL(*(uint64_t *)payload);
                     uint32_t read_len = 4096;
                     if (sizeof(struct wvm_header) + read_len <= MAX_PKT_SIZE) {
