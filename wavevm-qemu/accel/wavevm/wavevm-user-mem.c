@@ -157,6 +157,7 @@ static void flush_lazy_ro_queue(void) {
 }
 
 static void defer_ro_protect(uint64_t gpa) {
+    if (kvm_enabled()) return; /* KVM 脏页由 dirty log 跟踪，绝不能 mprotect 降权，否则 EPT 违例 → exit=17 */
     t_lazy_ro_queue[t_lazy_count++] = gpa;
     if (t_lazy_count >= LAZY_QUEUE_SIZE) flush_lazy_ro_queue();
 }

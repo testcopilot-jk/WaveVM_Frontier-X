@@ -386,7 +386,7 @@ static void wavevm_remote_exec(CPUState *cpu) {
         ioctl(cpu->kvm_fd, KVM_GET_SREGS, &ksregs);
 
         req.mode_tcg = 0;
-        
+
         wvm_kvm_context_t *kctx = &req.ctx.kvm;
         kctx->rax = kregs.rax; kctx->rbx = kregs.rbx; kctx->rcx = kregs.rcx;
         kctx->rdx = kregs.rdx; kctx->rsi = kregs.rsi; kctx->rdi = kregs.rdi;
@@ -396,6 +396,31 @@ static void wavevm_remote_exec(CPUState *cpu) {
         kctx->r14 = kregs.r14; kctx->r15 = kregs.r15;
         kctx->rip = kregs.rip; kctx->rflags = kregs.rflags;
         memcpy(kctx->sregs_data, &ksregs, sizeof(ksregs));
+
+        /* [FIX] 携带上一轮 IO/MMIO 处理结果：
+         * 若上次远程执行触发了 IO IN 或 MMIO READ，Master 已在本地
+         * wavevm_handle_io/mmio 中将设备读结果填入 run->io.data / mmio.data。
+         * Slave 需要这些数据在下次 KVM_RUN 时完成未决的 IO 指令。 */
+        struct kvm_run *run = cpu->kvm_run;
+        kctx->exit_reason = run->exit_reason;
+        if (run->exit_reason == KVM_EXIT_IO) {
+            kctx->io.direction = run->io.direction;
+            kctx->io.size      = run->io.size;
+            kctx->io.port      = run->io.port;
+            kctx->io.count     = run->io.count;
+            if (run->io.direction == KVM_EXIT_IO_IN) {
+                size_t io_bytes = (size_t)run->io.size * run->io.count;
+                if (io_bytes > sizeof(kctx->io.data)) io_bytes = sizeof(kctx->io.data);
+                memcpy(kctx->io.data, (uint8_t *)run + run->io.data_offset, io_bytes);
+            }
+        } else if (run->exit_reason == KVM_EXIT_MMIO) {
+            kctx->mmio.phys_addr = run->mmio.phys_addr;
+            kctx->mmio.len       = run->mmio.len;
+            kctx->mmio.is_write  = run->mmio.is_write;
+            if (!run->mmio.is_write) {
+                memcpy(kctx->mmio.data, run->mmio.data, 8);
+            }
+        }
     } else {
         req.mode_tcg = 1;
         wvm_tcg_get_state(cpu, &req.ctx.tcg);

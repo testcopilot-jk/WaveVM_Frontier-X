@@ -9191,9 +9191,35 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         ksregs.efer = remote_sregs->efer;
     }
 
-    ioctl(t_vcpu_fd, KVM_SET_SREGS, &ksregs); 
+    ioctl(t_vcpu_fd, KVM_SET_SREGS, &ksregs);
     ioctl(t_vcpu_fd, KVM_SET_REGS, &kregs);
-    
+
+    /* [FIX] 恢复上一轮 IO IN / MMIO READ 的设备读结果：
+     * Master 已在本地执行 address_space_rw 读取设备并填入 kctx->io.data / mmio.data，
+     * 需要写回 t_kvm_run 以便 KVM_RUN 完成未决 IO 指令。 */
+    if (!req->mode_tcg) {
+        wvm_kvm_context_t *rctx = &req->ctx.kvm;
+        if (rctx->exit_reason == KVM_EXIT_IO &&
+            rctx->io.direction == KVM_EXIT_IO_IN) {
+            t_kvm_run->exit_reason = KVM_EXIT_IO;
+            t_kvm_run->io.direction = rctx->io.direction;
+            t_kvm_run->io.size      = rctx->io.size;
+            t_kvm_run->io.port      = rctx->io.port;
+            t_kvm_run->io.count     = rctx->io.count;
+            size_t io_bytes = (size_t)rctx->io.size * rctx->io.count;
+            if (io_bytes > sizeof(rctx->io.data)) io_bytes = sizeof(rctx->io.data);
+            uint8_t *io_ptr = (uint8_t *)t_kvm_run + t_kvm_run->io.data_offset;
+            memcpy(io_ptr, rctx->io.data, io_bytes);
+        } else if (rctx->exit_reason == KVM_EXIT_MMIO &&
+                   !rctx->mmio.is_write) {
+            t_kvm_run->exit_reason = KVM_EXIT_MMIO;
+            t_kvm_run->mmio.phys_addr = rctx->mmio.phys_addr;
+            t_kvm_run->mmio.len       = rctx->mmio.len;
+            t_kvm_run->mmio.is_write  = 0;
+            memcpy(t_kvm_run->mmio.data, rctx->mmio.data, 8);
+        }
+    }
+
     int ret;
     do {
         ret = ioctl(t_vcpu_fd, KVM_RUN, 0);
@@ -12309,6 +12335,31 @@ static void wavevm_remote_exec(CPUState *cpu) {
         kctx->r14 = kregs.r14; kctx->r15 = kregs.r15;
         kctx->rip = kregs.rip; kctx->rflags = kregs.rflags;
         memcpy(kctx->sregs_data, &ksregs, sizeof(ksregs));
+
+        /* [FIX] 携带上一轮 IO/MMIO 处理结果：
+         * 若上次远程执行触发了 IO IN 或 MMIO READ，Master 已在本地
+         * wavevm_handle_io/mmio 中将设备读结果填入 run->io.data / mmio.data。
+         * Slave 需要这些数据在下次 KVM_RUN 时完成未决的 IO 指令。 */
+        struct kvm_run *run = cpu->kvm_run;
+        kctx->exit_reason = run->exit_reason;
+        if (run->exit_reason == KVM_EXIT_IO) {
+            kctx->io.direction = run->io.direction;
+            kctx->io.size      = run->io.size;
+            kctx->io.port      = run->io.port;
+            kctx->io.count     = run->io.count;
+            if (run->io.direction == KVM_EXIT_IO_IN) {
+                size_t io_bytes = (size_t)run->io.size * run->io.count;
+                if (io_bytes > sizeof(kctx->io.data)) io_bytes = sizeof(kctx->io.data);
+                memcpy(kctx->io.data, (uint8_t *)run + run->io.data_offset, io_bytes);
+            }
+        } else if (run->exit_reason == KVM_EXIT_MMIO) {
+            kctx->mmio.phys_addr = run->mmio.phys_addr;
+            kctx->mmio.len       = run->mmio.len;
+            kctx->mmio.is_write  = run->mmio.is_write;
+            if (!run->mmio.is_write) {
+                memcpy(kctx->mmio.data, run->mmio.data, 8);
+            }
+        }
     } else {
         req.mode_tcg = 1;
         wvm_tcg_get_state(cpu, &req.ctx.tcg);
@@ -12709,6 +12760,7 @@ static void flush_lazy_ro_queue(void) {
 }
 
 static void defer_ro_protect(uint64_t gpa) {
+    if (kvm_enabled()) return; /* KVM 脏页由 dirty log 跟踪，绝不能 mprotect 降权，否则 EPT 违例 → exit=17 */
     t_lazy_ro_queue[t_lazy_count++] = gpa;
     if (t_lazy_count >= LAZY_QUEUE_SIZE) flush_lazy_ro_queue();
 }

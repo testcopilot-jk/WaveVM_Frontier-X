@@ -807,9 +807,35 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         ksregs.efer = remote_sregs->efer;
     }
 
-    ioctl(t_vcpu_fd, KVM_SET_SREGS, &ksregs); 
+    ioctl(t_vcpu_fd, KVM_SET_SREGS, &ksregs);
     ioctl(t_vcpu_fd, KVM_SET_REGS, &kregs);
-    
+
+    /* [FIX] 恢复上一轮 IO IN / MMIO READ 的设备读结果：
+     * Master 已在本地执行 address_space_rw 读取设备并填入 kctx->io.data / mmio.data，
+     * 需要写回 t_kvm_run 以便 KVM_RUN 完成未决 IO 指令。 */
+    if (!req->mode_tcg) {
+        wvm_kvm_context_t *rctx = &req->ctx.kvm;
+        if (rctx->exit_reason == KVM_EXIT_IO &&
+            rctx->io.direction == KVM_EXIT_IO_IN) {
+            t_kvm_run->exit_reason = KVM_EXIT_IO;
+            t_kvm_run->io.direction = rctx->io.direction;
+            t_kvm_run->io.size      = rctx->io.size;
+            t_kvm_run->io.port      = rctx->io.port;
+            t_kvm_run->io.count     = rctx->io.count;
+            size_t io_bytes = (size_t)rctx->io.size * rctx->io.count;
+            if (io_bytes > sizeof(rctx->io.data)) io_bytes = sizeof(rctx->io.data);
+            uint8_t *io_ptr = (uint8_t *)t_kvm_run + t_kvm_run->io.data_offset;
+            memcpy(io_ptr, rctx->io.data, io_bytes);
+        } else if (rctx->exit_reason == KVM_EXIT_MMIO &&
+                   !rctx->mmio.is_write) {
+            t_kvm_run->exit_reason = KVM_EXIT_MMIO;
+            t_kvm_run->mmio.phys_addr = rctx->mmio.phys_addr;
+            t_kvm_run->mmio.len       = rctx->mmio.len;
+            t_kvm_run->mmio.is_write  = 0;
+            memcpy(t_kvm_run->mmio.data, rctx->mmio.data, 8);
+        }
+    }
+
     int ret;
     do {
         ret = ioctl(t_vcpu_fd, KVM_RUN, 0);
