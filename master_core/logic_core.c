@@ -1385,7 +1385,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                 memset(ack_pl, 0, sizeof(*ack_pl));
             }
             
-            // pthread_mutex_unlock(&g_dir_table_locks[lock_idx]); // lock_idx not valid in this branch
+            pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
             
             g_ops->send_packet(buffer, pkt_len, source_node_id);
             g_ops->free_packet(buffer);
@@ -1414,7 +1414,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                 page->subscribers.bits[seg_idx] |= (1UL << (src_id % 64));
             }
             
-            // pthread_mutex_unlock(&g_dir_table_locks[lock_idx]); // lock_idx not valid in this branch
+            pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
             break;
         }
 
@@ -1451,7 +1451,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                     // 广播零页：Diff类型 + ZeroFlag + 无数据
                     broadcast_to_subscribers(page, MSG_PAGE_PUSH_DIFF, log, sizeof(struct wvm_diff_log), WVM_FLAG_ZERO);
                 }
-                // pthread_mutex_unlock(&g_dir_table_locks[lock_idx]); // lock_idx not valid in this branch
+                pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
             } else {
                 // 安全检查 diff 数据是否越界
                 if (sizeof(struct wvm_diff_log) + sz > pl_len) return;
@@ -1466,7 +1466,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
 
                 if (!page) {
                     if (g_ops->log) g_ops->log("[Logic] Fatal: Hash Table Full for GPA %llx", gpa);
-                    // pthread_mutex_unlock(&g_dir_table_locks[lock_idx]); // lock_idx not valid in this branch
+                    pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
                     return; // 防御性退出，防止崩溃
                 }
 
@@ -1481,7 +1481,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                     // 2. Counter 必须是连续的
                     if (commit_epoch != g_curr_epoch || commit_counter != local_counter) {
                         // 版本冲突！拒绝并强制同步
-                        // pthread_mutex_unlock(&g_dir_table_locks[lock_idx]); // lock_idx not valid in this branch
+                        pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
                         force_sync_client(gpa, page, src_id);
                         return;
                     }
@@ -1526,7 +1526,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                     }
                 }
             }
-            // pthread_mutex_unlock(&g_dir_table_locks[lock_idx]); // lock_idx not valid in this branch
+            pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
             break;
         }
 
@@ -1578,7 +1578,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                 }
             }
             
-            // pthread_mutex_unlock(&g_dir_table_locks[lock_idx]); // lock_idx not valid in this branch
+            pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
 
             // 5. [ACK] 只有在“解锁”且“提交成功”后，才发送 ACK
             // 这保证了当客户端收到 ACK 时，数据一定已经在 Directory 的内存里了

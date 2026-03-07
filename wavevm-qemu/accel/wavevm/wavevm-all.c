@@ -331,7 +331,7 @@ static bool wavevm_gpa_range_valid(uint64_t gpa, uint32_t len, bool is_write)
 static void *wavevm_slave_net_thread(void *arg) {
     WaveVMAccelState *s = (WaveVMAccelState *)arg;
     #define BATCH_SIZE 64
-    #define MAX_PKT_SIZE 4096 
+    #define MAX_PKT_SIZE 8192
 
     struct mmsghdr msgs[BATCH_SIZE];
     struct iovec iovecs[BATCH_SIZE];
@@ -397,6 +397,8 @@ static void *wavevm_slave_net_thread(void *arg) {
                     qemu_mutex_unlock_iothread();
                     hdr->msg_type = htons(MSG_MEM_ACK);
                     hdr->payload_len = 0;
+                    hdr->crc32 = 0;
+                    hdr->crc32 = htonl(calculate_crc32(buf, sizeof(struct wvm_header)));
                     sendto(s->master_sock, buf, sizeof(struct wvm_header), 0,
                           (struct sockaddr *)&addrs[i], sizeof(struct sockaddr_in));
                 }
@@ -405,20 +407,29 @@ static void *wavevm_slave_net_thread(void *arg) {
                     if (pkt_payload_len < 8) continue; // 至少需要 8 字节的 gpa
                     uint64_t gpa = WVM_NTOHLL(*(uint64_t *)payload);
                     uint32_t read_len = 4096;
+                    qemu_mutex_lock_iothread();
                     bool gpa_ok = wavevm_gpa_range_valid(gpa, read_len, false);
                     if (!gpa_ok) {
+                        qemu_mutex_unlock_iothread();
                         hdr->msg_type = htons(MSG_MEM_ACK);
                         hdr->payload_len = 0;
+                        hdr->crc32 = 0;
+                        hdr->crc32 = htonl(calculate_crc32(buf, sizeof(struct wvm_header)));
                         sendto(s->master_sock, buf, sizeof(struct wvm_header), 0,
                               (struct sockaddr *)&addrs[i], sizeof(struct sockaddr_in));
                         continue;
                     }
                     if (sizeof(struct wvm_header) + read_len <= MAX_PKT_SIZE) {
                         cpu_physical_memory_read(gpa, payload, read_len);
+                        qemu_mutex_unlock_iothread();
                         hdr->msg_type = htons(MSG_MEM_ACK);
                         hdr->payload_len = htons(read_len);
+                        hdr->crc32 = 0;
+                        hdr->crc32 = htonl(calculate_crc32(buf, sizeof(struct wvm_header) + read_len));
                         sendto(s->master_sock, buf, sizeof(struct wvm_header) + read_len, 0,
                               (struct sockaddr *)&addrs[i], sizeof(struct sockaddr_in));
+                    } else {
+                        qemu_mutex_unlock_iothread();
                     }
                 }
                 // 3. 远程执行 (Master -> Slave)
@@ -579,7 +590,10 @@ static void *wavevm_slave_net_thread(void *arg) {
                         }
                     }
                     qemu_mutex_unlock_iothread();
-                    sendto(s->master_sock, buf, msgs[i].msg_len, 0, 
+                    hdr->msg_type = htons(MSG_VCPU_EXIT);
+                    hdr->crc32 = 0;
+                    hdr->crc32 = htonl(calculate_crc32(buf, msgs[i].msg_len));
+                    sendto(s->master_sock, buf, msgs[i].msg_len, 0,
                           (struct sockaddr *)&addrs[i], sizeof(struct sockaddr_in));
                 } else if (msg_type == MSG_PING) {
                     // [FIX] 透传 PING 给 Gateway/Master，由真正的 Owner 回复 ACK
