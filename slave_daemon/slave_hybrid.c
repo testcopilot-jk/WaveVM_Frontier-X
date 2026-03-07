@@ -1439,10 +1439,12 @@ void* tcg_proxy_thread(void *arg) {
                     }
                 }
                 
-                uint32_t slave_id = ntohl(hdr->slave_id);
+                uint32_t target_raw = ntohl(hdr->target_id);
                 uint16_t msg_type = ntohs(hdr->msg_type);
-                int core_idx = (int)(WVM_GET_NODEID(slave_id) - g_base_id);
-    
+                int core_idx = (target_raw != WVM_NODE_AUTO_ROUTE)
+                    ? (int)(WVM_GET_NODEID(target_raw) - g_base_id)
+                    : 0;
+
                 if (core_idx < 0 || core_idx >= g_num_cores) continue;
 
                 // [V28 分流逻辑升级]

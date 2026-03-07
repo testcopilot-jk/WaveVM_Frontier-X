@@ -7468,13 +7468,22 @@ static void* rx_thread_loop(void *arg) {
                             uint64_t gpa = WVM_NTOHLL(log->gpa);
                             uint16_t off = ntohs(log->offset);
                             uint16_t sz = ntohs(log->size);
-                    
+
                             if (gpa < g_shm_size && off + sz <= 4096) {
-                                // 1. 应用 Diff 到 SHM
-                                memcpy((uint8_t*)g_shm_ptr + gpa + off, log->data, sz);
-                                // 2. 转发给 QEMU
-                                // 注意：这里需要计算正确的 payload 长度 (header + data)
-                                broadcast_push_to_qemu(msg_type, payload, sizeof(struct wvm_diff_log) + sz);
+                                if (hdr->flags & WVM_FLAG_ZERO) {
+                                    // 零页：清零 SHM，转化为 FULL_PUSH 发给 QEMU
+                                    memset((uint8_t*)g_shm_ptr + gpa, 0, 4096);
+                                    struct wvm_full_page_push fake_full;
+                                    fake_full.gpa = log->gpa;
+                                    fake_full.version = log->version;
+                                    memset(fake_full.data, 0, 4096);
+                                    broadcast_push_to_qemu(MSG_PAGE_PUSH_FULL, &fake_full, sizeof(fake_full));
+                                } else if (sz > 0) {
+                                    // 1. 应用 Diff 到 SHM
+                                    memcpy((uint8_t*)g_shm_ptr + gpa + off, log->data, sz);
+                                    // 2. 转发给 QEMU
+                                    broadcast_push_to_qemu(msg_type, payload, sizeof(struct wvm_diff_log) + sz);
+                                }
                             }
                         }
                         else if (msg_type == MSG_INVALIDATE || msg_type == MSG_DOWNGRADE || msg_type == MSG_FORCE_SYNC) {
@@ -9814,10 +9823,12 @@ void* tcg_proxy_thread(void *arg) {
                     }
                 }
                 
-                uint32_t slave_id = ntohl(hdr->slave_id);
+                uint32_t target_raw = ntohl(hdr->target_id);
                 uint16_t msg_type = ntohs(hdr->msg_type);
-                int core_idx = (int)(WVM_GET_NODEID(slave_id) - g_base_id);
-    
+                int core_idx = (target_raw != WVM_NODE_AUTO_ROUTE)
+                    ? (int)(WVM_GET_NODEID(target_raw) - g_base_id)
+                    : 0;
+
                 if (core_idx < 0 || core_idx >= g_num_cores) continue;
 
                 // [V28 分流逻辑升级]
