@@ -4536,8 +4536,8 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             uint64_t commit_version = WVM_NTOHLL(log->version);
             uint16_t off = ntohs(log->offset);
             uint16_t sz = ntohs(log->size);
+            uint32_t lock_idx = get_lock_idx(gpa);
             if (sz == 0) {
-                uint32_t lock_idx = get_lock_idx(gpa);
                 pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
                 // [V29.5] Zero Page Commit
                 page_meta_t *page = find_or_create_page_meta(gpa);
@@ -4560,7 +4560,6 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
 
                 if (WVM_GET_NODEID(wvm_get_directory_node_id(gpa)) != (uint32_t)g_my_node_id) return;
 
-                uint32_t lock_idx = get_lock_idx(gpa);
                 pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
             
                 page_meta_t *page = find_or_create_page_meta(gpa);
@@ -9335,6 +9334,7 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
         hdr->slave_id = htonl(hdr->slave_id);
         hdr->target_id = htonl(hdr->target_id);
         hdr->req_id = WVM_HTONLL(hdr->req_id);
+        hdr->epoch = htonl(hdr->epoch);
         if (written != data_len) {
             hdr->flags |= WVM_FLAG_ERROR;
         }
@@ -9356,6 +9356,7 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
             rh->slave_id = htonl(hdr->slave_id);
             rh->target_id = htonl(hdr->target_id);
             rh->req_id = WVM_HTONLL(hdr->req_id);
+            rh->epoch = htonl(hdr->epoch);
 
             struct wvm_block_payload *rp = (struct wvm_block_payload*)(tx + sizeof(*hdr));
             rp->lba = blk->lba;
@@ -9378,6 +9379,7 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
         hdr->slave_id = htonl(hdr->slave_id);
         hdr->target_id = htonl(hdr->target_id);
         hdr->req_id = WVM_HTONLL(hdr->req_id);
+        hdr->epoch = htonl(hdr->epoch);
         if (ret < 0) hdr->flags |= WVM_FLAG_ERROR;
 
         // [FIX] 发送前必须重算 CRC32

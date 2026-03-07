@@ -1435,8 +1435,8 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             uint64_t commit_version = WVM_NTOHLL(log->version);
             uint16_t off = ntohs(log->offset);
             uint16_t sz = ntohs(log->size);
+            uint32_t lock_idx = get_lock_idx(gpa);
             if (sz == 0) {
-                uint32_t lock_idx = get_lock_idx(gpa);
                 pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
                 // [V29.5] Zero Page Commit
                 page_meta_t *page = find_or_create_page_meta(gpa);
@@ -1459,9 +1459,8 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
 
                 if (WVM_GET_NODEID(wvm_get_directory_node_id(gpa)) != (uint32_t)g_my_node_id) return;
 
-                uint32_t lock_idx = get_lock_idx(gpa);
                 pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
-            
+
                 page_meta_t *page = find_or_create_page_meta(gpa);
 
                 if (!page) {
