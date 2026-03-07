@@ -10738,7 +10738,11 @@ static void *wavevm_master_ipc_thread(void *arg) {
                 hwaddr len = 4096;
                 void *host_addr = cpu_physical_memory_map(req->gpa, &len, 1);
                 if (host_addr && len >= 4096) {
-                    mprotect(host_addr, 4096, PROT_NONE);
+                    // KVM 模式下不能用 mprotect(PROT_NONE)，
+                    // 否则 EPT 无法解析已被 mprotect 撤销的 HVA 映射，导致 VM Exit 风暴。
+                    if (!kvm_enabled()) {
+                        mprotect(host_addr, 4096, PROT_NONE);
+                    }
                     cpu_physical_memory_unmap(host_addr, len, 1, 0);
                 }
             }
@@ -13447,10 +13451,13 @@ void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
         enable_fault_hook = false;
     }
 
-    // KVM + PROT_NONE 会导致硬件访存路径异常，KVM 下强制关闭 fault hook。
+    // KVM + PROT_NONE 会导致 EPT violation，KVM 下：
+    //   1. 启用 migration dirty log 替代 mprotect 追踪脏页
+    //   2. 各调用点用 !kvm_enabled() 守卫跳过 mprotect(PROT_NONE)
+    // 注意：fault hook（SIGSEGV 拦截器）仍然保留，它是分布式缺页请求的核心通道。
     if (kvm_enabled()) {
         memory_global_dirty_log_start();
-        fprintf(stderr, "[WaveVM] KVM detected: PROT_NONE path disabled, migration dirty log enabled.\n");
+        fprintf(stderr, "[WaveVM] KVM detected: PROT_NONE path bypassed, migration dirty log enabled.\n");
     }
     g_fault_hook_enabled = enable_fault_hook;
     g_fault_hook_checked = true;

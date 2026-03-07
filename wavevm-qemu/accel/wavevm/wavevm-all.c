@@ -221,7 +221,11 @@ static void *wavevm_master_ipc_thread(void *arg) {
                 hwaddr len = 4096;
                 void *host_addr = cpu_physical_memory_map(req->gpa, &len, 1);
                 if (host_addr && len >= 4096) {
-                    mprotect(host_addr, 4096, PROT_NONE);
+                    // KVM 模式下不能用 mprotect(PROT_NONE)，
+                    // 否则 EPT 无法解析已被 mprotect 撤销的 HVA 映射，导致 VM Exit 风暴。
+                    if (!kvm_enabled()) {
+                        mprotect(host_addr, 4096, PROT_NONE);
+                    }
                     cpu_physical_memory_unmap(host_addr, len, 1, 0);
                 }
             }
