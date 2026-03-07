@@ -1032,11 +1032,11 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
     if (fd < 0) return; 
 
     void *aligned_buf = NULL;
-    if (ntohs(hdr->msg_type) == MSG_BLOCK_WRITE || ntohs(hdr->msg_type) == MSG_BLOCK_READ) {
+    if (hdr->msg_type == MSG_BLOCK_WRITE || hdr->msg_type == MSG_BLOCK_READ) {
         if (posix_memalign(&aligned_buf, 4096, data_len) != 0) return;
     }
 
-    if (ntohs(hdr->msg_type) == MSG_BLOCK_WRITE) {
+    if (hdr->msg_type == MSG_BLOCK_WRITE) {
         memcpy(aligned_buf, blk->data, data_len);
         ssize_t written = pwrite(fd, aligned_buf, data_len, offset);
         
@@ -1051,7 +1051,7 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
         hdr->crc32 = htonl(calculate_crc32(hdr, sizeof(*hdr)));
         sendto(sockfd, hdr, sizeof(*hdr), 0, (struct sockaddr*)client, sizeof(*client));
     
-    } else if (ntohs(hdr->msg_type) == MSG_BLOCK_READ) {
+    } else if (hdr->msg_type == MSG_BLOCK_READ) {
         size_t resp_len = sizeof(struct wvm_header) + sizeof(struct wvm_block_payload) + data_len;
         uint8_t *tx = malloc(resp_len);
         if (tx) {
@@ -1073,7 +1073,7 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
             robust_sendto(sockfd, tx, resp_len, client);
             free(tx);
         }
-    } else if (ntohs(hdr->msg_type) == MSG_BLOCK_FLUSH) {
+    } else if (hdr->msg_type == MSG_BLOCK_FLUSH) {
         int ret = fdatasync(fd);
         hdr->msg_type = htons(MSG_BLOCK_ACK);
         hdr->payload_len = 0;
@@ -1129,6 +1129,10 @@ void* kvm_worker_thread(void *arg) {
 
             uint16_t type = ntohs(h->msg_type);
             ntoh_header(h);
+            int actual_payload = msgs[i].msg_len - (int)sizeof(struct wvm_header);
+            if (actual_payload < 0 || h->payload_len > (uint16_t)actual_payload) {
+                continue;
+            }
 
             if (type == MSG_VCPU_RUN) {
                 // [FIX] 必须重建 IPC 请求结构体，不能直接强转 payload
@@ -1151,11 +1155,11 @@ void* kvm_worker_thread(void *arg) {
     
                 if (local_req.mode_tcg) {
                     // 安全检查：防止 payload 长度不足导致越界
-                    if (ntohs(h->payload_len) >= sizeof(wvm_tcg_context_t)) {
+                    if (h->payload_len >= sizeof(wvm_tcg_context_t)) {
                         memcpy(&local_req.ctx.tcg, net_payload_ptr, sizeof(wvm_tcg_context_t));
                     }
                 } else {
-                    if (ntohs(h->payload_len) >= sizeof(wvm_kvm_context_t)) {
+                    if (h->payload_len >= sizeof(wvm_kvm_context_t)) {
                         memcpy(&local_req.ctx.kvm, net_payload_ptr, sizeof(wvm_kvm_context_t));
                     }
                 }
@@ -1303,16 +1307,22 @@ void* tcg_proxy_thread(void *arg) {
             if (src_addrs[i].sin_addr.s_addr == htonl(INADDR_LOOPBACK)) {
                 // [VFIO Intercept] TCG 模式下的本地显卡拦截
                 uint16_t msg_type = ntohs(hdr->msg_type);
+                int actual_payload = msgs[i].msg_len - (int)sizeof(struct wvm_header);
+                uint16_t payload_len = ntohs(hdr->payload_len);
                 if (msg_type == MSG_MEM_WRITE) {
-                    uint64_t gpa = WVM_NTOHLL(*(uint64_t*)(buffers[i] + sizeof(struct wvm_header)));
-                    void *data = buffers[i] + sizeof(struct wvm_header) + 8;
-                    int len = ntohs(hdr->payload_len) - 8;
-                    if (wvm_vfio_intercept_mmio(gpa, data, len, 1)) {
-                        hdr->msg_type = htons(MSG_MEM_ACK);
-                        hdr->payload_len = 0;
-                        sendto(sockfd, buffers[i], sizeof(struct wvm_header), 0, 
-                               (struct sockaddr*)&src_addrs[i], sizeof(struct sockaddr_in));
-                        continue; 
+                    if (actual_payload >= 8 &&
+                        payload_len >= 8 &&
+                        payload_len <= (uint16_t)actual_payload) {
+                        uint64_t gpa = WVM_NTOHLL(*(uint64_t*)(buffers[i] + sizeof(struct wvm_header)));
+                        void *data = buffers[i] + sizeof(struct wvm_header) + 8;
+                        int len = payload_len - 8;
+                        if (wvm_vfio_intercept_mmio(gpa, data, len, 1)) {
+                            hdr->msg_type = htons(MSG_MEM_ACK);
+                            hdr->payload_len = 0;
+                            sendto(sockfd, buffers[i], sizeof(struct wvm_header), 0, 
+                                   (struct sockaddr*)&src_addrs[i], sizeof(struct sockaddr_in));
+                            continue; 
+                        }
                     }
                 }
                 

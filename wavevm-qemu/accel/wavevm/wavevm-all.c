@@ -372,7 +372,14 @@ static void *wavevm_slave_net_thread(void *arg) {
                         uint64_t gpa = WVM_NTOHLL(*(uint64_t *)payload);
                         uint32_t data_len = pkt_payload_len - 8;
                         void *data_ptr = (uint8_t *)payload + 8;
-                        cpu_physical_memory_write(gpa, data_ptr, data_len);
+                        bool gpa_ok = true;
+                        if (g_primary_ram_size) {
+                            gpa_ok = (gpa < g_primary_ram_size) &&
+                                     (data_len <= g_primary_ram_size - gpa);
+                        }
+                        if (gpa_ok) {
+                            cpu_physical_memory_write(gpa, data_ptr, data_len);
+                        }
                     }
                     qemu_mutex_unlock_iothread();
                     hdr->msg_type = htons(MSG_MEM_ACK);
@@ -385,6 +392,18 @@ static void *wavevm_slave_net_thread(void *arg) {
                     if (pkt_payload_len < 8) continue; // 至少需要 8 字节的 gpa
                     uint64_t gpa = WVM_NTOHLL(*(uint64_t *)payload);
                     uint32_t read_len = 4096;
+                    bool gpa_ok = true;
+                    if (g_primary_ram_size) {
+                        gpa_ok = (gpa < g_primary_ram_size) &&
+                                 (read_len <= g_primary_ram_size - gpa);
+                    }
+                    if (!gpa_ok) {
+                        hdr->msg_type = htons(MSG_MEM_ACK);
+                        hdr->payload_len = 0;
+                        sendto(s->master_sock, buf, sizeof(struct wvm_header), 0,
+                              (struct sockaddr *)&addrs[i], sizeof(struct sockaddr_in));
+                        continue;
+                    }
                     if (sizeof(struct wvm_header) + read_len <= MAX_PKT_SIZE) {
                         cpu_physical_memory_read(gpa, payload, read_len);
                         hdr->msg_type = htons(MSG_MEM_ACK);
