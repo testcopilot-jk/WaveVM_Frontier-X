@@ -71,7 +71,7 @@ V31 不再将物理计算节点视为单一的进程，而是定义为由 **"指
             |                                   | (127.0.0.1)     |
             |                                   v                 |
             |                       [ Slave Daemon (Exec) ] <-----+
-            |                       ( Port: 9001 - The MUSCLE )
+            |                       ( Port: 9005 - The MUSCLE )
             |                       ( - KVM Stateless Run     )
             +---------------------> ( - Block IO (O_DIRECT)   )
                                     ( - Dirty Sync (MPSC)     )
@@ -418,8 +418,8 @@ qemu-system-x86_64 \
     2.  **Master 0** 发包 -> `127.0.0.1:8000` (Sidecar 0)。
     3.  **Sidecar 0** 查表 -> `192.168.1.31:9000` (Node 2 的 Master 入口)。
     4.  **Master 2** 在 **9000 端口**捕获 `MSG_MEM_READ`，直接从本地 SHM 读取数据。
-    5.  **Master 2** 将 `MSG_MEM_ACK` 直接 `sendto` 返回给 Node 0 的 Master 端口。
-*   **结论**: 内存同步是 **Master 与 Master** 之间的对话，Slave 进程不参与。
+    5.  **Master 2** 将 `MSG_MEM_ACK` 通过 `g_ops->send_packet` 交给本地 Sidecar，经网关管道原路返回 Node 0。
+*   **结论**: 内存同步是 **Master 与 Master** 之间的对话，Slave 进程不参与。所有跨节点通信均通过网关管道（TX 队列 → Sidecar 8000 → 对端 9000），不存在直接 sendto 远端的捷径。
 
 **场景 B: 跨节点 CPU 执行 (计算链路 —— 最关键的分流路径)**
 *   **发起者**: Node 0 **Master 进程**。
@@ -429,17 +429,18 @@ qemu-system-x86_64 \
     2.  经过网关，包到达 Node 1 的物理地址 `192.168.1.30:9000` (Node 1 **Master 入口**)。
     3.  **Master 1** 识别 `msg_type` 为 5，触发 **Ingress 分流逻辑**：`sendto(127.0.0.1:9005)`。
     4.  Node 1 的 **Slave 1** 进程在 **9005 端口**接收包，瞬间复活 KVM 核心执行计算。
-    5.  **Slave 1** 计算完，带着寄存器结果直接 `sendto` 回传给 Node 0 的 Master 监听地址。
-*   **结论**: 计算任务由 Master **负责分发**，由 Slave **负责干活**。127.0.0.1 转发实现了指令的精准投送。
+    5.  **Slave 1** 计算完，带着寄存器结果 `sendto` 回传给 `client` 地址（即本地 **Master 1** 的回环端口 `127.0.0.1:9000`）。
+    6.  **Master 1** 识别 `from_local_slave` 标志，从包头提取 `target_id`（发起方 Node 0），通过 `u_send_packet` 经网关管道将 `MSG_VCPU_EXIT` 路由回 Node 0。
+*   **结论**: 计算任务由 Master **负责分发**，由 Slave **负责干活**。Slave 不具备直接回传远端的能力，其结果必须经本地 Master 中转，再由网关管道送达发起方。127.0.0.1 转发实现了 Master↔Slave 的本地高速通道。
 
 **场景 C: 拓扑同步与路由注入 (控制链路)**
 *   **发起者**: 运维机脚本 或 Node 3 **Master 进程**。
-*   **接收者**: 所有在线节点的 **Master 进程**。
+*   **接收者**: 所有在线节点的 **Master 进程** / **Gateway 进程**。
 *   **逻辑路径**:
-    1.  **Gossip 自动同步**: Node 3 启动，其 **Master 3** 从 **9001 端口**向 Node 0/1/2 的 **9001 端口**广播心跳。
-    2.  **路由动态注入**: 运维人员执行 `wvm_route_ctl.py`。脚本向 `Node_IP:9001` 发送 `MAGIC=WVMC` 的 UDP 指令。
-    3.  各节点 **Master** 在 **9001 端口**接收指令，通过 `pthread_rwlock_wrlock` 更新本地路由哈希表。
-*   **结论**: **9001 端口**是整个集群的“政令总线”，确保了 PB 级内存空间的哈希环始终处于动态平衡状态。
+    1.  **Gossip 自动同步**: Node 3 启动，其 **Master 3** 通过 `g_ops->send_packet_async(MSG_HEARTBEAT)` 将心跳包送入 TX 队列，经 Sidecar **8000 端口**出站，到达邻居节点的 **9000 端口**（数据面管道）。心跳 payload 携带 `ctrl_port` 信息供对端记录。
+    2.  **路由动态注入**: 运维人员执行 `wvm_route_ctl.py`。脚本向 `Node_IP:9001` 发送 `MAGIC=WVMC` 的 UDP 指令（`OP_ADD_ROUTE`/`OP_DEL_ROUTE`），这是独立于数据面的**带外控制通道**。
+    3.  各节点 **Gateway** 在 **9001 端口**接收 WVMC 指令，通过 `pthread_rwlock_wrlock` 更新路由哈希表。
+*   **结论**: Gossip 心跳走**数据面管道**（8000→9000），与业务流量共享网关路径；**9001 端口**专用于运维路由注入（WVMC 协议），是独立的带外控制通道。两者物理分离，确保路由更新不受数据面拥塞影响。
 
 ---
 
@@ -654,8 +655,8 @@ qemu-system-x86_64 \
     4.  **骨干路由**: **Pod 0 网关**查询 ID 不在机柜内，向上甩包 -> `10.0.0.1:9000` (**Core 核心网关**)。
     5.  **跨区投递**: **Core 网关**识别 ID 范围属于 Pod 9 -> `192.168.9.1:9000` (**Pod 9 网关**)。
     6.  **入站准达**: **Pod 9 网关**识别物理 IP -> `Node 999 IP:9000` (**Node 999 Master 进程入口**)。
-    7.  **最终处理**: **Node 999 Master** 在 9000 端口捕获请求，从本地 SHM 读取数据后，原路 ACK 返回。
-*   **结论**: 内存链路在联邦架构下实现了“脑对脑”的跨区域握手，物理路由对逻辑层完全透明。
+    7.  **最终处理**: **Node 999 Master** 在 9000 端口捕获请求，从本地 SHM 读取数据后，通过 `g_ops->send_packet` 将 `MSG_MEM_ACK` 交给本地 Sidecar，经网关管道原路返回 Node 0。
+*   **结论**: 内存链路在联邦架构下实现了"脑对脑"的跨区域握手，物理路由对逻辑层完全透明。ACK 回程同样走网关管道（Sidecar → Pod GW → Core GW → Pod 0 GW → Node 0），不存在直接 sendto 远端的捷径。
 
 **场景 B: 跨 Pod 远程调度 (计算/存储执行链路)**
 *   **物理场景**: Node 0 (Pod 0) 的虚拟机将计算任务分发给 Node 500 (Pod 5) 执行。
@@ -667,18 +668,18 @@ qemu-system-x86_64 \
     3.  **接棒**: 数据包最终打到 Node 500 的 **Master 9000 端口**（物理入口）。
     4.  **Ingress 内部转发**: Node 500 的 **Master** 检查 `msg_type` 为 5，识别为计算任务，立即执行 `sendto(127.0.0.1:9005)`，分流给背后的 **Slave 进程**。
     5.  **执行**: Node 500 的 **Slave** 在 **9005 端口**接收快照，驱动 KVM 硬件执行。
-    6.  **回传**: **Slave** 执行完毕，带着寄存器增量，绕过本地 Master，直接 `sendto` 返回给 Node 0 的物理地址。
-*   **结论**: 分形架构下，Master 负责跨区域的“长途运输”，Slave 负责本地的“终端执行”。127.0.0.1 的 Ingress 桥接解决了联邦模式下的任务交付问题。
+    6.  **回传**: **Slave** 执行完毕，带着寄存器增量，`sendto` 回传给 `client` 地址（即本地 **Master** 的回环端口 `127.0.0.1:9000`）。**Master** 识别 `from_local_slave` 标志，通过 `u_send_packet` 经网关管道将 `MSG_VCPU_EXIT` 原路送回 Node 0。
+*   **结论**: 分形架构下，Master 负责跨区域的"长途运输"，Slave 负责本地的"终端执行"。Slave 不具备直接回传远端的能力，其结果经本地 Master 中转后由网关管道逐级送达发起方。127.0.0.1 的 Ingress 桥接解决了联邦模式下的任务交付问题。
 
 **场景 C: 联邦控制面管理 (控制/Gossip 链路)**
 *   **物理场景**: 运维机向 Core Gateway 注入新 Pod 的路由条目，或者 Node 0 向全网扩散 Epoch 纪元。
 *   **发起者**: 运维脚本 或 Master 进程。
-*   **处理者**: 全联邦所有网关及节点的 **Master 进程**。
+*   **处理者**: 全联邦所有网关及节点的 **Master / Gateway 进程**。
 *   **全路径追踪**:
-    1.  **路由注入**: 运维机执行脚本，向 Core Gateway 的 **9001 端口** 发送 `OP_ADD_ROUTE`。网关更新读写锁映射。
-    2.  **Gossip 扩散**: Node 0 的 **Master** 每隔 500ms，从 **9001 端口** 向局部视图内的邻居 Master 的 **9001 端口** 广播心跳包。
-    3.  **状态同步**: 邻居 **Master** 收到包，发现 Epoch 领先，自动同步本地逻辑时钟，并更新 DHT 哈希环。
-*   **结论**: **9001 端口** 是 V31 的"政令总线"。它与 9000 数据面物理分离，保证了在极端网络拥塞（如内存海啸）时，集群的控制信令和路由更新依然能够准时送达。
+    1.  **路由注入**: 运维机执行脚本，向 Core Gateway 的 **9001 端口** 发送 `OP_ADD_ROUTE`（WVMC 带外控制协议）。网关更新读写锁映射，并可通过级联向下级网关扩散。
+    2.  **Gossip 扩散**: Node 0 的 **Master** 每隔 500ms，通过 `g_ops->send_packet_async(MSG_HEARTBEAT)` 将心跳包送入 TX 队列，经 Sidecar **8000 端口**出站，到达邻居节点的 **9000 端口**（数据面管道）。心跳 payload 携带 `ctrl_port` 和 `local_epoch` 信息。
+    3.  **状态同步**: 邻居 **Master** 在 **9000 端口**收到心跳包，发现 Epoch 领先，自动同步本地逻辑时钟，并更新 DHT 哈希环。
+*   **结论**: Gossip 心跳走**数据面管道**（8000→9000），与业务流量共享网关路径；**9001 端口**专用于运维路由注入（WVMC 协议），是独立的带外控制通道。两者物理分离，确保即使数据面拥塞，路由更新依然能准时送达。
 
 ---
 
@@ -688,10 +689,10 @@ qemu-system-x86_64 \
 | :--- | :--- | :--- | :--- |
 | **UDP 8000** | WVM Data | **Sidecar (Gateway)** | **出站总出口**。叶子节点所有发往外部的流量必须先经过此端口聚合。 |
 | **UDP 9000** | WVM Data | **Master (Node)** | **入站总入口 (Ingress)**。接收所有外部包，负责元数据处理与任务分流。 |
-| **UDP 9001** | WVMC Control | **Master / Gateway** | **控制总线**。负责 Gossip 心跳、Epoch 同步及运维路由手动注入。 |
+| **UDP 9001** | WVMC Control | **Gateway** | **运维控制通道**。专用于 WVMC 协议的路由手动注入（`OP_ADD_ROUTE`/`OP_DEL_ROUTE`），带外独立于数据面。 |
 | **UDP 9005** | WVM Internal | **Slave (Executor)** | **本地执行入口**。专用于接收 Master 转发的计算 (VCPU) 与存储 (Block) 任务。 |
 
-**结论**: 这种 **“Ingress 在 Master 9000 集合，Exec 在 Slave 9005 执行，Admin 在 9001 调度”** 的三位一体架构，结合三层网关的递归转发，构成了 V31 支撑百万节点、一亿核心的物理底座。
+**结论**: 这种 **"Ingress 在 Master 9000 集合，Exec 在 Slave 9005 执行，Admin 在 9001 注入"** 的三位一体架构，其中 Gossip 心跳与业务数据共享数据面管道（8000↔9000），运维路由注入走独立的 9001 带外通道，结合三层网关的递归转发，构成了 V31 支撑百万节点、一亿核心的物理底座。
 
 ---
 
