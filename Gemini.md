@@ -15585,7 +15585,7 @@ clean:
 本项目采用 P2P 架构，**修改代码前必须完整阅读本文件 Document 部分的第二至第四部分**（架构组件、运行机制、部署演练），**特别是数据流转验证章节和端口速查表**。不理解双进程分流模型和网关管道就动手改代码，必然改错。
 
 架构速览：
-- **扁平化架构**：只有**计算节点**（物理上的），每节点包含 Master 进程（Mode A 下为内核模块 + Master 进程，无独立 Slave）、Slave 进程、Sidecar 进程（本质上是 Gateway 进程，名称与职能不同而已）。
+- **扁平化架构**：只有**计算节点**（物理上的），每节点包含 Master 进程（Mode A 下为内核模块 + Master 进程）、Slave 进程、Sidecar 进程（本质上是 Gateway 进程，名称与职能不同而已）。Mode A 与 Mode B 的区别在于 Ingress 分流的位置：Mode A 在内核态由 `wavevm.ko` 直接把计算包踢给 Slave，Mode B 在用户态 Master 中转发。两种模式下 Slave 都是独立进程。
 - **分形架构**：除计算节点（叶节点）外还有**网关节点**（非叶），其中只包含 Gateway 进程。各节点间的关系参考多叉树结构。
 - **端口职能**：UDP 8000（Sidecar 出站）、9000（Master 入站 Ingress）、9001（Gateway 运维控制，仅路由注入）、9005（Slave 执行入口）。
 - **核心机制**：Master 收到计算/存储任务后通过 127.0.0.1 转发给本地 Slave（Ingress 分流）；Slave 执行完回传本地 Master，Master 再经网关管道送达远端发起方。所有跨节点通信走网关管道（TX 队列 → Sidecar 8000 → 对端 9000），不存在进程直接 sendto 远端的捷径。
