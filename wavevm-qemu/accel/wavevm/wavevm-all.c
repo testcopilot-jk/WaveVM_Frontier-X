@@ -39,6 +39,8 @@ extern void wvm_set_ttl_interval(int ms);
 extern void wvm_register_volatile_ram(uint64_t gpa, uint64_t size);
 extern void wvm_apply_remote_push(uint16_t msg_type, void *payload);
 extern void wavevm_start_vcpu_thread(CPUState *cpu);
+extern void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa);
+static void wavevm_sync_topology(int dev_fd);
 
 int g_wvm_local_split = 0;
 static bool g_wvm_split_explicit = false;
@@ -49,6 +51,20 @@ static bool g_user_mem_inited = false;
 static uint64_t g_user_ram_size_hint = 0;
 static bool g_wvm_kvm_bootstrap_done = false;
 static AccelState *g_wvm_kvm_accel = NULL;
+typedef struct {
+    CPUState *cpu;
+    unsigned int delay_us;
+} WaveVMTcgKickCtx;
+
+static void *wavevm_tcg_kick_thread(void *opaque)
+{
+    WaveVMTcgKickCtx *ctx = opaque;
+    g_usleep(ctx->delay_us);
+    cpu_exit(ctx->cpu);
+    qemu_cpu_kick(ctx->cpu);
+    g_free(ctx);
+    return NULL;
+}
 
 static const CpusAccel wavevm_cpus = {
     .create_vcpu_thread = wavevm_start_vcpu_thread,
@@ -399,8 +415,9 @@ static void *wavevm_slave_net_thread(void *arg) {
                     hdr->payload_len = 0;
                     hdr->crc32 = 0;
                     hdr->crc32 = htonl(calculate_crc32(buf, sizeof(struct wvm_header)));
-                    sendto(s->master_sock, buf, sizeof(struct wvm_header), 0,
-                          (struct sockaddr *)&addrs[i], sizeof(struct sockaddr_in));
+                    if (send(s->master_sock, buf, sizeof(struct wvm_header), 0) < 0) {
+                        perror("[WaveVM-Slave] send MSG_MEM_ACK");
+                    }
                 }
                 // 2. 内存读 (Master -> Slave)
                 else if (msg_type == MSG_MEM_READ) {
@@ -415,8 +432,9 @@ static void *wavevm_slave_net_thread(void *arg) {
                         hdr->payload_len = 0;
                         hdr->crc32 = 0;
                         hdr->crc32 = htonl(calculate_crc32(buf, sizeof(struct wvm_header)));
-                        sendto(s->master_sock, buf, sizeof(struct wvm_header), 0,
-                              (struct sockaddr *)&addrs[i], sizeof(struct sockaddr_in));
+                        if (send(s->master_sock, buf, sizeof(struct wvm_header), 0) < 0) {
+                            perror("[WaveVM-Slave] send short MSG_MEM_ACK");
+                        }
                         continue;
                     }
                     if (sizeof(struct wvm_header) + read_len <= MAX_PKT_SIZE) {
@@ -426,16 +444,55 @@ static void *wavevm_slave_net_thread(void *arg) {
                         hdr->payload_len = htons(read_len);
                         hdr->crc32 = 0;
                         hdr->crc32 = htonl(calculate_crc32(buf, sizeof(struct wvm_header) + read_len));
-                        sendto(s->master_sock, buf, sizeof(struct wvm_header) + read_len, 0,
-                              (struct sockaddr *)&addrs[i], sizeof(struct sockaddr_in));
+                        if (send(s->master_sock, buf, sizeof(struct wvm_header) + read_len, 0) < 0) {
+                            perror("[WaveVM-Slave] send MSG_MEM_ACK payload");
+                        }
                     } else {
                         qemu_mutex_unlock_iothread();
                     }
                 }
                 // 3. 远程执行 (Master -> Slave)
                 else if (msg_type == MSG_VCPU_RUN) {
-                    if (actual_payload < (int)sizeof(struct wvm_ipc_cpu_run_req)) continue;
-                    struct wvm_ipc_cpu_run_req *req = (struct wvm_ipc_cpu_run_req *)payload;
+                    fprintf(stderr,
+                            "[WaveVM-Slave] RX MSG_VCPU_RUN len=%d payload=%d hdr_mode_tcg=%u from=%s:%u\n",
+                            len, actual_payload, (unsigned)hdr->mode_tcg,
+                            inet_ntoa(addrs[i].sin_addr), (unsigned)ntohs(addrs[i].sin_port));
+                    struct wvm_ipc_cpu_run_req local_req;
+                    struct wvm_ipc_cpu_run_req *req = NULL;
+                    bool compact_ctx_payload = false;
+
+                    /* Backward compatibility: some senders put only context in payload. */
+                    if (actual_payload >= (int)sizeof(struct wvm_ipc_cpu_run_req)) {
+                        req = (struct wvm_ipc_cpu_run_req *)payload;
+                        fprintf(stderr, "[WaveVM-Slave] using full req payload=%d\n", actual_payload);
+                    } else {
+                        memset(&local_req, 0, sizeof(local_req));
+                        local_req.mode_tcg = hdr->mode_tcg ? 1 : 0;
+                        local_req.slave_id = ntohl(hdr->slave_id);
+
+                        if (hdr->mode_tcg) {
+                            if (actual_payload < (int)sizeof(wvm_tcg_context_t)) {
+                                fprintf(stderr,
+                                        "[WaveVM-Slave] drop compact TCG req payload=%d need=%zu\n",
+                                        actual_payload, sizeof(wvm_tcg_context_t));
+                                continue;
+                            }
+                            memcpy(&local_req.ctx.tcg, payload, sizeof(wvm_tcg_context_t));
+                        } else {
+                            if (actual_payload < (int)sizeof(wvm_kvm_context_t)) {
+                                fprintf(stderr,
+                                        "[WaveVM-Slave] drop compact KVM req payload=%d need=%zu\n",
+                                        actual_payload, sizeof(wvm_kvm_context_t));
+                                continue;
+                            }
+                            memcpy(&local_req.ctx.kvm, payload, sizeof(wvm_kvm_context_t));
+                        }
+                        req = &local_req;
+                        compact_ctx_payload = true;
+                        fprintf(stderr,
+                                "[WaveVM-Slave] using compact req mode_tcg=%u src_slave=%u\n",
+                                (unsigned)local_req.mode_tcg, (unsigned)local_req.slave_id);
+                    }
                     qemu_mutex_lock_iothread(); // TCG 必须持有 BQL
                     CPUState *cpu = first_cpu;
                     if (!cpu) {
@@ -497,8 +554,17 @@ static void *wavevm_slave_net_thread(void *arg) {
                     cpu->stop = false; cpu->halted = 0; cpu->exception_index = -1;
                     
                     if (local_is_tcg) {
-                        // [TCG 关键] 使用 cpu_exec 运行直到退出/中断/异常
+                        // TCG cpu_exec() manages the iothread lock internally.
+                        WaveVMTcgKickCtx *kick = g_new0(WaveVMTcgKickCtx, 1);
+                        QemuThread kick_thread;
+                        kick->cpu = cpu;
+                        kick->delay_us = 5000;
+                        qemu_thread_create(&kick_thread, "wvm-tcg-kick",
+                                           wavevm_tcg_kick_thread, kick,
+                                           QEMU_THREAD_DETACHED);
+                        qemu_mutex_unlock_iothread();
                         cpu_exec(cpu);
+                        qemu_mutex_lock_iothread();
                     } else {
                         // [KVM 关键]
                         qemu_mutex_unlock_iothread();
@@ -516,8 +582,11 @@ static void *wavevm_slave_net_thread(void *arg) {
                     }
 
                     // C. 导出上下文并回包
-                    struct wvm_ipc_cpu_run_ack *ack = (struct wvm_ipc_cpu_run_ack *)payload;
-                    ack->mode_tcg = hdr->mode_tcg; 
+                    struct wvm_ipc_cpu_run_ack full_ack;
+                    memset(&full_ack, 0, sizeof(full_ack));
+                    full_ack.status = 0;
+                    full_ack.mode_tcg = hdr->mode_tcg;
+                    struct wvm_ipc_cpu_run_ack *ack = &full_ack;
                     
                     if (hdr->mode_tcg == local_is_tcg) {
                         // 同态返回
@@ -589,16 +658,33 @@ static void *wavevm_slave_net_thread(void *arg) {
                             ack->ctx.tcg.exit_reason = cpu->kvm_run->exit_reason;
                         }
                     }
+                    if (compact_ctx_payload) {
+                        if (hdr->mode_tcg) {
+                            memcpy(payload, &ack->ctx.tcg, sizeof(ack->ctx.tcg));
+                            hdr->payload_len = htons(sizeof(ack->ctx.tcg));
+                            msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(ack->ctx.tcg);
+                        } else {
+                            memcpy(payload, &ack->ctx.kvm, sizeof(ack->ctx.kvm));
+                            hdr->payload_len = htons(sizeof(ack->ctx.kvm));
+                            msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(ack->ctx.kvm);
+                        }
+                    } else {
+                        memcpy(payload, ack, sizeof(*ack));
+                        hdr->payload_len = htons(sizeof(*ack));
+                        msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(*ack);
+                    }
                     qemu_mutex_unlock_iothread();
                     hdr->msg_type = htons(MSG_VCPU_EXIT);
                     hdr->crc32 = 0;
                     hdr->crc32 = htonl(calculate_crc32(buf, msgs[i].msg_len));
-                    sendto(s->master_sock, buf, msgs[i].msg_len, 0,
-                          (struct sockaddr *)&addrs[i], sizeof(struct sockaddr_in));
+                    if (send(s->master_sock, buf, msgs[i].msg_len, 0) < 0) {
+                        perror("[WaveVM-Slave] send MSG_VCPU_EXIT");
+                    }
                 } else if (msg_type == MSG_PING) {
                     // [FIX] 透传 PING 给 Gateway/Master，由真正的 Owner 回复 ACK
-                    sendto(s->master_sock, buf, sizeof(struct wvm_header), 0, 
-                          (struct sockaddr *)&addrs[i], sizeof(struct sockaddr_in));
+                    if (send(s->master_sock, buf, sizeof(struct wvm_header), 0) < 0) {
+                        perror("[WaveVM-Slave] send MSG_PING");
+                    }
                 }
             }
             msgs[i].msg_len = 0; 

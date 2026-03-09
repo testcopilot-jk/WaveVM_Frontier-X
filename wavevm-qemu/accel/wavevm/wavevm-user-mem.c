@@ -59,6 +59,8 @@ static uint64_t get_us_time(void);
 static uint64_t get_local_page_version(uint64_t gpa);
 static void set_local_page_version(uint64_t gpa, uint64_t version);
 static long wait_for_directory_ack_safe(void);
+static int internal_connect_master(void);
+static void send_diff_via_ipc(void *buf, size_t len);
 
 // 脏区捕获链表
 typedef struct WritablePage {

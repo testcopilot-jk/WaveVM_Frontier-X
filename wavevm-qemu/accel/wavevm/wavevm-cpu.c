@@ -514,6 +514,8 @@ static void wavevm_remote_exec(CPUState *cpu) {
 static void *wavevm_cpu_thread_fn(void *arg) {
     CPUState *cpu = arg;
     int ret;
+    char *role = getenv("WVM_ROLE");
+    bool is_slave = (role && strcmp(role, "SLAVE") == 0);
 
     rcu_register_thread();
     qemu_mutex_lock_iothread();
@@ -525,6 +527,17 @@ static void *wavevm_cpu_thread_fn(void *arg) {
     qemu_mutex_unlock_iothread();
 
     cpu->halted = 0;
+
+    /* Slave user mode is driven by wavevm_slave_net_thread instead of the
+     * regular per-vCPU execution loop. Park this thread after creation so
+     * it doesn't race on the same CPUState. */
+    if (is_slave) {
+        cpu->halted = 1;
+        while (!cpu->unplug) {
+            g_usleep(100000);
+        }
+        goto out;
+    }
     
     if (kvm_enabled()) {
         qemu_mutex_lock_iothread();

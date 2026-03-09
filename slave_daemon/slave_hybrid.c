@@ -1332,6 +1332,19 @@ static struct sockaddr_in g_upstream_gateway = {0};
 static volatile int g_gateway_init_done = 0;
 static volatile int g_gateway_known = 0;
 
+static int is_local_tcg_endpoint_port(uint16_t port_net)
+{
+    uint16_t port = ntohs(port_net);
+    for (long i = 0; i < g_num_cores; i++) {
+        if (port == ntohs(tcg_endpoints[i].cmd_addr.sin_port) ||
+            port == ntohs(tcg_endpoints[i].req_addr.sin_port) ||
+            port == ntohs(tcg_endpoints[i].push_addr.sin_port)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* 
  * [物理意图] 在不支持 KVM 的环境下，通过多进程模拟实现“多核算力聚合”。
  * [关键逻辑] 为每个逻辑核心孵化一个独立的 QEMU-TCG 实例，并通过环境变量注入“三通道” Socket 句柄。
@@ -1339,6 +1352,10 @@ static volatile int g_gateway_known = 0;
  */
 void spawn_tcg_processes(int base_id) {
     printf("[Hybrid] Spawning %ld QEMU-TCG instances (Tri-Channel Isolation)...\n", g_num_cores);
+    const char *qemu_bin = getenv("WVM_TCG_QEMU_BIN");
+    if (!qemu_bin || !*qemu_bin) {
+        qemu_bin = "qemu-system-x86_64";
+    }
     
     tcg_endpoints = malloc(sizeof(slave_endpoint_t) * g_num_cores);
     if (!tcg_endpoints) { perror("malloc endpoints"); exit(1); }
@@ -1406,12 +1423,12 @@ void spawn_tcg_processes(int base_id) {
 
             cpu_set_t cpuset; CPU_ZERO(&cpuset); CPU_SET(i, &cpuset); sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
             
-            execlp("qemu-system-x86_64", "qemu-system-x86_64", 
-                   "-accel", "tcg,thread=single", 
+            execlp(qemu_bin, qemu_bin,
+                   "-accel", "wavevm",
                    "-m", ram_str, 
-                   "-nographic", "-S", "-nodefaults", 
-                   "-icount", "shift=5,sleep=off", NULL);
-            exit(1);
+                   "-nographic", "-S", "-nodefaults", NULL);
+            perror("[Hybrid] execlp qemu");
+            _exit(127);
         }
         // parent: sockets are only created in child branch
     }
@@ -1442,8 +1459,12 @@ void* tcg_proxy_thread(void *arg) {
             struct wvm_header *hdr = (struct wvm_header *)buffers[i];
             if (hdr->magic != htonl(WVM_MAGIC)) continue;
 
+            /* In single-host tests gateway packets can also come from 127.0.0.1.
+             * Only treat packets from known TCG endpoint ports as local upstream. */
+            int from_local_tcg = (src_addrs[i].sin_addr.s_addr == htonl(INADDR_LOOPBACK)) &&
+                                 is_local_tcg_endpoint_port(src_addrs[i].sin_port);
             // 1. Upstream (Local QEMU -> Gateway)
-            if (src_addrs[i].sin_addr.s_addr == htonl(INADDR_LOOPBACK)) {
+            if (from_local_tcg) {
                 // [VFIO Intercept] TCG 模式下的本地显卡拦截
                 uint16_t msg_type = ntohs(hdr->msg_type);
                 int actual_payload = msgs[i].msg_len - (int)sizeof(struct wvm_header);
@@ -1508,6 +1529,18 @@ void* tcg_proxy_thread(void *arg) {
                               (struct sockaddr*)&tcg_endpoints[core_idx].req_addr, sizeof(struct sockaddr_in));
                 }
                 else {
+                    if (msg_type == MSG_VCPU_RUN) {
+                        fprintf(stderr,
+                                "[Proxy Downstream] msg=%u src=%s:%u core=%d target=%u cmd_port=%u len=%u mode_tcg=%u\n",
+                                (unsigned)msg_type,
+                                inet_ntoa(src_addrs[i].sin_addr),
+                                (unsigned)ntohs(src_addrs[i].sin_port),
+                                core_idx,
+                                (unsigned)target_raw,
+                                (unsigned)ntohs(tcg_endpoints[core_idx].cmd_addr.sin_port),
+                                (unsigned)msgs[i].msg_len,
+                                (unsigned)hdr->mode_tcg);
+                    }
                     sendto(sockfd, buffers[i], msgs[i].msg_len, 0, 
                           (struct sockaddr*)&tcg_endpoints[core_idx].cmd_addr, sizeof(struct sockaddr_in));
                 }
