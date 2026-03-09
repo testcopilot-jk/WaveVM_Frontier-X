@@ -1002,6 +1002,9 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
             // 直接从本地目录内存拷贝
             memcpy(page_buffer, page->base_page_data, 4096);
             if (version_out) *version_out = page->version;
+            fprintf(stderr, "[Page Fault] local gpa=%#llx ver=%#llx\n",
+                    (unsigned long long)gpa,
+                    (unsigned long long)page->version);
             
             // [V29] 既然由于缺页进来了，说明本地之前可能被设为 Invalid
             // 我们需要把自己加入订阅者列表，确保未来收到 Push
@@ -1046,12 +1049,19 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
     // 首次发送
     g_ops->send_packet(buffer, pkt_len, dir_node);
     last_send = start_total;
+    fprintf(stderr, "[Page Fault] remote gpa=%#llx dir=%u rid=%llu\n",
+            (unsigned long long)gpa,
+            dir_node,
+            (unsigned long long)rid);
 
     int success = 0;
     while (1) {
         // 检查是否完成
         if (g_ops->check_req_status(rid) == 1) {
             success = 1;
+            fprintf(stderr, "[Page Fault Ack] gpa=%#llx rid=%llu\n",
+                    (unsigned long long)gpa,
+                    (unsigned long long)rid);
             break;
         }
         
@@ -1081,6 +1091,12 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
         if (version_out) {
             *version_out = WVM_NTOHLL(ack_payload.version);
         }
+    }
+    if (!success) {
+        fprintf(stderr, "[Page Fault Timeout] gpa=%#llx dir=%u rid=%llu\n",
+                (unsigned long long)gpa,
+                dir_node,
+                (unsigned long long)rid);
     }
 
     g_ops->free_req_id(rid);

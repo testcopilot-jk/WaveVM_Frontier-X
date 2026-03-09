@@ -17,6 +17,8 @@
 #include "../../../common_include/wavevm_ioctl.h"
 #include "wavevm-accel.h"
 #include "qemu/thread.h"
+#include "qemu/guest-random.h"
+#include "tcg/tcg.h"
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <netinet/in.h>
@@ -155,6 +157,13 @@ static int read_full(int fd, void *buf, size_t len)
 // TCG Helper Declarations (Defined in wavevm-tcg.c)
 extern void wvm_tcg_get_state(CPUState *cpu, wvm_tcg_context_t *ctx);
 extern void wvm_tcg_set_state(CPUState *cpu, wvm_tcg_context_t *ctx);
+extern void wavevm_slave_vcpu_loop(CPUState *cpu);
+static pthread_once_t g_wavevm_tcg_region_once = PTHREAD_ONCE_INIT;
+
+static void wavevm_init_tcg_region_once(void)
+{
+    tcg_region_init();
+}
 
 struct wavevm_policy_ops {
     int (*schedule_policy)(int cpu_index);
@@ -518,24 +527,22 @@ static void *wavevm_cpu_thread_fn(void *arg) {
     bool is_slave = (role && strcmp(role, "SLAVE") == 0);
 
     rcu_register_thread();
+    if (!kvm_enabled()) {
+        tcg_register_thread();
+    }
     qemu_mutex_lock_iothread();
     qemu_thread_get_self(cpu->thread);
     cpu->thread_id = qemu_get_thread_id();
     cpu->can_do_io = 1;
     current_cpu = cpu;
     cpu_thread_signal_created(cpu);
+    qemu_guest_random_seed_thread_part2(cpu->random_seed);
     qemu_mutex_unlock_iothread();
 
     cpu->halted = 0;
 
-    /* Slave user mode is driven by wavevm_slave_net_thread instead of the
-     * regular per-vCPU execution loop. Park this thread after creation so
-     * it doesn't race on the same CPUState. */
     if (is_slave) {
-        cpu->halted = 1;
-        while (!cpu->unplug) {
-            g_usleep(100000);
-        }
+        wavevm_slave_vcpu_loop(cpu);
         goto out;
     }
     
@@ -635,6 +642,10 @@ void wavevm_start_vcpu_thread(CPUState *cpu) {
     char *role = getenv("WVM_ROLE");
 
     static pthread_mutex_t g_init_lock = PTHREAD_MUTEX_INITIALIZER;
+
+    if (!kvm_enabled()) {
+        pthread_once(&g_wavevm_tcg_region_once, wavevm_init_tcg_region_once);
+    }
     
     // 双重检查锁定 (Double-Checked Locking) 优化性能，或者直接加锁也行（毕竟只执行一次）
     if (!g_vcpu_socks) {

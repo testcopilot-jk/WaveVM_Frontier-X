@@ -17,8 +17,10 @@
 #include <sys/un.h>
 #include <errno.h>
 #include "qemu/thread.h"
+#include "sysemu/tcg.h"
 #include "sysemu/kvm.h" 
 #include "sysemu/kvm_int.h"
+#include "tcg/tcg.h"
 #include "linux/kvm.h"
 #include "exec/cpu-common.h"
 #include "exec/address-spaces.h"
@@ -51,10 +53,32 @@ static bool g_user_mem_inited = false;
 static uint64_t g_user_ram_size_hint = 0;
 static bool g_wvm_kvm_bootstrap_done = false;
 static AccelState *g_wvm_kvm_accel = NULL;
+static bool g_wvm_tcg_bootstrap_done = false;
+
 typedef struct {
     CPUState *cpu;
     unsigned int delay_us;
 } WaveVMTcgKickCtx;
+
+static pthread_once_t g_slave_exec_once = PTHREAD_ONCE_INIT;
+static QemuMutex g_slave_exec_lock;
+static QemuCond g_slave_exec_req_cond;
+static QemuCond g_slave_exec_done_cond;
+static bool g_slave_exec_pending;
+static bool g_slave_exec_done;
+static struct wvm_ipc_cpu_run_req g_slave_exec_req;
+static struct wvm_ipc_cpu_run_ack g_slave_exec_ack;
+
+static void wavevm_slave_exec_sync_init(void)
+{
+    qemu_mutex_init(&g_slave_exec_lock);
+    qemu_cond_init(&g_slave_exec_req_cond);
+    qemu_cond_init(&g_slave_exec_done_cond);
+    g_slave_exec_pending = false;
+    g_slave_exec_done = false;
+    memset(&g_slave_exec_req, 0, sizeof(g_slave_exec_req));
+    memset(&g_slave_exec_ack, 0, sizeof(g_slave_exec_ack));
+}
 
 static void *wavevm_tcg_kick_thread(void *opaque)
 {
@@ -69,6 +93,239 @@ static void *wavevm_tcg_kick_thread(void *opaque)
 static const CpusAccel wavevm_cpus = {
     .create_vcpu_thread = wavevm_start_vcpu_thread,
 };
+
+static void wavevm_slave_import_ctx(CPUState *cpu,
+                                    const struct wvm_ipc_cpu_run_req *req,
+                                    bool local_is_tcg)
+{
+    if (req->mode_tcg == local_is_tcg) {
+        if (local_is_tcg) {
+            wvm_tcg_set_state(cpu, (wvm_tcg_context_t *)&req->ctx.tcg);
+        } else {
+            struct kvm_regs kregs;
+            struct kvm_sregs ksregs;
+            const wvm_kvm_context_t *kctx = &req->ctx.kvm;
+            kregs.rax = kctx->rax; kregs.rbx = kctx->rbx; kregs.rcx = kctx->rcx;
+            kregs.rdx = kctx->rdx; kregs.rsi = kctx->rsi; kregs.rdi = kctx->rdi;
+            kregs.rsp = kctx->rsp; kregs.rbp = kctx->rbp;
+            kregs.r8  = kctx->r8;  kregs.r9  = kctx->r9;  kregs.r10 = kctx->r10;
+            kregs.r11 = kctx->r11; kregs.r12 = kctx->r12; kregs.r13 = kctx->r13;
+            kregs.r14 = kctx->r14; kregs.r15 = kctx->r15;
+            kregs.rip = kctx->rip; kregs.rflags = kctx->rflags;
+            memcpy(&ksregs, kctx->sregs_data, sizeof(ksregs));
+            kvm_vcpu_ioctl(cpu, KVM_SET_SREGS, &ksregs);
+            kvm_vcpu_ioctl(cpu, KVM_SET_REGS, &kregs);
+        }
+    } else if (local_is_tcg) {
+        wvm_tcg_context_t t_ctx;
+        struct kvm_regs kregs;
+        struct kvm_sregs ksregs;
+        kregs.rax = req->ctx.kvm.rax; kregs.rbx = req->ctx.kvm.rbx; kregs.rcx = req->ctx.kvm.rcx;
+        kregs.rdx = req->ctx.kvm.rdx; kregs.rsi = req->ctx.kvm.rsi; kregs.rdi = req->ctx.kvm.rdi;
+        kregs.rsp = req->ctx.kvm.rsp; kregs.rbp = req->ctx.kvm.rbp;
+        kregs.r8  = req->ctx.kvm.r8;  kregs.r9  = req->ctx.kvm.r9;  kregs.r10 = req->ctx.kvm.r10;
+        kregs.r11 = req->ctx.kvm.r11; kregs.r12 = req->ctx.kvm.r12; kregs.r13 = req->ctx.kvm.r13;
+        kregs.r14 = req->ctx.kvm.r14; kregs.r15 = req->ctx.kvm.r15;
+        kregs.rip = req->ctx.kvm.rip; kregs.rflags = req->ctx.kvm.rflags;
+        memcpy(&ksregs, req->ctx.kvm.sregs_data, sizeof(ksregs));
+        wvm_translate_kvm_to_tcg(&kregs, &ksregs, &t_ctx);
+        wvm_tcg_set_state(cpu, &t_ctx);
+    } else {
+        struct kvm_regs kregs;
+        struct kvm_sregs ksregs;
+        kvm_vcpu_ioctl(cpu, KVM_GET_SREGS, &ksregs);
+        wvm_translate_tcg_to_kvm((wvm_tcg_context_t *)&req->ctx.tcg, &kregs, &ksregs);
+        kvm_vcpu_ioctl(cpu, KVM_SET_SREGS, &ksregs);
+        kvm_vcpu_ioctl(cpu, KVM_SET_REGS, &kregs);
+    }
+}
+
+static void wavevm_slave_export_ctx(CPUState *cpu,
+                                    const struct wvm_ipc_cpu_run_req *req,
+                                    struct wvm_ipc_cpu_run_ack *ack,
+                                    bool local_is_tcg)
+{
+    ack->status = 0;
+    ack->mode_tcg = req->mode_tcg;
+
+    if (req->mode_tcg == local_is_tcg) {
+        if (local_is_tcg) {
+            wvm_tcg_get_state(cpu, &ack->ctx.tcg);
+            ack->ctx.tcg.exit_reason = cpu->exception_index;
+        } else {
+            struct kvm_regs kregs;
+            struct kvm_sregs ksregs;
+            wvm_kvm_context_t *kctx = &ack->ctx.kvm;
+            kvm_vcpu_ioctl(cpu, KVM_GET_REGS, &kregs);
+            kvm_vcpu_ioctl(cpu, KVM_GET_SREGS, &ksregs);
+            kctx->rax = kregs.rax; kctx->rbx = kregs.rbx; kctx->rcx = kregs.rcx;
+            kctx->rdx = kregs.rdx; kctx->rsi = kregs.rsi; kctx->rdi = kregs.rdi;
+            kctx->rsp = kregs.rsp; kctx->rbp = kregs.rbp;
+            kctx->r8  = kregs.r8;  kctx->r9  = kregs.r9;  kctx->r10 = kregs.r10;
+            kctx->r11 = kregs.r11; kctx->r12 = kregs.r12; kctx->r13 = kregs.r13;
+            kctx->r14 = kregs.r14; kctx->r15 = kregs.r15;
+            kctx->rip = kregs.rip; kctx->rflags = kregs.rflags;
+            memcpy(kctx->sregs_data, &ksregs, sizeof(ksregs));
+
+            {
+                struct kvm_run *run = cpu->kvm_run;
+                kctx->exit_reason = run->exit_reason;
+                if (run->exit_reason == KVM_EXIT_IO) {
+                    kctx->io.direction = run->io.direction;
+                    kctx->io.size      = run->io.size;
+                    kctx->io.port      = run->io.port;
+                    kctx->io.count     = run->io.count;
+                    if (run->io.direction == KVM_EXIT_IO_OUT) {
+                        size_t io_bytes = run->io.size * run->io.count;
+                        if (io_bytes > sizeof(kctx->io.data)) {
+                            io_bytes = sizeof(kctx->io.data);
+                        }
+                        memcpy(kctx->io.data, (uint8_t *)run + run->io.data_offset, io_bytes);
+                    }
+                } else if (run->exit_reason == KVM_EXIT_MMIO) {
+                    kctx->mmio.phys_addr = run->mmio.phys_addr;
+                    kctx->mmio.len       = run->mmio.len;
+                    kctx->mmio.is_write  = run->mmio.is_write;
+                    memcpy(kctx->mmio.data, run->mmio.data, 8);
+                }
+            }
+        }
+    } else if (local_is_tcg) {
+        wvm_tcg_context_t t_ctx;
+        struct kvm_regs kregs;
+        struct kvm_sregs ksregs;
+        wvm_tcg_get_state(cpu, &t_ctx);
+        memcpy(&ksregs, req->ctx.kvm.sregs_data, sizeof(ksregs));
+        wvm_translate_tcg_to_kvm(&t_ctx, &kregs, &ksregs);
+        ack->ctx.kvm.rax = kregs.rax; ack->ctx.kvm.rbx = kregs.rbx; ack->ctx.kvm.rcx = kregs.rcx;
+        ack->ctx.kvm.rdx = kregs.rdx; ack->ctx.kvm.rsi = kregs.rsi; ack->ctx.kvm.rdi = kregs.rdi;
+        ack->ctx.kvm.rsp = kregs.rsp; ack->ctx.kvm.rbp = kregs.rbp;
+        ack->ctx.kvm.r8  = kregs.r8;  ack->ctx.kvm.r9  = kregs.r9;  ack->ctx.kvm.r10 = kregs.r10;
+        ack->ctx.kvm.r11 = kregs.r11; ack->ctx.kvm.r12 = kregs.r12; ack->ctx.kvm.r13 = kregs.r13;
+        ack->ctx.kvm.r14 = kregs.r14; ack->ctx.kvm.r15 = kregs.r15;
+        ack->ctx.kvm.rip = kregs.rip; ack->ctx.kvm.rflags = kregs.rflags;
+        ack->ctx.kvm.exit_reason = t_ctx.exit_reason;
+        memcpy(ack->ctx.kvm.sregs_data, &ksregs, sizeof(ksregs));
+    } else {
+        struct kvm_regs kregs;
+        struct kvm_sregs ksregs;
+        kvm_vcpu_ioctl(cpu, KVM_GET_REGS, &kregs);
+        kvm_vcpu_ioctl(cpu, KVM_GET_SREGS, &ksregs);
+        wvm_translate_kvm_to_tcg(&kregs, &ksregs, &ack->ctx.tcg);
+        ack->ctx.tcg.exit_reason = cpu->kvm_run->exit_reason;
+    }
+}
+
+int wavevm_slave_submit_cpu_run(const struct wvm_ipc_cpu_run_req *req,
+                                struct wvm_ipc_cpu_run_ack *ack)
+{
+    pthread_once(&g_slave_exec_once, wavevm_slave_exec_sync_init);
+
+    qemu_mutex_lock(&g_slave_exec_lock);
+    while (g_slave_exec_pending) {
+        qemu_cond_wait(&g_slave_exec_done_cond, &g_slave_exec_lock);
+    }
+
+    memcpy(&g_slave_exec_req, req, sizeof(g_slave_exec_req));
+    memset(&g_slave_exec_ack, 0, sizeof(g_slave_exec_ack));
+    g_slave_exec_done = false;
+    g_slave_exec_pending = true;
+    qemu_cond_signal(&g_slave_exec_req_cond);
+
+    while (!g_slave_exec_done) {
+        qemu_cond_wait(&g_slave_exec_done_cond, &g_slave_exec_lock);
+    }
+
+    memcpy(ack, &g_slave_exec_ack, sizeof(*ack));
+    qemu_mutex_unlock(&g_slave_exec_lock);
+    return ack->status;
+}
+
+void wavevm_slave_vcpu_loop(CPUState *cpu)
+{
+    pthread_once(&g_slave_exec_once, wavevm_slave_exec_sync_init);
+    fprintf(stderr, "[WaveVM-Slave] vCPU service loop online cpu=%d\n", cpu->cpu_index);
+
+    while (!cpu->unplug) {
+        struct wvm_ipc_cpu_run_req req;
+        struct wvm_ipc_cpu_run_ack ack;
+        bool local_is_tcg = !kvm_enabled();
+
+        qemu_mutex_lock(&g_slave_exec_lock);
+        while (!g_slave_exec_pending && !cpu->unplug) {
+            qemu_cond_wait(&g_slave_exec_req_cond, &g_slave_exec_lock);
+        }
+        if (cpu->unplug) {
+            qemu_mutex_unlock(&g_slave_exec_lock);
+            break;
+        }
+        memcpy(&req, &g_slave_exec_req, sizeof(req));
+        qemu_mutex_unlock(&g_slave_exec_lock);
+        fprintf(stderr, "[WaveVM-Slave] vCPU got req mode_tcg=%u cpu=%d\n",
+                (unsigned)req.mode_tcg, cpu->cpu_index);
+
+        while (!cpu_get_address_space(cpu, 0) && !cpu->unplug) {
+            fprintf(stderr, "[WaveVM-Slave] waiting for address space cpu=%d\n", cpu->cpu_index);
+            g_usleep(1000);
+        }
+        if (cpu->unplug) {
+            break;
+        }
+
+        qemu_mutex_lock_iothread();
+        if (local_is_tcg) {
+            cpu_exec_start(cpu);
+        }
+
+        wavevm_slave_import_ctx(cpu, &req, local_is_tcg);
+        cpu->stop = false;
+        cpu->halted = 0;
+        cpu->exception_index = -1;
+
+        if (local_is_tcg) {
+            WaveVMTcgKickCtx *kick = g_new0(WaveVMTcgKickCtx, 1);
+            QemuThread kick_thread;
+            kick->cpu = cpu;
+            kick->delay_us = 5000;
+            qemu_thread_create(&kick_thread, "wvm-tcg-kick",
+                               wavevm_tcg_kick_thread, kick,
+                               QEMU_THREAD_DETACHED);
+            qemu_mutex_unlock_iothread();
+            fprintf(stderr, "[WaveVM-Slave] cpu_exec enter cpu=%d\n", cpu->cpu_index);
+            cpu_exec(cpu);
+            fprintf(stderr, "[WaveVM-Slave] cpu_exec leave cpu=%d ex=%d\n",
+                    cpu->cpu_index, cpu->exception_index);
+            qemu_mutex_lock_iothread();
+            cpu_exec_end(cpu);
+        } else {
+            int ret;
+            qemu_mutex_unlock_iothread();
+            do {
+                ret = kvm_vcpu_ioctl(cpu, KVM_RUN, 0);
+                if (ret == 0) {
+                    int reason = cpu->kvm_run->exit_reason;
+                    if (reason == KVM_EXIT_IO || reason == KVM_EXIT_MMIO ||
+                        reason == KVM_EXIT_HLT || reason == KVM_EXIT_SHUTDOWN ||
+                        reason == KVM_EXIT_FAIL_ENTRY) {
+                        break;
+                    }
+                }
+            } while (ret > 0 || ret == -EINTR);
+            qemu_mutex_lock_iothread();
+        }
+
+        memset(&ack, 0, sizeof(ack));
+        wavevm_slave_export_ctx(cpu, &req, &ack, local_is_tcg);
+        qemu_mutex_unlock_iothread();
+
+        qemu_mutex_lock(&g_slave_exec_lock);
+        memcpy(&g_slave_exec_ack, &ack, sizeof(ack));
+        g_slave_exec_pending = false;
+        g_slave_exec_done = true;
+        qemu_cond_broadcast(&g_slave_exec_done_cond);
+        qemu_mutex_unlock(&g_slave_exec_lock);
+    }
+}
 
 static int wavevm_auto_split_from_vcpus(int vcpus)
 {
@@ -189,8 +446,8 @@ static void *wavevm_master_ipc_thread(void *arg) {
     }
 
     struct wvm_ipc_header_t hdr;
-    // 缓冲区用于接收 payload (最大可能的消息体)
-    uint8_t payload_buf[4096]; 
+    // IPC invalidation payload may carry a full 4K page plus protocol headers.
+    uint8_t payload_buf[WVM_MAX_PACKET_SIZE];
 
     while (s->sync_thread_running) {
         // [V28 FIX] 使用 read_exact 替代原始 read
@@ -453,10 +710,6 @@ static void *wavevm_slave_net_thread(void *arg) {
                 }
                 // 3. 远程执行 (Master -> Slave)
                 else if (msg_type == MSG_VCPU_RUN) {
-                    fprintf(stderr,
-                            "[WaveVM-Slave] RX MSG_VCPU_RUN len=%d payload=%d hdr_mode_tcg=%u from=%s:%u\n",
-                            len, actual_payload, (unsigned)hdr->mode_tcg,
-                            inet_ntoa(addrs[i].sin_addr), (unsigned)ntohs(addrs[i].sin_port));
                     struct wvm_ipc_cpu_run_req local_req;
                     struct wvm_ipc_cpu_run_req *req = NULL;
                     bool compact_ctx_payload = false;
@@ -464,7 +717,6 @@ static void *wavevm_slave_net_thread(void *arg) {
                     /* Backward compatibility: some senders put only context in payload. */
                     if (actual_payload >= (int)sizeof(struct wvm_ipc_cpu_run_req)) {
                         req = (struct wvm_ipc_cpu_run_req *)payload;
-                        fprintf(stderr, "[WaveVM-Slave] using full req payload=%d\n", actual_payload);
                     } else {
                         memset(&local_req, 0, sizeof(local_req));
                         local_req.mode_tcg = hdr->mode_tcg ? 1 : 0;
@@ -472,208 +724,36 @@ static void *wavevm_slave_net_thread(void *arg) {
 
                         if (hdr->mode_tcg) {
                             if (actual_payload < (int)sizeof(wvm_tcg_context_t)) {
-                                fprintf(stderr,
-                                        "[WaveVM-Slave] drop compact TCG req payload=%d need=%zu\n",
-                                        actual_payload, sizeof(wvm_tcg_context_t));
                                 continue;
                             }
                             memcpy(&local_req.ctx.tcg, payload, sizeof(wvm_tcg_context_t));
                         } else {
                             if (actual_payload < (int)sizeof(wvm_kvm_context_t)) {
-                                fprintf(stderr,
-                                        "[WaveVM-Slave] drop compact KVM req payload=%d need=%zu\n",
-                                        actual_payload, sizeof(wvm_kvm_context_t));
                                 continue;
                             }
                             memcpy(&local_req.ctx.kvm, payload, sizeof(wvm_kvm_context_t));
                         }
                         req = &local_req;
                         compact_ctx_payload = true;
-                        fprintf(stderr,
-                                "[WaveVM-Slave] using compact req mode_tcg=%u src_slave=%u\n",
-                                (unsigned)local_req.mode_tcg, (unsigned)local_req.slave_id);
                     }
-                    qemu_mutex_lock_iothread(); // TCG 必须持有 BQL
-                    CPUState *cpu = first_cpu;
-                    if (!cpu) {
-                        qemu_mutex_unlock_iothread();
-                        fprintf(stderr, "[WaveVM-Slave] CPU not ready, skip MSG_VCPU_RUN.\n");
-                        continue;
-                    }
-                    
-                    bool local_is_tcg = !kvm_enabled(); // 判定本地引擎
-                    
-                    // A. 恢复上下文：只有不一样的时候才转换
-                    if (hdr->mode_tcg == local_is_tcg) {
-                        // 同态：零转换
-                        if (local_is_tcg) {
-                            wvm_tcg_set_state(cpu, &req->ctx.tcg);
-                        } else {
-                            // KVM 模式：ioctl 设置
-                            struct kvm_regs kregs; struct kvm_sregs ksregs;
-                            wvm_kvm_context_t *kctx = &req->ctx.kvm;
-                            kregs.rax = kctx->rax; kregs.rbx = kctx->rbx; kregs.rcx = kctx->rcx;
-                            kregs.rdx = kctx->rdx; kregs.rsi = kctx->rsi; kregs.rdi = kctx->rdi;
-                            kregs.rsp = kctx->rsp; kregs.rbp = kctx->rbp;
-                            kregs.r8  = kctx->r8;  kregs.r9  = kctx->r9;  kregs.r10 = kctx->r10;
-                            kregs.r11 = kctx->r11; kregs.r12 = kctx->r12; kregs.r13 = kctx->r13;
-                            kregs.r14 = kctx->r14; kregs.r15 = kctx->r15;
-                            kregs.rip = kctx->rip; kregs.rflags = kctx->rflags;
-                            memcpy(&ksregs, kctx->sregs_data, sizeof(ksregs));
-                            kvm_vcpu_ioctl(cpu, KVM_SET_SREGS, &ksregs);
-                            kvm_vcpu_ioctl(cpu, KVM_SET_REGS, &kregs);
-                        }
-                    } else {
-                        // 异构：转换计算
-                        if (local_is_tcg) { // 远端 KVM，本地 TCG
-                            wvm_tcg_context_t t_ctx;
-                            struct kvm_regs kregs; struct kvm_sregs ksregs;
-                            // 1. 从 req 取出 kvm 格式
-                            kregs.rax = req->ctx.kvm.rax; kregs.rbx = req->ctx.kvm.rbx; kregs.rcx = req->ctx.kvm.rcx;
-                            kregs.rdx = req->ctx.kvm.rdx; kregs.rsi = req->ctx.kvm.rsi; kregs.rdi = req->ctx.kvm.rdi;
-                            kregs.rsp = req->ctx.kvm.rsp; kregs.rbp = req->ctx.kvm.rbp;
-                            kregs.r8  = req->ctx.kvm.r8;  kregs.r9  = req->ctx.kvm.r9;  kregs.r10 = req->ctx.kvm.r10;
-                            kregs.r11 = req->ctx.kvm.r11; kregs.r12 = req->ctx.kvm.r12; kregs.r13 = req->ctx.kvm.r13;
-                            kregs.r14 = req->ctx.kvm.r14; kregs.r15 = req->ctx.kvm.r15;
-                            kregs.rip = req->ctx.kvm.rip; kregs.rflags = req->ctx.kvm.rflags;
-                            memcpy(&ksregs, req->ctx.kvm.sregs_data, sizeof(ksregs));
-                            // 2. 换成本地格式
-                            wvm_translate_kvm_to_tcg(&kregs, &ksregs, &t_ctx);
-                            wvm_tcg_set_state(cpu, &t_ctx);
-                        } else { // 远端 TCG，本地 KVM
-                            struct kvm_regs kregs; struct kvm_sregs ksregs;
-                            kvm_vcpu_ioctl(cpu, KVM_GET_SREGS, &ksregs); // 取底版
-                            // 换成本地格式
-                            wvm_translate_tcg_to_kvm(&req->ctx.tcg, &kregs, &ksregs);
-                            kvm_vcpu_ioctl(cpu, KVM_SET_SREGS, &ksregs);
-                            kvm_vcpu_ioctl(cpu, KVM_SET_REGS, &kregs);
-                        }
-                    }
-
-                    // B. 执行循环
-                    cpu->stop = false; cpu->halted = 0; cpu->exception_index = -1;
-                    
-                    if (local_is_tcg) {
-                        // TCG cpu_exec() manages the iothread lock internally.
-                        WaveVMTcgKickCtx *kick = g_new0(WaveVMTcgKickCtx, 1);
-                        QemuThread kick_thread;
-                        kick->cpu = cpu;
-                        kick->delay_us = 5000;
-                        qemu_thread_create(&kick_thread, "wvm-tcg-kick",
-                                           wavevm_tcg_kick_thread, kick,
-                                           QEMU_THREAD_DETACHED);
-                        qemu_mutex_unlock_iothread();
-                        cpu_exec(cpu);
-                        qemu_mutex_lock_iothread();
-                    } else {
-                        // [KVM 关键]
-                        qemu_mutex_unlock_iothread();
-                        int ret;
-                        do {
-                            ret = kvm_vcpu_ioctl(cpu, KVM_RUN, 0);
-                            if (ret == 0) {
-                                int reason = cpu->kvm_run->exit_reason;
-                                if (reason == KVM_EXIT_IO || reason == KVM_EXIT_MMIO || 
-                                    reason == KVM_EXIT_HLT || reason == KVM_EXIT_SHUTDOWN ||
-                                    reason == KVM_EXIT_FAIL_ENTRY) break;
-                            }
-                        } while (ret > 0 || ret == -EINTR);
-                        qemu_mutex_lock_iothread();
-                    }
-
-                    // C. 导出上下文并回包
                     struct wvm_ipc_cpu_run_ack full_ack;
                     memset(&full_ack, 0, sizeof(full_ack));
-                    full_ack.status = 0;
-                    full_ack.mode_tcg = hdr->mode_tcg;
-                    struct wvm_ipc_cpu_run_ack *ack = &full_ack;
-                    
-                    if (hdr->mode_tcg == local_is_tcg) {
-                        // 同态返回
-                        if (local_is_tcg) {
-                            wvm_tcg_get_state(cpu, &ack->ctx.tcg);
-                            ack->ctx.tcg.exit_reason = cpu->exception_index;
-                        }
-                        else {
-                            struct kvm_regs kregs; struct kvm_sregs ksregs;
-                            wvm_kvm_context_t *kctx = &ack->ctx.kvm;
-                            kvm_vcpu_ioctl(cpu, KVM_GET_REGS, &kregs);
-                            kvm_vcpu_ioctl(cpu, KVM_GET_SREGS, &ksregs);
-                            kctx->rax = kregs.rax; kctx->rbx = kregs.rbx; kctx->rcx = kregs.rcx;
-                            kctx->rdx = kregs.rdx; kctx->rsi = kregs.rsi; kctx->rdi = kregs.rdi;
-                            kctx->rsp = kregs.rsp; kctx->rbp = kregs.rbp;
-                            kctx->r8  = kregs.r8;  kctx->r9  = kregs.r9;  kctx->r10 = kregs.r10;
-                            kctx->r11 = kregs.r11; kctx->r12 = kregs.r12; kctx->r13 = kregs.r13;
-                            kctx->r14 = kregs.r14; kctx->r15 = kregs.r15;
-                            kctx->rip = kregs.rip; kctx->rflags = kregs.rflags;
-                            memcpy(kctx->sregs_data, &ksregs, sizeof(ksregs));
-                        
-                            struct kvm_run *run = cpu->kvm_run;
-                            kctx->exit_reason = run->exit_reason;
-                            if (run->exit_reason == KVM_EXIT_IO) {
-                                kctx->io.direction = run->io.direction;
-                                kctx->io.size      = run->io.size;
-                                kctx->io.port      = run->io.port;
-                                kctx->io.count     = run->io.count;
-                                if (run->io.direction == KVM_EXIT_IO_OUT) {
-                                    size_t io_bytes = run->io.size * run->io.count;
-                                    if (io_bytes > sizeof(kctx->io.data)) {
-                                        io_bytes = sizeof(kctx->io.data);
-                                    }
-                                    memcpy(kctx->io.data,
-                                           (uint8_t *)run + run->io.data_offset,
-                                           io_bytes);
-                                }
-                            } else if (run->exit_reason == KVM_EXIT_MMIO) {
-                                kctx->mmio.phys_addr = run->mmio.phys_addr;
-                                kctx->mmio.len       = run->mmio.len;
-                                kctx->mmio.is_write  = run->mmio.is_write;
-                                memcpy(kctx->mmio.data, run->mmio.data, 8);
-                            }
-                        }
-                    } else {
-                        // 异构转换返回
-                        if (local_is_tcg) { // 本地 TCG 跑完，要还回 KVM
-                            wvm_tcg_context_t t_ctx;
-                            wvm_tcg_get_state(cpu, &t_ctx);
-                            struct kvm_regs kregs; struct kvm_sregs ksregs;
-                            
-                            // 因为 TCG 不修改隐藏段，直接把原来的 sregs 抄过来，再用 translate 覆盖可见部分
-                            memcpy(&ksregs, req->ctx.kvm.sregs_data, sizeof(ksregs));
-                            wvm_translate_tcg_to_kvm(&t_ctx, &kregs, &ksregs);
-                            ack->ctx.kvm.rax = kregs.rax; ack->ctx.kvm.rbx = kregs.rbx; ack->ctx.kvm.rcx = kregs.rcx;
-                            ack->ctx.kvm.rdx = kregs.rdx; ack->ctx.kvm.rsi = kregs.rsi; ack->ctx.kvm.rdi = kregs.rdi;
-                            ack->ctx.kvm.rsp = kregs.rsp; ack->ctx.kvm.rbp = kregs.rbp;
-                            ack->ctx.kvm.r8  = kregs.r8;  ack->ctx.kvm.r9  = kregs.r9;  ack->ctx.kvm.r10 = kregs.r10;
-                            ack->ctx.kvm.r11 = kregs.r11; ack->ctx.kvm.r12 = kregs.r12; ack->ctx.kvm.r13 = kregs.r13;
-                            ack->ctx.kvm.r14 = kregs.r14; ack->ctx.kvm.r15 = kregs.r15;
-                            ack->ctx.kvm.rip = kregs.rip; ack->ctx.kvm.rflags = kregs.rflags;
-                            ack->ctx.kvm.exit_reason = t_ctx.exit_reason;
-                            memcpy(ack->ctx.kvm.sregs_data, &ksregs, sizeof(ksregs));
-                        } else { // 本地 KVM 跑完，要还回 TCG
-                            struct kvm_regs kregs; struct kvm_sregs ksregs;
-                            kvm_vcpu_ioctl(cpu, KVM_GET_REGS, &kregs);
-                            kvm_vcpu_ioctl(cpu, KVM_GET_SREGS, &ksregs);
-                            wvm_translate_kvm_to_tcg(&kregs, &ksregs, &ack->ctx.tcg);
-                            ack->ctx.tcg.exit_reason = cpu->kvm_run->exit_reason;
-                        }
-                    }
+                    wavevm_slave_submit_cpu_run(req, &full_ack);
                     if (compact_ctx_payload) {
                         if (hdr->mode_tcg) {
-                            memcpy(payload, &ack->ctx.tcg, sizeof(ack->ctx.tcg));
-                            hdr->payload_len = htons(sizeof(ack->ctx.tcg));
-                            msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(ack->ctx.tcg);
+                            memcpy(payload, &full_ack.ctx.tcg, sizeof(full_ack.ctx.tcg));
+                            hdr->payload_len = htons(sizeof(full_ack.ctx.tcg));
+                            msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(full_ack.ctx.tcg);
                         } else {
-                            memcpy(payload, &ack->ctx.kvm, sizeof(ack->ctx.kvm));
-                            hdr->payload_len = htons(sizeof(ack->ctx.kvm));
-                            msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(ack->ctx.kvm);
+                            memcpy(payload, &full_ack.ctx.kvm, sizeof(full_ack.ctx.kvm));
+                            hdr->payload_len = htons(sizeof(full_ack.ctx.kvm));
+                            msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(full_ack.ctx.kvm);
                         }
                     } else {
-                        memcpy(payload, ack, sizeof(*ack));
-                        hdr->payload_len = htons(sizeof(*ack));
-                        msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(*ack);
+                        memcpy(payload, &full_ack, sizeof(full_ack));
+                        hdr->payload_len = htons(sizeof(full_ack));
+                        msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(full_ack);
                     }
-                    qemu_mutex_unlock_iothread();
                     hdr->msg_type = htons(MSG_VCPU_EXIT);
                     hdr->crc32 = 0;
                     hdr->crc32 = htonl(calculate_crc32(buf, msgs[i].msg_len));
@@ -782,8 +862,19 @@ static bool wavevm_user_mode_enabled(void)
     return WAVEVM_ACCEL(current_machine->accelerator)->mode == WVM_MODE_USER;
 }
 
+static bool wavevm_trackable_ram_section(const MemoryRegionSection *section)
+{
+    MemoryRegion *mr = section->mr;
+
+    return mr &&
+           memory_region_is_ram(mr) &&
+           !memory_region_is_ram_device(mr) &&
+           !memory_region_is_rom(mr) &&
+           !memory_region_is_romd(mr);
+}
+
 static void wavevm_region_add(MemoryListener *listener, MemoryRegionSection *section) {
-    if (!memory_region_is_ram(section->mr)) return;
+    if (!wavevm_trackable_ram_section(section)) return;
 
     uint64_t start_gpa = section->offset_within_address_space;
     uint64_t size = int128_get64(section->size);
@@ -904,6 +995,11 @@ static int wavevm_init_machine(MachineState *ms) {
             fprintf(stderr, "[WaveVM] /dev/kvm not available (mode=%s), stay on TCG path\n",
                     mode_str);
         }
+    }
+
+    if (!kvm_enabled() && !g_wvm_tcg_bootstrap_done) {
+        g_wvm_tcg_bootstrap_done = true;
+        tcg_exec_init(0);
     }
 
     if (s->mode == WVM_MODE_KERNEL) ret = wavevm_init_machine_kernel(s, ms);

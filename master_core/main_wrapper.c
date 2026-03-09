@@ -209,6 +209,9 @@ void load_swarm_config(const char *filename) {
  */
 static void handle_ipc_fault(int qemu_fd, struct wvm_ipc_fault_req* req) {
     struct wvm_ipc_fault_ack ack; // 使用扩展后的 ACK 结构
+    fprintf(stderr, "[IPC Fault] gpa=%#llx len=%u vcpu=%u\n",
+            (unsigned long long)req->gpa,
+            req->len, req->vcpu_id);
 
     // [FIX-H7] GPA 边界检查，防止越界访问共享内存
     if (req->gpa + 4096 > g_shm_size) {
@@ -221,6 +224,10 @@ static void handle_ipc_fault(int qemu_fd, struct wvm_ipc_fault_req* req) {
     void *target_page_addr = (uint8_t*)g_shm_ptr + req->gpa;
 
     ack.status = wvm_handle_page_fault_logic(req->gpa, target_page_addr, &ack.version);
+    fprintf(stderr, "[IPC Fault Ack] gpa=%#llx status=%d ver=%#llx\n",
+            (unsigned long long)req->gpa,
+            ack.status,
+            (unsigned long long)ack.version);
 
     write_exact(qemu_fd, &ack, sizeof(ack));
 }
@@ -291,13 +298,16 @@ void* client_handler(void *socket_desc) {
     fprintf(stderr, "[IPC] client connected fd=%d\n", qemu_fd);
 
     pthread_mutex_lock(&g_client_lock);
-    if (g_client_count < MAX_QEMU_CLIENTS) {
+    if (g_client_count == 0) {
         g_qemu_clients[g_client_count++] = qemu_fd;
+        fprintf(stderr, "[IPC] fd=%d registered as async push client\n", qemu_fd);
+    } else {
+        fprintf(stderr, "[IPC] fd=%d treated as sync RPC client only\n", qemu_fd);
     }
     pthread_mutex_unlock(&g_client_lock);
 
     wvm_ipc_header_t ipc_hdr;
-    uint8_t payload_buf[sizeof(struct wvm_ipc_cpu_run_req)]; // Use largest possible payload
+    uint8_t payload_buf[WVM_MAX_PACKET_SIZE];
 
     while (1) {
         // [FIX-G2] 使用 read_exact 处理 partial read

@@ -1529,18 +1529,6 @@ void* tcg_proxy_thread(void *arg) {
                               (struct sockaddr*)&tcg_endpoints[core_idx].req_addr, sizeof(struct sockaddr_in));
                 }
                 else {
-                    if (msg_type == MSG_VCPU_RUN) {
-                        fprintf(stderr,
-                                "[Proxy Downstream] msg=%u src=%s:%u core=%d target=%u cmd_port=%u len=%u mode_tcg=%u\n",
-                                (unsigned)msg_type,
-                                inet_ntoa(src_addrs[i].sin_addr),
-                                (unsigned)ntohs(src_addrs[i].sin_port),
-                                core_idx,
-                                (unsigned)target_raw,
-                                (unsigned)ntohs(tcg_endpoints[core_idx].cmd_addr.sin_port),
-                                (unsigned)msgs[i].msg_len,
-                                (unsigned)hdr->mode_tcg);
-                    }
                     sendto(sockfd, buffers[i], msgs[i].msg_len, 0, 
                           (struct sockaddr*)&tcg_endpoints[core_idx].cmd_addr, sizeof(struct sockaddr_in));
                 }

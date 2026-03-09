@@ -110,6 +110,18 @@ void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa) {
     g_mem_blocks[g_block_count].gpa_start = gpa;
     g_mem_blocks[g_block_count].size      = size;
     g_block_count++;
+    {
+        char msg[224];
+        int n = snprintf(msg, sizeof(msg),
+                         "[WaveVM-User] ram_block hva=%p..%p gpa=%#llx size=%#llx blocks=%d\n",
+                         hva, (void *)((uintptr_t)hva + size),
+                         (unsigned long long)gpa,
+                         (unsigned long long)size,
+                         g_block_count);
+        if (n > 0) {
+            write(STDERR_FILENO, msg, (size_t)n);
+        }
+    }
 }
 
 // [替换] 查表法 HVA 转 GPA (用于 sigsegv)
@@ -599,6 +611,15 @@ static int request_page_sync(uintptr_t fault_addr, bool is_write) {
     if (gpa == (uint64_t)-1) return -1;
     gpa &= ~4095ULL;
     uintptr_t aligned_addr = fault_addr & ~4095ULL;
+    {
+        char msg[160];
+        int n = snprintf(msg, sizeof(msg),
+                         "[WaveVM-User] request_page_sync gpa=%#llx write=%d slave=%d\n",
+                         (unsigned long long)gpa, is_write ? 1 : 0, g_is_slave ? 1 : 0);
+        if (n > 0) {
+            write(STDERR_FILENO, msg, (size_t)n);
+        }
+    }
     
     // --- Master Mode (IPC) ---
     if (!g_is_slave) {
@@ -759,6 +780,16 @@ static int request_page_sync(uintptr_t fault_addr, bool is_write) {
                     // [V29 新增] 更新本地版本号
                     uint64_t ver = WVM_NTOHLL(payload->version);
                     set_local_page_version(gpa, ver);
+                    {
+                        char msg[160];
+                        int n = snprintf(msg, sizeof(msg),
+                                         "[WaveVM-User] request_page_sync ack gpa=%#llx ver=%#llx\n",
+                                         (unsigned long long)gpa,
+                                         (unsigned long long)ver);
+                        if (n > 0) {
+                            write(STDERR_FILENO, msg, (size_t)n);
+                        }
+                    }
                     
                     return 0; // 成功
                 }
@@ -791,10 +822,28 @@ static inline void wait_on_latch(uint64_t gpa) {
  */
 static void sigsegv_handler(int sig, siginfo_t *si, void *ucontext) {
     uintptr_t addr = (uintptr_t)si->si_addr;
+    {
+        char msg[192];
+        int n = snprintf(msg, sizeof(msg),
+                         "[WaveVM-User] sigsegv addr=%p code=%d\n",
+                         si->si_addr, si->si_code);
+        if (n > 0) {
+            write(STDERR_FILENO, msg, (size_t)n);
+        }
+    }
     
     // 通过安全查表获取 GPA
     uint64_t gpa = hva_to_gpa_safe(addr);
     if (gpa == (uint64_t)-1) {
+        {
+            char msg[192];
+            int n = snprintf(msg, sizeof(msg),
+                             "[WaveVM-User] sigsegv passthrough addr=%p\n",
+                             si->si_addr);
+            if (n > 0) {
+                write(STDERR_FILENO, msg, (size_t)n);
+            }
+        }
         // 说明访问的不是 RAM 区域（可能是 MMIO 或非法地址），交回给标准处理程序
         signal(SIGSEGV, SIG_DFL); 
         raise(SIGSEGV); 
@@ -807,13 +856,25 @@ static void sigsegv_handler(int sig, siginfo_t *si, void *ucontext) {
 
     ucontext_t *ctx = (ucontext_t *)ucontext;
     bool is_write = (ctx->uc_mcontext.gregs[REG_ERR] & 0x2);
+    {
+        char msg[224];
+        int n = snprintf(msg, sizeof(msg),
+                         "[WaveVM-User] sigsegv hit gpa=%#llx write=%d page=%p\n",
+                         (unsigned long long)gpa, is_write ? 1 : 0, aligned_addr);
+        if (n > 0) {
+            write(STDERR_FILENO, msg, (size_t)n);
+        }
+    }
 
     if (is_write) {
         // 从预分配池中取，不要 malloc!
         int idx = atomic_fetch_add(&g_pool_idx, 1) % PAGE_POOL_SIZE;
         WritablePage *wp = &g_page_pool[idx];
         void *snapshot = g_image_pool[idx];
-        
+
+        /* The faulting store has not retired yet; once write access is
+         * restored, the current page bytes are still the pre-write image. */
+        mprotect(aligned_addr, 4096, PROT_READ | PROT_WRITE);
         memcpy(snapshot, aligned_addr, 4096);
         wp->gpa = gpa;
         wp->pre_image_snapshot = snapshot;
@@ -823,7 +884,6 @@ static void sigsegv_handler(int sig, siginfo_t *si, void *ucontext) {
             wp->next = __atomic_load_n(&g_writable_pages_list, __ATOMIC_ACQUIRE);
         } while (!__atomic_compare_exchange_n(&g_writable_pages_list, &wp->next, wp, true, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE));
         
-        mprotect(aligned_addr, 4096, PROT_READ | PROT_WRITE);
     } else {
         // 读缺页直接同步
         if (request_page_sync(addr, false) == 0) {
