@@ -1,0 +1,28 @@
+make: Entering directory '/root/wvmtest/gateway_service'
+rm -f wavevm_gateway
+make: Leaving directory '/root/wvmtest/gateway_service'
+make: Entering directory '/root/wvmtest/gateway_service'
+gcc -Wall -O2 -I../common_include -pthread -o wavevm_gateway aggregator.c main.c
+aggregator.c: In function ‘push_to_aggregator’:
+aggregator.c:294:16: warning: unused variable ‘g_my_node_id’ [-Wunused-variable]
+  294 |     extern int g_my_node_id;
+      |                ^~~~~~~~~~~~
+At top level:
+aggregator.c:190:13: warning: ‘smart_backoff’ defined but not used [-Wunused-function]
+  190 | static void smart_backoff(int attempts) {
+      |             ^~~~~~~~~~~~~
+In file included from aggregator.c:31:
+../common_include/wavevm_protocol.h:309:13: warning: ‘wvm_translate_kvm_to_tcg’ defined but not used [-Wunused-function]
+  309 | static void wvm_translate_kvm_to_tcg(struct kvm_regs *k, struct kvm_sregs *s, wvm_tcg_context_t *t) {
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_protocol.h:296:13: warning: ‘wvm_translate_tcg_to_kvm’ defined but not used [-Wunused-function]
+  296 | static void wvm_translate_tcg_to_kvm(wvm_tcg_context_t *t, struct kvm_regs *k, struct kvm_sregs *s) {
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~
+In file included from main.c:5:
+../common_include/wavevm_protocol.h:309:13: warning: ‘wvm_translate_kvm_to_tcg’ defined but not used [-Wunused-function]
+  309 | static void wvm_translate_kvm_to_tcg(struct kvm_regs *k, struct kvm_sregs *s, wvm_tcg_context_t *t) {
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~
+../common_include/wavevm_protocol.h:296:13: warning: ‘wvm_translate_tcg_to_kvm’ defined but not used [-Wunused-function]
+  296 | static void wvm_translate_tcg_to_kvm(wvm_tcg_context_t *t, struct kvm_regs *k, struct kvm_sregs *s) {
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~
+make: Leaving directory '/root/wvmtest/gateway_service'

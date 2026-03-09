@@ -1,0 +1,6 @@
+[*] WaveVM V29.5 Control Tool (Heterogeneous Engine)
+[+] Topology: 2 Physical Nodes -> 2 Virtual DHT Nodes (Weighted).
+[+] Gateway Table Expanded & Injected.
+[*] Injecting CPU Topology (4096 vCPUs)...
+[+] CPU Routing Table Injected Successfully.
+[+] V29.5 Configured: Total V-Nodes=2, My Primary V-ID=0

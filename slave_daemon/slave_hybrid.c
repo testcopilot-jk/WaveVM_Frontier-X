@@ -24,6 +24,8 @@
 #include <arpa/inet.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <stdint.h>
+#include <inttypes.h>
 #include <linux/kvm.h>
 #include <errno.h>
 #include <sched.h>
@@ -31,6 +33,7 @@
 #include <poll.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <stdbool.h>
 #include "uthash.h"
 #include "slave_vfio.h"
 
@@ -41,6 +44,20 @@ static int g_service_port = 9000;
 static long g_num_cores = 0;
 static int g_ram_mb = 1024;
 static uint64_t g_slave_ram_size = 1024UL * 1024 * 1024;
+
+typedef struct {
+    int slot;
+    uint64_t guest_phys_addr;
+    uint64_t size;
+    uint8_t *hva;
+    uint32_t flags;
+    bool track_dirty;
+} wvm_kvm_slot_t;
+
+static wvm_kvm_slot_t g_kvm_slots[4];
+static int g_kvm_slot_count = 0;
+static uint8_t *g_kvm_reserved_hva = NULL;
+static size_t g_kvm_reserved_size = 0;
 // 用于通知 IRQ 线程 Master 地址已就绪
 static pthread_cond_t g_master_cond = PTHREAD_COND_INITIALIZER;
 static pthread_mutex_t g_master_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -58,7 +75,7 @@ typedef struct {
 } dirty_page_task_t;
 
 // MPSC 环形队列
-#define MPSC_QUEUE_SIZE 1024 // 可缓存 1024 个脏页（4MB），足以应对网络瞬时抖动
+#define MPSC_QUEUE_SIZE 8192 // [FIX-F2] 扩容 1024->8192 (32MB)，减少溢出概率
 static dirty_page_task_t* g_mpsc_queue[MPSC_QUEUE_SIZE];
 static volatile uint32_t g_mpsc_head = 0;
 static volatile uint32_t g_mpsc_tail = 0;
@@ -86,7 +103,7 @@ static int get_chunk_fd_safe(uint64_t chunk_id) {
     chunk_fd_entry_t *entry;
     pthread_mutex_lock(&g_fd_lock);
     
-    HASH_FIND_INT(g_fd_cache, &chunk_id, entry);
+    HASH_FIND(hh, g_fd_cache, &chunk_id, sizeof(uint64_t), entry);
     if (entry) {
         entry->last_access = time(NULL);
         // Move to front (LRU) implemented by deletion/re-addition in simple uthash, or utilize extra list
@@ -108,24 +125,29 @@ static int get_chunk_fd_safe(uint64_t chunk_id) {
     // 物理打开：确保目录存在
     // 生产环境应在启动脚本中 mkdir -p /var/lib/wavevm/chunks
     char path[256];
-    snprintf(path, sizeof(path), "/var/lib/wavevm/chunks/c_%lu.bin", chunk_id);
+    snprintf(path, sizeof(path), "/var/lib/wavevm/chunks/c_%" PRIu64 ".bin", chunk_id);
     
     // [V31 PHY] 使用 O_DIRECT 绕过 Page Cache，直接落盘
     int fd = open(path, O_RDWR | O_CREAT | O_DIRECT, 0644);
     if (fd < 0) {
         // Fallback: 如果文件系统不支持 O_DIRECT (如 tmpfs)，回退到普通模式
         if (errno == EINVAL) fd = open(path, O_RDWR | O_CREAT, 0644);
-        else {
+        if (fd < 0) {
             pthread_mutex_unlock(&g_fd_lock);
             return -1;
         }
     }
 
     entry = malloc(sizeof(chunk_fd_entry_t));
+    if (!entry) {
+        close(fd);
+        pthread_mutex_unlock(&g_fd_lock);
+        return -1;
+    }
     entry->chunk_id = chunk_id;
     entry->fd = fd;
     entry->last_access = time(NULL);
-    HASH_ADD_INT(g_fd_cache, chunk_id, entry);
+    HASH_ADD(hh, g_fd_cache, chunk_id, sizeof(uint64_t), entry);
     
     pthread_mutex_unlock(&g_fd_lock);
     return fd;
@@ -144,6 +166,8 @@ static int robust_sendto(int fd, const void *buf, size_t len, struct sockaddr_in
         ssize_t sent = sendto(fd, buf, len, MSG_DONTWAIT, (struct sockaddr*)dest, sizeof(*dest));
         
         if (sent > 0) return 0; // 发送成功
+
+        if (sent == 0) { retries++; continue; } /* sendto 返回 0：零长度包，计入重试 */
 
         if (sent < 0) {
             if (errno == EINTR) continue; // 被信号中断，立即重试
@@ -244,7 +268,9 @@ static void ntoh_header(struct wvm_header *hdr) {
     hdr->msg_type = ntohs(hdr->msg_type);
     hdr->payload_len = ntohs(hdr->payload_len);
     hdr->slave_id = ntohl(hdr->slave_id);
+    hdr->target_id = ntohl(hdr->target_id);
     hdr->req_id = WVM_NTOHLL(hdr->req_id);
+    hdr->epoch = ntohl(hdr->epoch);
 }
 
 // ==========================================
@@ -256,8 +282,87 @@ static int g_vm_fd = -1;
 static uint8_t *g_phy_ram = NULL;
 static __thread int t_vcpu_fd = -1;
 static __thread struct kvm_run *t_kvm_run = NULL;
+static int g_boot_vcpu_fd = -1;
+static struct kvm_run *g_boot_kvm_run = NULL;
 static pthread_spinlock_t g_master_lock;
 static int g_wvm_dev_fd = -1;
+static int g_base_id = 0;
+static uint8_t g_slave_vm_id = 0;
+static int g_vcpu_init_debug_once = 0;
+
+#define WVM_PAGE_SIZE            4096ULL
+#define WVM_KVM_IDMAP_ADDR       0xfffbc000ULL
+#define WVM_KVM_TSS_ADDR         0xfffbd000ULL
+#define WVM_KVM_RESERVED_SIZE    0x2000ULL /* IDMAP + TSS pages */
+
+static uint8_t *wvm_gpa_to_hva(uint64_t gpa)
+{
+    for (int i = 0; i < g_kvm_slot_count; i++) {
+        const wvm_kvm_slot_t *slot = &g_kvm_slots[i];
+        if (gpa >= slot->guest_phys_addr &&
+            gpa < slot->guest_phys_addr + slot->size) {
+            return slot->hva + (gpa - slot->guest_phys_addr);
+        }
+    }
+    return NULL;
+}
+
+static inline int wvm_gpa_page_valid(uint64_t gpa)
+{
+    uint8_t *hva = wvm_gpa_to_hva(gpa);
+    if (!hva) return 0;
+    /* Require the whole page to fit in a single slot. */
+    return wvm_gpa_to_hva(gpa + (WVM_PAGE_SIZE - 1)) != NULL;
+}
+
+static int wvm_kvm_add_memslot(int vm_fd, int slot_id,
+                              uint64_t guest_phys_addr, uint64_t size,
+                              uint8_t *hva, uint32_t flags, bool track_dirty)
+{
+    struct kvm_userspace_memory_region region;
+
+    if (size == 0) {
+        return 0;
+    }
+    if ((guest_phys_addr & (WVM_PAGE_SIZE - 1)) ||
+        (size & (WVM_PAGE_SIZE - 1)) ||
+        (((uintptr_t)hva) & (WVM_PAGE_SIZE - 1))) {
+        fprintf(stderr, "[Hybrid] memslot alignment invalid gpa=%#llx size=%#llx hva=%p\n",
+                (unsigned long long)guest_phys_addr,
+                (unsigned long long)size,
+                (void*)hva);
+        return -1;
+    }
+
+    memset(&region, 0, sizeof(region));
+    region.slot = (uint32_t)slot_id;
+    region.flags = flags;
+    region.guest_phys_addr = guest_phys_addr;
+    region.memory_size = size;
+    region.userspace_addr = (uint64_t)hva;
+
+    if (ioctl(vm_fd, KVM_SET_USER_MEMORY_REGION, &region) < 0) {
+        perror("[Hybrid] KVM_SET_USER_MEMORY_REGION failed");
+        fprintf(stderr, "[Hybrid] memslot=%d gpa=%#llx size=%#llx hva=%p\n",
+                slot_id,
+                (unsigned long long)guest_phys_addr,
+                (unsigned long long)size,
+                (void*)hva);
+        return -1;
+    }
+
+    if (g_kvm_slot_count < (int)(sizeof(g_kvm_slots) / sizeof(g_kvm_slots[0]))) {
+        g_kvm_slots[g_kvm_slot_count].slot = slot_id;
+        g_kvm_slots[g_kvm_slot_count].guest_phys_addr = guest_phys_addr;
+        g_kvm_slots[g_kvm_slot_count].size = size;
+        g_kvm_slots[g_kvm_slot_count].hva = hva;
+        g_kvm_slots[g_kvm_slot_count].flags = flags;
+        g_kvm_slots[g_kvm_slot_count].track_dirty = track_dirty;
+        g_kvm_slot_count++;
+    }
+
+    return 0;
+}
 
 /* 
  * [物理意图] 在远程节点初始化硬件虚拟化容器（KVM），为“算力托管”圈定物理内存边界。
@@ -265,6 +370,13 @@ static int g_wvm_dev_fd = -1;
  * [后果] 确立了远程执行的基石。若初始化失败，Slave 将无法使用硬件加速，只能回退到慢速的 TCG 模拟模式。
  */
 void init_kvm_global() {
+    const char *force_tcg = getenv("WVM_FORCE_TCG");
+    if (force_tcg && atoi(force_tcg) == 1) {
+        fprintf(stderr, "[Hybrid] WVM_FORCE_TCG=1, skip KVM init.\n");
+        g_kvm_available = 0;
+        return;
+    }
+
     g_kvm_fd = open("/dev/kvm", O_RDWR);
     if (g_kvm_fd < 0) return; 
 
@@ -303,37 +415,221 @@ void init_kvm_global() {
     g_vm_fd = ioctl(g_kvm_fd, KVM_CREATE_VM, 0);
     if (g_vm_fd < 0) { close(g_kvm_fd); g_kvm_fd = -1; return; }
 
-    ioctl(g_vm_fd, KVM_SET_TSS_ADDR, 0xfffbd000);
-    __u64 map_addr = 0xfffbc000;
+    /* On some virtualized hosts, vCPU must be created before full VM wiring. */
+    errno = 0;
+    int boot_vcpu_id = 0;
+    g_boot_vcpu_fd = ioctl(g_vm_fd, KVM_CREATE_VCPU, boot_vcpu_id);
+    if (g_boot_vcpu_fd < 0 && errno == EEXIST) {
+        for (int try_id = 1; try_id < 8192; try_id++) {
+            g_boot_vcpu_fd = ioctl(g_vm_fd, KVM_CREATE_VCPU, try_id);
+            if (g_boot_vcpu_fd >= 0) {
+                boot_vcpu_id = try_id;
+                break;
+            }
+            if (errno != EEXIST) {
+                break;
+            }
+        }
+    }
+    fprintf(stderr, "[Slave BootVCPU] create fd=%d errno=%d vm=%d kvm=%d id=%d\n",
+            g_boot_vcpu_fd, errno, g_vm_fd, g_kvm_fd, boot_vcpu_id);
+    if (g_boot_vcpu_fd >= 0) {
+        int mmap_size = ioctl(g_kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
+        fprintf(stderr, "[Slave BootVCPU] mmap_size=%d errno=%d\n", mmap_size, errno);
+        if (mmap_size > 0) {
+            g_boot_kvm_run = mmap(NULL, mmap_size, PROT_READ|PROT_WRITE, MAP_SHARED, g_boot_vcpu_fd, 0);
+            if (g_boot_kvm_run == MAP_FAILED) {
+                fprintf(stderr, "[Slave BootVCPU] mmap failed errno=%d\n", errno);
+                g_boot_kvm_run = NULL;
+            }
+        }
+    }
+
+    ioctl(g_vm_fd, KVM_SET_TSS_ADDR, WVM_KVM_TSS_ADDR);
+    __u64 map_addr = WVM_KVM_IDMAP_ADDR;
     ioctl(g_vm_fd, KVM_SET_IDENTITY_MAP_ADDR, &map_addr);
     ioctl(g_vm_fd, KVM_CREATE_IRQCHIP, 0);
 
-    struct kvm_userspace_memory_region region = {
-        .slot = 0,
-        .flags = KVM_MEM_LOG_DIRTY_PAGES,
-        .guest_phys_addr = 0,
-        .memory_size = g_slave_ram_size,
-        .userspace_addr = (uint64_t)g_phy_ram
-    };
-    ioctl(g_vm_fd, KVM_SET_USER_MEMORY_REGION, &region);
+    g_kvm_slot_count = 0;
+
+    /* Map a dedicated 2-page reserved window for KVM IDMAP/TSS. */
+    g_kvm_reserved_size = (size_t)WVM_KVM_RESERVED_SIZE;
+    g_kvm_reserved_hva = mmap(NULL, g_kvm_reserved_size, PROT_READ | PROT_WRITE,
+                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (g_kvm_reserved_hva == MAP_FAILED) {
+        perror("[Hybrid] mmap reserved");
+        g_kvm_reserved_hva = NULL;
+        close(g_vm_fd);
+        g_vm_fd = -1;
+        close(g_kvm_fd);
+        g_kvm_fd = -1;
+        return;
+    }
+
+    /* Slot 0: [0, IDMAP_ADDR) */
+    uint64_t low_size = g_slave_ram_size;
+    if (low_size > WVM_KVM_IDMAP_ADDR) {
+        low_size = WVM_KVM_IDMAP_ADDR;
+    }
+    if (wvm_kvm_add_memslot(g_vm_fd, 0, 0, low_size, g_phy_ram,
+                            KVM_MEM_LOG_DIRTY_PAGES, true) < 0) {
+        close(g_vm_fd);
+        g_vm_fd = -1;
+        close(g_kvm_fd);
+        g_kvm_fd = -1;
+        return;
+    }
+
+    /* Slot 2: reserved IDMAP/TSS pages. */
+    if (wvm_kvm_add_memslot(g_vm_fd, 2, WVM_KVM_IDMAP_ADDR, WVM_KVM_RESERVED_SIZE,
+                            g_kvm_reserved_hva, 0, false) < 0) {
+        close(g_vm_fd);
+        g_vm_fd = -1;
+        close(g_kvm_fd);
+        g_kvm_fd = -1;
+        return;
+    }
+
+    /* Slot 1: (IDMAP_ADDR + reserved, ram_end] */
+    uint64_t hole_end = WVM_KVM_IDMAP_ADDR + WVM_KVM_RESERVED_SIZE;
+    if (g_slave_ram_size > hole_end) {
+        uint64_t high_size = g_slave_ram_size - hole_end;
+        if (wvm_kvm_add_memslot(g_vm_fd, 1, hole_end, high_size, g_phy_ram + hole_end,
+                                KVM_MEM_LOG_DIRTY_PAGES, true) < 0) {
+            close(g_vm_fd);
+            g_vm_fd = -1;
+            close(g_kvm_fd);
+            g_kvm_fd = -1;
+            return;
+        }
+    }
 
     g_kvm_available = 1;
     pthread_spin_init(&g_master_lock, 0);
+
     printf("[Hybrid] KVM Hardware Acceleration Active (RAM: %d MB).\n", g_ram_mb);
 }
 
 void init_thread_local_vcpu(int vcpu_id) {
     if (t_vcpu_fd >= 0) return;
+    if (__sync_bool_compare_and_swap(&g_vcpu_init_debug_once, 0, 1)) {
+        fprintf(stderr, "[Slave VCPU Init] enter vm=%d kvm=%d boot_fd=%d boot_run=%p req_vcpu=%d\n",
+                g_vm_fd, g_kvm_fd, g_boot_vcpu_fd, (void*)g_boot_kvm_run, vcpu_id);
+    }
+    if (g_vm_fd < 0 || g_kvm_fd < 0) {
+        fprintf(stderr, "[Slave VCPU Init] invalid fds vm=%d kvm=%d vcpu=%d\n",
+                g_vm_fd, g_kvm_fd, vcpu_id);
+        return;
+    }
+
+    /* Preferred fast path: reuse boot vCPU 0 that was pre-created at init. */
+    if (g_boot_vcpu_fd >= 0) {
+        if (!g_boot_kvm_run) {
+            int mmap_size = ioctl(g_kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
+            if (mmap_size > 0) {
+                g_boot_kvm_run = mmap(NULL, mmap_size, PROT_READ|PROT_WRITE, MAP_SHARED, g_boot_vcpu_fd, 0);
+                if (g_boot_kvm_run == MAP_FAILED) {
+                    g_boot_kvm_run = NULL;
+                }
+            }
+        }
+        if (g_boot_kvm_run) {
+            t_vcpu_fd = g_boot_vcpu_fd;
+            t_kvm_run = g_boot_kvm_run;
+            return;
+        }
+    }
+
+    int chosen_vcpu_id = vcpu_id;
     t_vcpu_fd = ioctl(g_vm_fd, KVM_CREATE_VCPU, vcpu_id);
-    if (t_vcpu_fd < 0) return; 
+    if (t_vcpu_fd < 0 && errno == EEXIST) {
+        /* Some hosts reserve vcpu0 in-kernel. Probe a small contiguous range. */
+        for (int try_id = 1; try_id < 8192; try_id++) {
+            t_vcpu_fd = ioctl(g_vm_fd, KVM_CREATE_VCPU, try_id);
+            if (t_vcpu_fd >= 0) {
+                chosen_vcpu_id = try_id;
+                break;
+            }
+            if (errno != EEXIST) break;
+        }
+    }
+    if (t_vcpu_fd < 0 && errno == EEXIST && g_boot_vcpu_fd >= 0) {
+        chosen_vcpu_id = 0;
+        t_vcpu_fd = g_boot_vcpu_fd;
+    }
+    if (t_vcpu_fd < 0) {
+        fprintf(stderr, "[Slave VCPU Init] KVM_CREATE_VCPU failed vcpu=%d errno=%d\n",
+                vcpu_id, errno);
+        return;
+    }
+    if (chosen_vcpu_id != vcpu_id) {
+        fprintf(stderr, "[Slave VCPU Init] fallback vcpu=%d (requested %d)\n",
+                chosen_vcpu_id, vcpu_id);
+    }
     int mmap_size = ioctl(g_kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
+    if (mmap_size <= 0) {
+        fprintf(stderr, "[Slave VCPU Init] KVM_GET_VCPU_MMAP_SIZE failed errno=%d\n", errno);
+        if (t_vcpu_fd != g_boot_vcpu_fd) close(t_vcpu_fd);
+        t_vcpu_fd = -1;
+        return;
+    }
     t_kvm_run = mmap(NULL, mmap_size, PROT_READ|PROT_WRITE, MAP_SHARED, t_vcpu_fd, 0);
-    if (t_kvm_run == MAP_FAILED) exit(1);
+    if (t_kvm_run == MAP_FAILED) {
+        fprintf(stderr, "[Slave VCPU Init] vcpu mmap failed errno=%d\n", errno);
+        if (t_vcpu_fd != g_boot_vcpu_fd) close(t_vcpu_fd);
+        t_vcpu_fd = -1;
+        t_kvm_run = NULL;
+        return;
+    }
 }
 
 // [FIX] Thread-Local 缓存，避免高频 malloc/free
 static __thread unsigned long *t_dirty_bitmap_cache = NULL;
 static __thread size_t t_dirty_bitmap_size = 0;
+
+/* [FIX-F2] 紧急内联发送：当 MPSC 队列已满或 malloc 失败时，阻塞式直接发送脏页。
+ * 这是最后的安全网——绝不能在 KVM_GET_DIRTY_LOG 已清除硬件 dirty bit 后丢弃页面。
+ * 性能会下降（阻塞 vCPU 所在线程），但数据不会丢失。
+ */
+static __thread int t_emergency_sock = -1;
+
+static void emergency_send_dirty_page(uint64_t gpa, const uint8_t *hva) {
+    if (t_emergency_sock < 0) {
+        t_emergency_sock = socket(AF_INET, SOCK_DGRAM, 0);
+        if (t_emergency_sock < 0) {
+            fprintf(stderr, "[FIX-F2] FATAL: cannot create emergency socket, dirty page 0x%"
+                    PRIx64 " LOST\n", gpa);
+            return;
+        }
+    }
+
+    uint8_t tx_buf[sizeof(struct wvm_header) + 8 + 4096];
+    memset(tx_buf, 0, sizeof(struct wvm_header));
+    struct wvm_header *wh = (struct wvm_header *)tx_buf;
+    size_t total_len = sizeof(tx_buf);
+
+    wh->magic = htonl(WVM_MAGIC);
+    wh->msg_type = htons(MSG_MEM_WRITE);
+    wh->payload_len = htons(8 + 4096);
+    wh->slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
+    wh->target_id = htonl(WVM_NODE_AUTO_ROUTE);
+    wh->req_id = 0;
+    wh->qos_level = 0;
+
+    uint64_t net_gpa = WVM_HTONLL(gpa);
+    memcpy(tx_buf + sizeof(*wh), &net_gpa, 8);
+    memcpy(tx_buf + sizeof(*wh) + 8, hva, 4096);
+
+    wh->crc32 = 0;
+    wh->crc32 = htonl(calculate_crc32(tx_buf, total_len));
+
+    // [FIX-M2] 加锁读取 g_master_addr，防止与 RX 线程竞争
+    struct sockaddr_in master_snap;
+    pthread_spin_lock(&g_master_lock);
+    master_snap = g_master_addr;
+    pthread_spin_unlock(&g_master_lock);
+    robust_sendto(t_emergency_sock, tx_buf, total_len, &master_snap);
+}
 
 /* 
  * [物理意图] 充当远程执行节点的“脏页回写引擎”，实现计算与同步的解耦。
@@ -367,22 +663,32 @@ void* dirty_sync_sender_thread(void* arg) {
         
         // 网络发送
         uint8_t tx_buf[sizeof(struct wvm_header) + 8 + 4096];
+        memset(tx_buf, 0, sizeof(struct wvm_header)); // [FIX] 清零 header 区域，防止 epoch/flags 等字段含垃圾值
         struct wvm_header *wh = (struct wvm_header *)tx_buf;
         size_t total_len = sizeof(tx_buf);
 
         wh->magic = htonl(WVM_MAGIC);
         wh->msg_type = htons(MSG_MEM_WRITE);
         wh->payload_len = htons(8 + 4096);
-        wh->slave_id = 0; // 源ID在Slave模式下意义不大，可设为0
+        wh->slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
+        wh->target_id = htonl(WVM_NODE_AUTO_ROUTE); // [V31 Fix] 本地通信标记，防止 Master vm_id 过滤误杀
         wh->req_id = 0;
         wh->qos_level = 0;
 
         uint64_t net_gpa = WVM_HTONLL(task->gpa);
         memcpy(tx_buf + sizeof(*wh), &net_gpa, 8);
         memcpy(tx_buf + sizeof(*wh) + 8, task->data, 4096);
-        
+
+        wh->crc32 = 0;
+        wh->crc32 = htonl(calculate_crc32(tx_buf, total_len));
+
+        // [FIX-M2] 加锁快照 g_master_addr，防止与 RX 线程竞争
+        struct sockaddr_in master_snap;
+        pthread_spin_lock(&g_master_lock);
+        master_snap = g_master_addr;
+        pthread_spin_unlock(&g_master_lock);
         // 使用 robust_sendto 发送，它内部包含了反压处理逻辑
-        robust_sendto(sockfd, tx_buf, total_len, &g_master_addr);
+        robust_sendto(sockfd, tx_buf, total_len, &master_snap);
         
         // 任务完成，释放内存
         free(task);
@@ -403,14 +709,17 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
 
     // 对“空上下文探针”走快速 ACK，避免在 KVM_RUN 中无意义阻塞。
     // 仅匹配明显空输入，不影响真实执行上下文。
-    if ((req->mode_tcg && req->ctx.tcg.eip == 0) ||
-        (!req->mode_tcg && req->ctx.kvm.rip == 0 && req->ctx.kvm.rflags == 0)) {
+    const wvm_kvm_context_t zero_kvm = {0};
+    bool kvm_empty = !req->mode_tcg &&
+                     memcmp(&req->ctx.kvm, &zero_kvm, sizeof(zero_kvm)) == 0;
+    if (kvm_empty) {
         struct wvm_header ack_hdr;
         memset(&ack_hdr, 0, sizeof(ack_hdr));
         ack_hdr.magic = htonl(WVM_MAGIC);
         ack_hdr.msg_type = htons(MSG_VCPU_EXIT);
         ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
-        ack_hdr.slave_id = htonl(hdr->slave_id);
+        /* ACK must originate from this slave node and target the requester. */
+        ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
         ack_hdr.target_id = htonl(hdr->slave_id);
         ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
 
@@ -437,19 +746,108 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         return;
     }
 
-    if (t_vcpu_fd < 0) init_thread_local_vcpu(vcpu_id);
+    if (t_vcpu_fd < 0) {
+        init_thread_local_vcpu(vcpu_id);
+    }
+    if (t_vcpu_fd < 0 || !t_kvm_run || t_kvm_run == MAP_FAILED) {
+        struct wvm_header ack_hdr;
+        memset(&ack_hdr, 0, sizeof(ack_hdr));
+        ack_hdr.magic = htonl(WVM_MAGIC);
+        ack_hdr.msg_type = htons(MSG_VCPU_EXIT);
+        ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
+        /* ACK must originate from this slave node and target the requester. */
+        ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
+        ack_hdr.target_id = htonl(hdr->slave_id);
+        ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
+
+        struct wvm_ipc_cpu_run_ack ack;
+        memset(&ack, 0, sizeof(ack));
+        ack.status = -1;
+        ack.mode_tcg = req->mode_tcg;
+        if (req->mode_tcg) {
+            memcpy(&ack.ctx.tcg, &req->ctx.tcg, sizeof(req->ctx.tcg));
+        } else {
+            memcpy(&ack.ctx.kvm, &req->ctx.kvm, sizeof(req->ctx.kvm));
+        }
+
+        uint8_t tx[sizeof(ack_hdr) + sizeof(ack)];
+        memcpy(tx, &ack_hdr, sizeof(ack_hdr));
+        memcpy(tx + sizeof(ack_hdr), &ack, sizeof(ack));
+        struct wvm_header *tx_hdr = (struct wvm_header *)tx;
+        tx_hdr->crc32 = 0;
+        tx_hdr->crc32 = htonl(calculate_crc32(tx, sizeof(tx)));
+        ssize_t sret = sendto(sockfd, tx, sizeof(tx), 0, (struct sockaddr*)client, sizeof(*client));
+        fprintf(stderr, "[Slave ErrorAck] vcpu init failed ret=%zd errno=%d req=%llu dst=%s:%u\n",
+                sret, (sret < 0) ? errno : 0,
+                (unsigned long long)hdr->req_id, inet_ntoa(client->sin_addr), ntohs(client->sin_port));
+        return;
+    }
     struct kvm_regs kregs; struct kvm_sregs ksregs;
-    wvm_kvm_context_t *ctx = &req->ctx.kvm;
+    // 1. 读取当前 sregs，供直通路径或转换路径继续使用
+    ioctl(t_vcpu_fd, KVM_GET_SREGS, &ksregs); 
 
-    kregs.rax = ctx->rax; kregs.rbx = ctx->rbx; kregs.rcx = ctx->rcx; kregs.rdx = ctx->rdx;
-    kregs.rsi = ctx->rsi; kregs.rdi = ctx->rdi; kregs.rsp = ctx->rsp; kregs.rbp = ctx->rbp;
-    kregs.r8  = ctx->r8;  kregs.r9  = ctx->r9;  kregs.r10 = ctx->r10; kregs.r11 = ctx->r11;
-    kregs.r12 = ctx->r12; kregs.r13 = ctx->r13; kregs.r14 = ctx->r14; kregs.r15 = ctx->r15;
-    kregs.rip = ctx->rip; kregs.rflags = ctx->rflags;
-    memcpy(&ksregs, ctx->sregs_data, sizeof(ksregs));
+    // 2. 只有不一样的时候才转换！
+    if (req->mode_tcg) {
+        // TCG 对 KVM：转换计算
+        wvm_translate_tcg_to_kvm(&req->ctx.tcg, &kregs, &ksregs);
+    } else {
+        // KVM 对 KVM：零转换直通
+        wvm_kvm_context_t *ctx = &req->ctx.kvm;
+        kregs.rax = ctx->rax; kregs.rbx = ctx->rbx; kregs.rcx = ctx->rcx; kregs.rdx = ctx->rdx;
+        kregs.rsi = ctx->rsi; kregs.rdi = ctx->rdi; kregs.rsp = ctx->rsp; kregs.rbp = ctx->rbp;
+        kregs.r8  = ctx->r8;  kregs.r9  = ctx->r9;  kregs.r10 = ctx->r10; kregs.r11 = ctx->r11;
+        kregs.r12 = ctx->r12; kregs.r13 = ctx->r13; kregs.r14 = ctx->r14; kregs.r15 = ctx->r15;
+        kregs.rip = ctx->rip; kregs.rflags = ctx->rflags;
 
-    ioctl(t_vcpu_fd, KVM_SET_SREGS, &ksregs); ioctl(t_vcpu_fd, KVM_SET_REGS, &kregs);
-    
+        /* Keep local APIC/interrupt state and only import architectural sregs. */
+        struct kvm_sregs *remote_sregs = (struct kvm_sregs *)ctx->sregs_data;
+        ksregs.cs = remote_sregs->cs;
+        ksregs.ds = remote_sregs->ds;
+        ksregs.es = remote_sregs->es;
+        ksregs.fs = remote_sregs->fs;
+        ksregs.gs = remote_sregs->gs;
+        ksregs.ss = remote_sregs->ss;
+        ksregs.tr = remote_sregs->tr;
+        ksregs.ldt = remote_sregs->ldt;
+        ksregs.gdt = remote_sregs->gdt;
+        ksregs.idt = remote_sregs->idt;
+        ksregs.cr0 = remote_sregs->cr0;
+        ksregs.cr2 = remote_sregs->cr2;
+        ksregs.cr3 = remote_sregs->cr3;
+        ksregs.cr4 = remote_sregs->cr4;
+        ksregs.cr8 = remote_sregs->cr8;
+        ksregs.efer = remote_sregs->efer;
+    }
+
+    ioctl(t_vcpu_fd, KVM_SET_SREGS, &ksregs);
+    ioctl(t_vcpu_fd, KVM_SET_REGS, &kregs);
+
+    /* [FIX] 恢复上一轮 IO IN / MMIO READ 的设备读结果：
+     * Master 已在本地执行 address_space_rw 读取设备并填入 kctx->io.data / mmio.data，
+     * 需要写回 t_kvm_run 以便 KVM_RUN 完成未决 IO 指令。 */
+    if (!req->mode_tcg) {
+        wvm_kvm_context_t *rctx = &req->ctx.kvm;
+        if (rctx->exit_reason == KVM_EXIT_IO &&
+            rctx->io.direction == KVM_EXIT_IO_IN) {
+            t_kvm_run->exit_reason = KVM_EXIT_IO;
+            t_kvm_run->io.direction = rctx->io.direction;
+            t_kvm_run->io.size      = rctx->io.size;
+            t_kvm_run->io.port      = rctx->io.port;
+            t_kvm_run->io.count     = rctx->io.count;
+            size_t io_bytes = (size_t)rctx->io.size * rctx->io.count;
+            if (io_bytes > sizeof(rctx->io.data)) io_bytes = sizeof(rctx->io.data);
+            uint8_t *io_ptr = (uint8_t *)t_kvm_run + t_kvm_run->io.data_offset;
+            memcpy(io_ptr, rctx->io.data, io_bytes);
+        } else if (rctx->exit_reason == KVM_EXIT_MMIO &&
+                   !rctx->mmio.is_write) {
+            t_kvm_run->exit_reason = KVM_EXIT_MMIO;
+            t_kvm_run->mmio.phys_addr = rctx->mmio.phys_addr;
+            t_kvm_run->mmio.len       = rctx->mmio.len;
+            t_kvm_run->mmio.is_write  = 0;
+            memcpy(t_kvm_run->mmio.data, rctx->mmio.data, 8);
+        }
+    }
+
     int ret;
     do {
         ret = ioctl(t_vcpu_fd, KVM_RUN, 0);
@@ -463,78 +861,92 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
             }
         }
         if (ret == 0) break;
-    } while (ret > 0 || ret == -EINTR);
+    } while (ret == -1 && errno == EINTR);
 
     if (g_wvm_dev_fd < 0) { 
         // [V28.5 FIXED] KVM Dirty Log Sync (Full Implementation)
         // 完整实现：获取位图 -> 遍历 -> 封包 -> 发送
-        // 这里的 slot 0 对应整个 RAM
         struct kvm_dirty_log log = { .slot = 0 };
-        size_t bitmap_size = (g_slave_ram_size / 4096) / 8;
-        if (bitmap_size == 0) bitmap_size = 1; // Safety check
+        size_t nbits_per_long = sizeof(unsigned long) * 8;
 
-        if (!t_dirty_bitmap_cache || t_dirty_bitmap_size < bitmap_size) {
-            if (t_dirty_bitmap_cache) free(t_dirty_bitmap_cache);
-            t_dirty_bitmap_cache = malloc(bitmap_size);
-            t_dirty_bitmap_size = bitmap_size;
-        }
+        for (int sidx = 0; sidx < g_kvm_slot_count; sidx++) {
+            const wvm_kvm_slot_t *slot = &g_kvm_slots[sidx];
+            if (!slot->track_dirty) {
+                continue;
+            }
 
-        if (t_dirty_bitmap_cache) {
+            /* Slot-local dirty bitmap. */
+            uint64_t pages = slot->size / WVM_PAGE_SIZE;
+            size_t bitmap_size = (size_t)(((pages + nbits_per_long - 1) / nbits_per_long) * sizeof(unsigned long));
+            if (bitmap_size == 0) {
+                continue;
+            }
+
+            if (!t_dirty_bitmap_cache || t_dirty_bitmap_size < bitmap_size) {
+                if (t_dirty_bitmap_cache) free(t_dirty_bitmap_cache);
+                t_dirty_bitmap_cache = malloc(bitmap_size);
+                t_dirty_bitmap_size = bitmap_size;
+            }
+            if (!t_dirty_bitmap_cache) {
+                perror("malloc dirty bitmap");
+                continue;
+            }
+
+            log.slot = slot->slot;
             log.dirty_bitmap = t_dirty_bitmap_cache;
-            memset(log.dirty_bitmap, 0, bitmap_size); // 必须清零，因为是复用的
-        
-            // 从 KVM 获取脏页位图
-            if (ioctl(g_vm_fd, KVM_GET_DIRTY_LOG, &log) == 0) {
-                unsigned long *p = (unsigned long *)log.dirty_bitmap;
-                uint64_t num_longs = bitmap_size / sizeof(unsigned long);
-            
-                // 在栈上分配发送缓冲区，避免频繁 malloc
-                // Header + GPA(8) + PageData(4096)
-                uint8_t tx_buf[sizeof(struct wvm_header) + 8 + 4096];
-                struct wvm_header *wh = (struct wvm_header *)tx_buf;
-                size_t total_len = sizeof(tx_buf); // 包总长
+            memset(log.dirty_bitmap, 0, bitmap_size);
 
-                for (uint64_t i = 0; i < num_longs; i++) {
-                if (p[i] == 0) continue; // 快速跳过无脏页的块
-                
-                    for (int b = 0; b < 64; b++) {
-                        if ((p[i] >> b) & 1) {
-                            uint64_t gpa = (i * 64 + b) * 4096;
-                            if (gpa >= g_slave_ram_size) continue;
-                       
-                            // 1. 检查队列是否已满
-                            uint32_t next_tail = (g_mpsc_tail + 1) % MPSC_QUEUE_SIZE;
-                            if (next_tail == g_mpsc_head) {
-                                // 队列已满，选择丢弃。这是新的丢包点。
-                                // 生产环境可以加一个计数器来监控丢包率。
-                                continue;
-                            }
+            if (ioctl(g_vm_fd, KVM_GET_DIRTY_LOG, &log) != 0) {
+                continue;
+            }
 
-                            // 2. 分配任务内存
-                            dirty_page_task_t* task = malloc(sizeof(dirty_page_task_t));
-                            if (!task) {
-                                // 内存分配失败，也只能放弃
-                                continue;
-                            }
-                            
-                            // 3. 填充任务数据
-                            task->gpa = gpa;
-                            memcpy(task->data, g_phy_ram + gpa, 4096);
+            unsigned long *p = (unsigned long *)log.dirty_bitmap;
+            uint64_t num_longs = bitmap_size / sizeof(unsigned long);
 
-                            // 4. 加锁，将任务指针放入队列，更新 tail
-                            pthread_mutex_lock(&g_mpsc_lock);
-                            g_mpsc_queue[g_mpsc_tail] = task;
-                            g_mpsc_tail = next_tail;
-                            pthread_mutex_unlock(&g_mpsc_lock);
+            for (uint64_t i = 0; i < num_longs; i++) {
+                if (p[i] == 0) continue;
 
-                            // 5. 唤醒消费者线程
-                            pthread_cond_signal(&g_mpsc_cond);
+                for (size_t b = 0; b < nbits_per_long; b++) {
+                    if ((p[i] >> b) & 1) {
+                        uint64_t gpa = slot->guest_phys_addr +
+                                       (i * nbits_per_long + b) * WVM_PAGE_SIZE;
+                        if (gpa >= g_slave_ram_size) continue;
+
+                        uint8_t *hva = wvm_gpa_to_hva(gpa);
+                        if (!hva) continue;
+
+                        dirty_page_task_t* task = malloc(sizeof(dirty_page_task_t));
+                        if (!task) {
+                            // [FIX-F2] malloc 失败同理：不能丢弃已清除 dirty bit 的页面
+                            emergency_send_dirty_page(gpa, hva);
+                            continue;
                         }
+
+                        task->gpa = gpa;
+                        memcpy(task->data, hva, 4096);
+
+                        /* [FIX] next_tail 计算和满队检查必须在锁内。
+                         * 旧代码在锁外读 g_mpsc_tail 算 next_tail，多线程下
+                         * 两个线程会算出相同的 next_tail 并覆盖同一个槽位。
+                         * 当前 total_threads=1 不会触发，但扩展并发后必崩。
+                         */
+                        pthread_mutex_lock(&g_mpsc_lock);
+                        uint32_t next_tail = (g_mpsc_tail + 1) % MPSC_QUEUE_SIZE;
+                        if (next_tail == g_mpsc_head) {
+                            pthread_mutex_unlock(&g_mpsc_lock);
+                            // [FIX-F2] 队列已满：紧急内联发送
+                            free(task);
+                            emergency_send_dirty_page(gpa, hva);
+                            continue;
+                        }
+                        g_mpsc_queue[g_mpsc_tail] = task;
+                        g_mpsc_tail = next_tail;
+                        pthread_mutex_unlock(&g_mpsc_lock);
+
+                        pthread_cond_signal(&g_mpsc_cond);
                     }
                 }
             }
-        } else {
-            perror("malloc dirty bitmap");
         }
     }
     // 导出寄存器状态并回包
@@ -545,33 +957,43 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     ack_hdr.magic = htonl(WVM_MAGIC);              
     ack_hdr.msg_type = htons(MSG_VCPU_EXIT);       
     ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
-    ack_hdr.slave_id = htonl(hdr->slave_id);       
+    /* ACK must originate from this slave node and target the requester. */
+    ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
     ack_hdr.target_id = htonl(hdr->slave_id);
     ack_hdr.req_id = WVM_HTONLL(hdr->req_id);      
     
     struct wvm_ipc_cpu_run_ack *ack = (struct wvm_ipc_cpu_run_ack *)payload;
-    ack->mode_tcg = 0;
-    wvm_kvm_context_t *ack_kctx = &ack->ctx.kvm;
-    ack_kctx->rax = kregs.rax; ack_kctx->rbx = kregs.rbx; ack_kctx->rcx = kregs.rcx; ack_kctx->rdx = kregs.rdx;
-    ack_kctx->rsi = kregs.rsi; ack_kctx->rdi = kregs.rdi; ack_kctx->rsp = kregs.rsp; ack_kctx->rbp = kregs.rbp;
-    ack_kctx->r8  = kregs.r8;  ack_kctx->r9  = kregs.r9;  ack_kctx->r10 = kregs.r10; ack_kctx->r11 = kregs.r11;
-    ack_kctx->r12 = kregs.r12; ack_kctx->r13 = kregs.r13; ack_kctx->r14 = kregs.r14; ack_kctx->r15 = kregs.r15;
-    ack_kctx->rip = kregs.rip; ack_kctx->rflags = kregs.rflags;
-    memcpy(ack_kctx->sregs_data, &ksregs, sizeof(ksregs));
-    ack_kctx->exit_reason = t_kvm_run->exit_reason;
+    ack->status = 0;
+    ack->mode_tcg = req->mode_tcg;
+    if (req->mode_tcg) {
+        wvm_translate_kvm_to_tcg(&kregs, &ksregs, &ack->ctx.tcg);
+        ack->ctx.tcg.exit_reason = t_kvm_run->exit_reason;
+    } else {
+        wvm_kvm_context_t *ack_kctx = &ack->ctx.kvm;
+        ack_kctx->rax = kregs.rax; ack_kctx->rbx = kregs.rbx; ack_kctx->rcx = kregs.rcx; ack_kctx->rdx = kregs.rdx;
+        ack_kctx->rsi = kregs.rsi; ack_kctx->rdi = kregs.rdi; ack_kctx->rsp = kregs.rsp; ack_kctx->rbp = kregs.rbp;
+        ack_kctx->r8  = kregs.r8;  ack_kctx->r9  = kregs.r9;  ack_kctx->r10 = kregs.r10; ack_kctx->r11 = kregs.r11;
+        ack_kctx->r12 = kregs.r12; ack_kctx->r13 = kregs.r13; ack_kctx->r14 = kregs.r14; ack_kctx->r15 = kregs.r15;
+        ack_kctx->rip = kregs.rip; ack_kctx->rflags = kregs.rflags;
+        memcpy(ack_kctx->sregs_data, &ksregs, sizeof(ksregs));
+        ack_kctx->exit_reason = t_kvm_run->exit_reason;
 
-    if (t_kvm_run->exit_reason == KVM_EXIT_IO) {
-        ack_kctx->io.direction = t_kvm_run->io.direction;
-        ack_kctx->io.size = t_kvm_run->io.size;
-        ack_kctx->io.port = t_kvm_run->io.port;
-        ack_kctx->io.count = t_kvm_run->io.count;
-        if (t_kvm_run->io.direction == KVM_EXIT_IO_OUT) 
-            memcpy(ack_kctx->io.data, (uint8_t*)t_kvm_run + t_kvm_run->io.data_offset, t_kvm_run->io.size * t_kvm_run->io.count);
-    } else if (t_kvm_run->exit_reason == KVM_EXIT_MMIO) {
-        ack_kctx->mmio.phys_addr = t_kvm_run->mmio.phys_addr;
-        ack_kctx->mmio.len = t_kvm_run->mmio.len;
-        ack_kctx->mmio.is_write = t_kvm_run->mmio.is_write;
-        memcpy(ack_kctx->mmio.data, t_kvm_run->mmio.data, 8);
+        if (t_kvm_run->exit_reason == KVM_EXIT_IO) {
+            ack_kctx->io.direction = t_kvm_run->io.direction;
+            ack_kctx->io.size = t_kvm_run->io.size;
+            ack_kctx->io.port = t_kvm_run->io.port;
+            ack_kctx->io.count = t_kvm_run->io.count;
+            if (t_kvm_run->io.direction == KVM_EXIT_IO_OUT) {
+                size_t io_bytes = (size_t)t_kvm_run->io.size * t_kvm_run->io.count;
+                if (io_bytes > sizeof(ack_kctx->io.data)) io_bytes = sizeof(ack_kctx->io.data);
+                memcpy(ack_kctx->io.data, (uint8_t*)t_kvm_run + t_kvm_run->io.data_offset, io_bytes);
+            }
+        } else if (t_kvm_run->exit_reason == KVM_EXIT_MMIO) {
+            ack_kctx->mmio.phys_addr = t_kvm_run->mmio.phys_addr;
+            ack_kctx->mmio.len = t_kvm_run->mmio.len;
+            ack_kctx->mmio.is_write = t_kvm_run->mmio.is_write;
+            memcpy(ack_kctx->mmio.data, t_kvm_run->mmio.data, 8);
+        }
     }
 
     uint8_t tx[sizeof(ack_hdr) + sizeof(*ack)];
@@ -583,7 +1005,7 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     ssize_t sret = sendto(sockfd, tx, sizeof(tx), 0, (struct sockaddr*)client, sizeof(*client));
     fprintf(stderr, "[Slave Ack] ret=%zd errno=%d req=%llu dst=%s:%u exit=%u\n",
             sret, (sret < 0) ? errno : 0, (unsigned long long)hdr->req_id,
-            inet_ntoa(client->sin_addr), ntohs(client->sin_port), ack_kctx->exit_reason);
+            inet_ntoa(client->sin_addr), ntohs(client->sin_port), t_kvm_run->exit_reason);
 }
 
 /* 
@@ -596,7 +1018,7 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
     uint64_t gpa;
 
     if (type == MSG_INVALIDATE || type == MSG_DOWNGRADE) {
-        gpa = WVM_NTOHLL(hdr->target_gpa);
+        gpa = hdr->target_gpa; // ntoh_header 已将 union req_id/target_gpa 转为 host order
     } else {
         if (hdr->payload_len < 8) return; 
         // [FIX] 安全读取 Payload 中的 GPA
@@ -604,29 +1026,35 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
     }
 
     if (gpa >= g_slave_ram_size) return;
+    if (!wvm_gpa_page_valid(gpa)) return;
+    uint8_t *hva = wvm_gpa_to_hva(gpa);
+    if (!hva) return;
 
     if (type == MSG_MEM_READ) {
-        struct wvm_header ack_hdr = { 
-            .magic = htonl(WVM_MAGIC), .msg_type = htons(MSG_MEM_ACK), 
-            .payload_len = htons(4096), .req_id = WVM_HTONLL(hdr->req_id) 
-        };
+        struct wvm_header ack_hdr;
+        memset(&ack_hdr, 0, sizeof(ack_hdr));
+        ack_hdr.magic = htonl(WVM_MAGIC);
+        ack_hdr.msg_type = htons(MSG_MEM_ACK);
+        ack_hdr.payload_len = htons(4096);
+        ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
+        ack_hdr.target_id = htonl(hdr->slave_id);
+        ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
+
         uint8_t tx[sizeof(ack_hdr) + 4096];
         memcpy(tx, &ack_hdr, sizeof(ack_hdr));
-        memcpy(tx+sizeof(ack_hdr), g_phy_ram+gpa, 4096);
-        if (robust_sendto(sockfd, tx, sizeof(tx), client) == 0) {
-            //此处无需擦除
-        } else {
-            // 如果发不出去，让 Master 稍后重试
-            //fprintf(stderr, "[WVM-Slave] Critical: Failed to send back data for GPA %lx, aborting unmap\n", gpa);
-        }
+        memcpy(tx+sizeof(ack_hdr), hva, 4096);
+        struct wvm_header *tx_hdr = (struct wvm_header *)tx;
+        tx_hdr->crc32 = 0;
+        tx_hdr->crc32 = htonl(calculate_crc32(tx, sizeof(tx)));
+        robust_sendto(sockfd, tx, sizeof(tx), client);
     } 
     else if (type == MSG_MEM_WRITE) {
         if (hdr->payload_len >= 8+4096) {
-            memcpy(g_phy_ram+gpa, (uint8_t*)payload+8, 4096);
+            memcpy(hva, (uint8_t*)payload+8, 4096);
         }
     }
     else if (type == MSG_INVALIDATE) {
-        madvise(g_phy_ram + gpa, 4096, MADV_DONTNEED);
+        madvise(hva, 4096, MADV_DONTNEED);
     }
     else if (type == MSG_DOWNGRADE) {
         if (hdr->payload_len < 16) return;
@@ -640,54 +1068,64 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
 
         struct wvm_header wb_hdr = {
             .magic = htonl(WVM_MAGIC), .msg_type = htons(MSG_WRITE_BACK),
-            .payload_len = htons(8 + 4096), 
-            .slave_id = htonl(target_node), 
-            .req_id = orig_req_id,          
+            .payload_len = htons(8 + 4096),
+            .slave_id = htonl(target_node),
+            .target_id = htonl(hdr->slave_id),
+            .req_id = orig_req_id,
             .qos_level = 0
         };
-        
+
         uint8_t tx[sizeof(wb_hdr) + 8 + 4096];
         memcpy(tx, &wb_hdr, sizeof(wb_hdr));
         *(uint64_t*)(tx + sizeof(wb_hdr)) = WVM_HTONLL(gpa);
-        memcpy(tx + sizeof(wb_hdr) + 8, g_phy_ram + gpa, 4096);
-        
+        memcpy(tx + sizeof(wb_hdr) + 8, hva, 4096);
+        struct wvm_header *tx_hdr = (struct wvm_header *)tx;
+        tx_hdr->crc32 = 0;
+        tx_hdr->crc32 = htonl(calculate_crc32(tx, sizeof(tx)));
+
         if (robust_sendto(sockfd, tx, sizeof(tx), client) == 0) {
             // 只有确保网络层已经接纳了这个包，才敢擦除本地物理内存
-            madvise(g_phy_ram + gpa, 4096, MADV_DONTNEED);
+            madvise(hva, 4096, MADV_DONTNEED);
         } else {
             // 如果发不出去，宁可让 Master 稍后重试，也不要擦除数据
             //fprintf(stderr, "[WVM-Slave] Critical: Failed to send back data for GPA %lx, aborting unmap\n", gpa);
         }
     }
     else if (type == MSG_FETCH_AND_INVALIDATE) {
+        // [FIX] 边界检查：需要至少 16 字节 payload（8 target + 8 req_id）
+        if (hdr->payload_len < 16) return;
         // [FIX] 安全读取
         uint64_t tmp_target = wvm_get_u64_unaligned(payload);
         uint32_t target_node = (uint32_t)tmp_target;
-        
+
         uint64_t orig_req_id;
         memcpy(&orig_req_id, (uint8_t*)payload + 8, 8);
 
-        if (gpa < g_slave_ram_size) {
+        if (gpa < g_slave_ram_size && wvm_gpa_page_valid(gpa)) {
             struct wvm_header wb_hdr;
+            memset(&wb_hdr, 0, sizeof(wb_hdr));
             wb_hdr.magic = htonl(WVM_MAGIC);
             wb_hdr.msg_type = htons(MSG_WRITE_BACK);
             wb_hdr.payload_len = htons(8 + 4096);
             wb_hdr.slave_id = htonl(target_node);
+            wb_hdr.target_id = htonl(hdr->slave_id);
             wb_hdr.req_id = orig_req_id;
             wb_hdr.qos_level = 0;
-            
+
             uint8_t tx[sizeof(struct wvm_header) + 8 + 4096];
             memcpy(tx, &wb_hdr, sizeof(wb_hdr));
-            
+
             uint64_t net_gpa = WVM_HTONLL(gpa);
             memcpy(tx + sizeof(wb_hdr), &net_gpa, 8);
-            memcpy(tx + sizeof(wb_hdr) + 8, g_phy_ram + gpa, 4096);
-            
+            memcpy(tx + sizeof(wb_hdr) + 8, hva, 4096);
+
+            struct wvm_header *tx_hdr = (struct wvm_header *)tx;
+            tx_hdr->crc32 = 0;
+            tx_hdr->crc32 = htonl(calculate_crc32(tx, sizeof(tx)));
+
             if (robust_sendto(sockfd, tx, sizeof(tx), client) == 0) {
                 // 同上
-                madvise(g_phy_ram + gpa, 4096, MADV_DONTNEED);
-            } else {
-                //fprintf(stderr, "[WVM-Slave] Critical: Failed to send back data for GPA %lx, aborting unmap\n", gpa);
+                madvise(hva, 4096, MADV_DONTNEED);
             }
         }
     }
@@ -700,66 +1138,87 @@ static void handle_block_io_phys(int sockfd, struct sockaddr_in *client, struct 
     #define WVM_STORAGE_CHUNK_SHIFT 26
     #endif
     uint32_t count = ntohl(blk->count);
+    if (count == 0 || count > (64U << 20) / 512) return; // 防溢出：上限 64MB
     uint32_t data_len = count * 512;
+    // [FIX] 验证 count*512 不超过实际 payload 数据（防越界读）
+    if (hdr->msg_type == MSG_BLOCK_WRITE) {
+        uint16_t actual_pl = hdr->payload_len; // 已被 ntoh_header 转为 host order
+        if (actual_pl < sizeof(struct wvm_block_payload)) return; // 防无符号下溢
+        if (data_len > actual_pl - sizeof(struct wvm_block_payload)) return;
+    }
     
     uint64_t chunk_id = (lba << 9) >> WVM_STORAGE_CHUNK_SHIFT;
-    // 计算 64MB 块内偏移
     off_t offset = (lba << 9) & ((1UL << WVM_STORAGE_CHUNK_SHIFT) - 1);
     
     int fd = get_chunk_fd_safe(chunk_id);
-    if (fd < 0) return; // IO Error
+    if (fd < 0) return; 
 
-    /* O_DIRECT 对齐缓冲区 */
     void *aligned_buf = NULL;
-    
-    if (ntohs(hdr->msg_type) == MSG_BLOCK_WRITE || ntohs(hdr->msg_type) == MSG_BLOCK_READ) {
+    if (hdr->msg_type == MSG_BLOCK_WRITE || hdr->msg_type == MSG_BLOCK_READ) {
         if (posix_memalign(&aligned_buf, 4096, data_len) != 0) return;
     }
 
-    if (ntohs(hdr->msg_type) == MSG_BLOCK_WRITE) {
+    if (hdr->msg_type == MSG_BLOCK_WRITE) {
         memcpy(aligned_buf, blk->data, data_len);
-        // [FIX] 检查 pwrite 返回值，防止静默丢数据
         ssize_t written = pwrite(fd, aligned_buf, data_len, offset);
-        
-        // ACK
+
         hdr->msg_type = htons(MSG_BLOCK_ACK);
-        hdr->payload_len = 0;
-        
-        // [FIX] 如果写入失败，设置错误标志
+        hdr->payload_len = htons(0);
+        hdr->magic = htonl(WVM_MAGIC);
+        hdr->slave_id = htonl(hdr->slave_id);
+        hdr->target_id = htonl(hdr->target_id);
+        hdr->req_id = WVM_HTONLL(hdr->req_id);
+        hdr->epoch = htonl(hdr->epoch);
         if (written != data_len) {
             hdr->flags |= WVM_FLAG_ERROR;
-            fprintf(stderr, "[Storage] Write fail chunk %lu: %s\n", chunk_id, strerror(errno));
         }
-
+        
+        // [FIX] 发送前必须重算 CRC32
+        hdr->crc32 = 0;
+        hdr->crc32 = htonl(calculate_crc32(hdr, sizeof(*hdr)));
         sendto(sockfd, hdr, sizeof(*hdr), 0, (struct sockaddr*)client, sizeof(*client));
     
-    } else if (ntohs(hdr->msg_type) == MSG_BLOCK_READ) {
+    } else if (hdr->msg_type == MSG_BLOCK_READ) {
         size_t resp_len = sizeof(struct wvm_header) + sizeof(struct wvm_block_payload) + data_len;
         uint8_t *tx = malloc(resp_len);
         if (tx) {
             struct wvm_header *rh = (struct wvm_header*)tx;
-            *rh = *hdr; // Copy base headers
+            *rh = *hdr;
             rh->msg_type = htons(MSG_BLOCK_ACK);
             rh->payload_len = htons(sizeof(struct wvm_block_payload) + data_len);
-            
+            rh->magic = htonl(WVM_MAGIC);
+            rh->slave_id = htonl(hdr->slave_id);
+            rh->target_id = htonl(hdr->target_id);
+            rh->req_id = WVM_HTONLL(hdr->req_id);
+            rh->epoch = htonl(hdr->epoch);
+
             struct wvm_block_payload *rp = (struct wvm_block_payload*)(tx + sizeof(*hdr));
             rp->lba = blk->lba;
             rp->count = blk->count;
-            
+
             ssize_t r = pread(fd, aligned_buf, data_len, offset);
             if (r > 0) memcpy(rp->data, aligned_buf, r);
-            
+
+            // [FIX] 发送前必须重算 CRC32
+            rh->crc32 = 0;
+            rh->crc32 = htonl(calculate_crc32(tx, resp_len));
             robust_sendto(sockfd, tx, resp_len, client);
             free(tx);
         }
-    } else if (ntohs(hdr->msg_type) == MSG_BLOCK_FLUSH) {
-        // [FIX] 处理 FLUSH 指令，强制落盘
+    } else if (hdr->msg_type == MSG_BLOCK_FLUSH) {
         int ret = fdatasync(fd);
-        
         hdr->msg_type = htons(MSG_BLOCK_ACK);
-        hdr->payload_len = 0;
+        hdr->payload_len = htons(0);
+        hdr->magic = htonl(WVM_MAGIC);
+        hdr->slave_id = htonl(hdr->slave_id);
+        hdr->target_id = htonl(hdr->target_id);
+        hdr->req_id = WVM_HTONLL(hdr->req_id);
+        hdr->epoch = htonl(hdr->epoch);
         if (ret < 0) hdr->flags |= WVM_FLAG_ERROR;
-        
+
+        // [FIX] 发送前必须重算 CRC32
+        hdr->crc32 = 0;
+        hdr->crc32 = htonl(calculate_crc32(hdr, sizeof(*hdr)));
         sendto(sockfd, hdr, sizeof(*hdr), 0, (struct sockaddr*)client, sizeof(*client));
     }
     
@@ -793,8 +1252,12 @@ void* kvm_worker_thread(void *arg) {
             if (h->magic != htonl(WVM_MAGIC)) continue;
             
             pthread_spin_lock(&g_master_lock);
-            if (g_master_addr.sin_port != c[i].sin_port || g_master_addr.sin_addr.s_addr != c[i].sin_addr.s_addr) {
-                g_master_addr = c[i];
+            int addr_changed = (g_master_addr.sin_port != c[i].sin_port || g_master_addr.sin_addr.s_addr != c[i].sin_addr.s_addr);
+            g_master_addr = c[i];
+            pthread_spin_unlock(&g_master_lock);
+
+            // [FIX-M1] mutex 操作移到 spinlock 外部，防止持 spinlock 时阻塞
+            if (addr_changed) {
                 pthread_mutex_lock(&g_master_mutex);
                 if (!g_master_ready) {
                     g_master_ready = 1;
@@ -802,11 +1265,13 @@ void* kvm_worker_thread(void *arg) {
                 }
                 pthread_mutex_unlock(&g_master_mutex);
             }
-            g_master_addr = c[i]; 
-            pthread_spin_unlock(&g_master_lock); 
 
             uint16_t type = ntohs(h->msg_type);
             ntoh_header(h);
+            int actual_payload = msgs[i].msg_len - (int)sizeof(struct wvm_header);
+            if (actual_payload < 0 || h->payload_len > (uint16_t)actual_payload) {
+                continue;
+            }
 
             if (type == MSG_VCPU_RUN) {
                 // [FIX] 必须重建 IPC 请求结构体，不能直接强转 payload
@@ -829,11 +1294,11 @@ void* kvm_worker_thread(void *arg) {
     
                 if (local_req.mode_tcg) {
                     // 安全检查：防止 payload 长度不足导致越界
-                    if (ntohs(h->payload_len) >= sizeof(wvm_tcg_context_t)) {
+                    if (h->payload_len >= sizeof(wvm_tcg_context_t)) {
                         memcpy(&local_req.ctx.tcg, net_payload_ptr, sizeof(wvm_tcg_context_t));
                     }
                 } else {
-                    if (ntohs(h->payload_len) >= sizeof(wvm_kvm_context_t)) {
+                    if (h->payload_len >= sizeof(wvm_kvm_context_t)) {
                         memcpy(&local_req.ctx.kvm, net_payload_ptr, sizeof(wvm_kvm_context_t));
                     }
                 }
@@ -866,7 +1331,6 @@ static slave_endpoint_t *tcg_endpoints = NULL;
 static struct sockaddr_in g_upstream_gateway = {0};
 static volatile int g_gateway_init_done = 0;
 static volatile int g_gateway_known = 0;
-static int g_base_id = 0; 
 
 /* 
  * [物理意图] 在不支持 KVM 的环境下，通过多进程模拟实现“多核算力聚合”。
@@ -932,8 +1396,8 @@ void spawn_tcg_processes(int base_id) {
             setenv("WVM_SOCK_PUSH", fd_p, 1); 
             setenv("WVM_ROLE", "SLAVE", 1);
             char id_str[32];
-            snprintf(id_str, sizeof(id_str), "%ld", base_id + i); 
-            setenv("WVM_SLAVE_ID", id_str, 1); 
+            snprintf(id_str, sizeof(id_str), "%u", WVM_ENCODE_ID(g_slave_vm_id, base_id + i));
+            setenv("WVM_SLAVE_ID", id_str, 1);
 
             const char *shm_path = getenv("WVM_SHM_FILE");
             if (shm_path) {
@@ -982,16 +1446,24 @@ void* tcg_proxy_thread(void *arg) {
             if (src_addrs[i].sin_addr.s_addr == htonl(INADDR_LOOPBACK)) {
                 // [VFIO Intercept] TCG 模式下的本地显卡拦截
                 uint16_t msg_type = ntohs(hdr->msg_type);
+                int actual_payload = msgs[i].msg_len - (int)sizeof(struct wvm_header);
+                uint16_t payload_len = ntohs(hdr->payload_len);
                 if (msg_type == MSG_MEM_WRITE) {
-                    uint64_t gpa = WVM_NTOHLL(*(uint64_t*)(buffers[i] + sizeof(struct wvm_header)));
-                    void *data = buffers[i] + sizeof(struct wvm_header) + 8;
-                    int len = ntohs(hdr->payload_len) - 8;
-                    if (wvm_vfio_intercept_mmio(gpa, data, len, 1)) {
-                        hdr->msg_type = htons(MSG_MEM_ACK);
-                        hdr->payload_len = 0;
-                        sendto(sockfd, buffers[i], sizeof(struct wvm_header), 0, 
-                               (struct sockaddr*)&src_addrs[i], sizeof(struct sockaddr_in));
-                        continue; 
+                    if (actual_payload >= 8 &&
+                        payload_len >= 8 &&
+                        payload_len <= (uint16_t)actual_payload) {
+                        uint64_t gpa = WVM_NTOHLL(*(uint64_t*)(buffers[i] + sizeof(struct wvm_header)));
+                        void *data = buffers[i] + sizeof(struct wvm_header) + 8;
+                        int len = payload_len - 8;
+                        if (wvm_vfio_intercept_mmio(gpa, data, len, 1)) {
+                            hdr->msg_type = htons(MSG_MEM_ACK);
+                            hdr->payload_len = htons(0);
+                            hdr->crc32 = 0;
+                            hdr->crc32 = htonl(calculate_crc32(buffers[i], sizeof(struct wvm_header)));
+                            sendto(sockfd, buffers[i], sizeof(struct wvm_header), 0,
+                                   (struct sockaddr*)&src_addrs[i], sizeof(struct sockaddr_in));
+                            continue; 
+                        }
                     }
                 }
                 
@@ -1008,10 +1480,12 @@ void* tcg_proxy_thread(void *arg) {
                     }
                 }
                 
-                uint32_t slave_id = ntohl(hdr->slave_id);
+                uint32_t target_raw = ntohl(hdr->target_id);
                 uint16_t msg_type = ntohs(hdr->msg_type);
-                int core_idx = (int)(slave_id - g_base_id);
-    
+                int core_idx = (target_raw != WVM_NODE_AUTO_ROUTE)
+                    ? (int)(WVM_GET_NODEID(target_raw) - g_base_id)
+                    : 0;
+
                 if (core_idx < 0 || core_idx >= g_num_cores) continue;
 
                 // [V28 分流逻辑升级]
@@ -1063,10 +1537,11 @@ int main(int argc, char **argv) {
         g_base_id = atoi(argv[4]);
     }
     if (argc >= 6) g_ctrl_port = atoi(argv[5]);
+    if (argc >= 7) g_slave_vm_id = (uint8_t)atoi(argv[6]);
 
     printf("[Init] WaveVM Hybrid Slave V28.0 (Swarm Edition)\n");
-    printf("[Init] Config: Port=%d, Cores=%ld, RAM=%d MB, BaseID=%d\n", 
-           g_service_port, g_num_cores, g_ram_mb, g_base_id);
+    printf("[Init] Config: Port=%d, Cores=%ld, RAM=%d MB, BaseID=%d, VM=%u\n",
+           g_service_port, g_num_cores, g_ram_mb, g_base_id, (unsigned)g_slave_vm_id);
     
     // 解析 -vfio 参数
     for (int i = 1; i < argc; i++) {
@@ -1089,7 +1564,8 @@ int main(int argc, char **argv) {
             pthread_t irq_th;
             pthread_create(&irq_th, NULL, vfio_irq_thread_adapter, NULL);
         }
-        int total_threads = g_num_cores + 4;
+        /* Keep a single KVM worker to avoid vCPU create races on shared VM fd. */
+        int total_threads = 1;
         pthread_t *threads = malloc(sizeof(pthread_t) * total_threads);
         
         for(long i=0; i<total_threads; i++) pthread_create(&threads[i], NULL, kvm_worker_thread, (void*)i);

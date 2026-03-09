@@ -58,6 +58,9 @@
 #define TX_RING_SIZE 2048
 #define TX_SLOT_SIZE 65535
 
+// [Fix] Multi-VM: 引用全局 vm_id，用于 composite ID 编码
+extern uint8_t g_my_vm_id;
+
 // 定义并初始化 mapping 锁
 static struct rw_semaphore g_mapping_sem; 
 
@@ -104,8 +107,9 @@ static DEFINE_PER_CPU(struct id_pool_t, g_id_pool);
 
 // 请求上下文：增加等待队列以支持异步休眠
 struct req_ctx_t {
-    void *rx_buffer;       
-    uint32_t generation;   
+    void *rx_buffer;
+    uint32_t generation;
+    uint32_t max_len; // [FIX-G3] 记录 rx_buffer 最大可用长度
     volatile int done;
     wait_queue_head_t wq; // [New] 内核任务在此休眠
     struct task_struct *waiter; // [New] 记录等待的任务 (用于调试或唤醒检查)
@@ -263,7 +267,7 @@ static void k_invalidate_meta_atomic(uint64_t gpa) {
  * [关键逻辑] 采用 Per-CPU 变量技术，每个逻辑核拥有独立的 ID 池。利用 Generation 机制检测网络乱序导致的 ABA 冲突。
  * [后果] 这一步是 Mode A 支持百万 TPS 的基石。它消除了传统分布式系统中全局 ID 产生器的串行化瓶颈。
  */
-static uint64_t k_alloc_req_id(void *rx_buffer) {
+static uint64_t k_alloc_req_id(void *rx_buffer, uint32_t buffer_size) {
     uint64_t id = (uint64_t)-1;
     unsigned long flags;
     int cpu = get_cpu();
@@ -280,6 +284,7 @@ static uint64_t k_alloc_req_id(void *rx_buffer) {
             if (g_req_ctx[combined_idx].generation == 0) g_req_ctx[combined_idx].generation = 1;
             id = ((uint64_t)g_req_ctx[combined_idx].generation << 32) | combined_idx;
             WRITE_ONCE(g_req_ctx[combined_idx].rx_buffer, rx_buffer);
+            g_req_ctx[combined_idx].max_len = buffer_size; // [FIX-G3]
             WRITE_ONCE(g_req_ctx[combined_idx].done, 0);
             smp_wmb(); 
         } else { pool->head--; }
@@ -321,18 +326,22 @@ static int k_check_req_status(uint64_t full_id) {
 
 // --- 发送逻辑 ---
 static void k_set_gateway_ip(uint32_t gw_id, uint32_t ip, uint16_t port) {
-    if (gw_id < WVM_MAX_GATEWAYS) {
-        gateway_table[gw_id].sin_family = AF_INET;
-        gateway_table[gw_id].sin_addr.s_addr = ip;
-        gateway_table[gw_id].sin_port = port;
+    // [Fix #1] 入参可能是 composite ID，先解码为裸 node_id 再索引静态数组
+    uint32_t raw_node_id = WVM_GET_NODEID(gw_id);
+    if (raw_node_id < WVM_MAX_GATEWAYS) {
+        gateway_table[raw_node_id].sin_family = AF_INET;
+        gateway_table[raw_node_id].sin_addr.s_addr = ip;
+        gateway_table[raw_node_id].sin_port = port;
     }
 }
 
 static int raw_kernel_send(void *data, int len, uint32_t target_id) {
     struct msghdr msg; struct kvec vec; struct sockaddr_in to_addr; int ret;
-    if (!g_socket || target_id >= WVM_MAX_GATEWAYS || gateway_table[target_id].sin_port == 0) return -ENODEV;
+    // [Fix #1] target_id 可能是 composite ID，解码为裸 node_id 索引 gateway_table
+    uint32_t raw_id = WVM_GET_NODEID(target_id);
+    if (!g_socket || raw_id >= WVM_MAX_GATEWAYS || gateway_table[raw_id].sin_port == 0) return -ENODEV;
 
-    to_addr = gateway_table[target_id];
+    to_addr = gateway_table[raw_id];
     memset(&msg, 0, sizeof(msg));
     msg.msg_name = &to_addr;
     msg.msg_namelen = sizeof(to_addr);
@@ -456,11 +465,11 @@ static void k_send_packet_async(uint16_t msg_type, void* payload, int len, uint3
     if (!buffer) return;
 
     struct wvm_header *hdr = (struct wvm_header *)buffer;
-    extern int g_my_node_id; 
+    extern int g_my_node_id;
     hdr->magic = htonl(WVM_MAGIC);
     hdr->msg_type = htons(msg_type);
     hdr->payload_len = htons(len);
-    hdr->slave_id = htonl(g_my_node_id);
+    hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
     hdr->req_id = 0;
     hdr->qos_level = qos;
     if (payload && len > 0) memcpy(buffer + sizeof(*hdr), payload, len);
@@ -556,7 +565,7 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
     // ========================================================================
     // 分支 A: 本地缺页 (Local Fault) - 极速路径
     // ========================================================================
-    if (dir_node == g_my_node_id) {
+    if (WVM_GET_NODEID(dir_node) == (uint32_t)g_my_node_id) {
         uint64_t local_version = 0;
         
         // 建立临时内核映射进行拷贝 (原子上下文)
@@ -615,7 +624,7 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
         }
 
         // 2. 分配请求 ID
-        rid = k_alloc_req_id(bounce_buf);
+        rid = k_alloc_req_id(bounce_buf, (uint32_t)ack_payload_size);
         if (rid == (uint64_t)-1) {
             kfree(bounce_buf);
             kfree(meta);
@@ -638,9 +647,9 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
             hdr->magic = htonl(WVM_MAGIC);
             hdr->msg_type = htons(MSG_MEM_READ);
             hdr->payload_len = htons(sizeof(net_gpa));
-            hdr->slave_id = htonl(dir_node);
+            hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, dir_node));
             hdr->req_id = WVM_HTONLL(rid);
-            hdr->qos_level = 1; 
+            hdr->qos_level = 1;
             hdr->crc32 = 0;
             memcpy(buffer + sizeof(*hdr), &net_gpa, sizeof(net_gpa));
             k_send_packet(buffer, pkt_len, dir_node);
@@ -681,7 +690,7 @@ static vm_fault_t wvm_fault_handler(struct vm_fault *vmf) {
                     hdr->magic = htonl(WVM_MAGIC);
                     hdr->msg_type = htons(MSG_MEM_READ);
                     hdr->payload_len = htons(sizeof(net_gpa));
-                    hdr->slave_id = htonl(dir_node);
+                    hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, dir_node));
                     hdr->req_id = WVM_HTONLL(rid);
                     hdr->qos_level = 1;
                     hdr->crc32 = 0;
@@ -791,7 +800,7 @@ static int committer_thread_fn(void *data) {
                 hdr->msg_type = htons(MSG_COMMIT_DIFF);
                 hdr->payload_len = htons(payload_size);
                 extern int g_my_node_id;
-                hdr->slave_id = htonl(g_my_node_id);
+                hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
                 hdr->req_id = 0;
                 hdr->qos_level = 1;
 
@@ -865,9 +874,10 @@ static vm_fault_t wvm_page_mkwrite(struct vm_fault *vmf) {
     task->timestamp = k_get_time_us();
 
     // 3. 加入队列
-    spin_lock(&g_diff_lock);
+    // [FIX-M3] 统一使用 spin_lock_bh，与取出端保持一致，防止 softirq 死锁
+    spin_lock_bh(&g_diff_lock);
     list_add_tail(&task->list, &g_diff_queue);
-    spin_unlock(&g_diff_lock);
+    spin_unlock_bh(&g_diff_lock);
 
     // 4. 唤醒提交线程
     wake_up_interruptible(&g_diff_wq);
@@ -1178,7 +1188,10 @@ static void internal_process_single_packet(struct wvm_header *hdr, uint32_t src_
             if ((rid >> 32) == ctx->generation) {
                 if (ctx->rx_buffer) {
                     // V29 的 Payload 包含 Version，结构体变了，但 memcpy 逻辑通用
+                    // [FIX-G3] 截断保护：防止恶意/错乱包溢出 rx_buffer
                     size_t copy_len = ntohs(hdr->payload_len);
+                    if (copy_len > ctx->max_len)
+                        copy_len = ctx->max_len;
                     memcpy(ctx->rx_buffer, payload, copy_len);
                 }
                 WRITE_ONCE(ctx->done, 1);
@@ -1274,7 +1287,8 @@ static struct dsm_driver_ops k_ops = {
     .check_req_status = k_check_req_status,
     .cpu_relax = k_cpu_relax,
     .get_random = k_get_random,
-    .yield_cpu_short_time = k_yield_short
+    .yield_cpu_short_time = k_yield_short,
+    .send_packet_async = k_send_packet_async
 };
 
 // [V29] 存储全局 mapping 以便 unmap 使用
@@ -1312,10 +1326,10 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
         if (copy_from_user(&req, argp, sizeof(req))) return -EFAULT;
 
         uint32_t target = req.slave_id;
-        if (target == WVM_NODE_AUTO_ROUTE) {
+        if (!WVM_IS_VALID_TARGET(target)) {
             target = wvm_get_compute_slave_id(req.vcpu_index);
         }
-        if (target == WVM_NODE_AUTO_ROUTE || target >= WVM_MAX_GATEWAYS) return -ENODEV;
+        if (!WVM_IS_VALID_TARGET(target)) return -ENODEV;
 
         int ctx_len = req.mode_tcg ? sizeof(req.ctx.tcg) : sizeof(req.ctx.kvm);
         int ret = wvm_rpc_call(MSG_VCPU_RUN, &req.ctx, ctx_len, target, &ack.ctx, sizeof(ack.ctx));
@@ -1365,7 +1379,8 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
         for (int i = 0; i < head.count; i++) {
             // start_index 即 Slot ID
             // Logic Core 会根据 slot 0/1 更新 g_total_nodes / g_my_node_id
-            wvm_set_mem_mapping(head.start_index + i, (uint16_t)buf[i]);
+            // [FIX-M5] 移除 uint16_t 截断，保留完整 uint32_t
+            wvm_set_mem_mapping(head.start_index + i, buf[i]);
         }
         
         vfree(buf);
@@ -1452,10 +1467,12 @@ static int __init wavevm_init(void) {
     init_rwsem(&g_mapping_sem);
 
     /*
-     * Use online CPU count for sizing/initialization to keep module load feasible
-     * on kernels with very large CONFIG_NR_CPUS.
+     * [FIX] 必须用 nr_cpu_ids 而非 num_online_cpus()。
+     * get_cpu() 返回的是逻辑 CPU ID（可能不连续），例如 CPU 0,1,4,5 在线时
+     * num_online_cpus()=4 但 get_cpu() 可能返回 5，导致 combined_idx 越界。
+     * nr_cpu_ids 是内核保证的最大 CPU ID + 1，覆盖所有可能的 get_cpu() 返回值。
      */
-    g_req_ctx_count = (size_t)num_online_cpus() * (size_t)MAX_IDS_PER_CPU;
+    g_req_ctx_count = (size_t)nr_cpu_ids * (size_t)MAX_IDS_PER_CPU;
     g_req_ctx = vzalloc(sizeof(struct req_ctx_t) * g_req_ctx_count);
     if (!g_req_ctx) return -ENOMEM;
     for (size_t i = 0; i < g_req_ctx_count; i++) init_waitqueue_head(&g_req_ctx[i].wq);
@@ -1523,6 +1540,8 @@ static void __exit wavevm_exit(void) {
         if (pool->ids) vfree(pool->ids);
     }
     vfree(g_req_ctx);
+    // [FIX-M4] 销毁 slab 缓存，防止模块卸载后内存泄漏
+    if (wvm_pkt_cache) kmem_cache_destroy(wvm_pkt_cache);
 }
 
 module_init(wavevm_init);

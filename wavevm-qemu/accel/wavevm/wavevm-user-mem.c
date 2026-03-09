@@ -28,6 +28,9 @@
 #include <stdbool.h>
 #include <time.h>
 #include <stdatomic.h>
+#include "sysemu/kvm.h"
+#include "exec/memory.h"
+#include "exec/ram_addr.h"
 
 #include "../../../common_include/wavevm_protocol.h"
 
@@ -40,7 +43,8 @@ static int g_is_slave = 0;
 static int g_fd_req = -1;  
 static __thread int t_req_sock = -1;
 static __thread uint8_t t_net_buf[WVM_MAX_PACKET_SIZE];
-static int g_fd_push = -1; 
+static int g_fd_push = -1;
+static int g_ipc_diff_sock = -1; // [FIX-G1] Master TCG harvester 专用 IPC socket
 static void *g_ram_base = NULL;
 static size_t g_ram_size = 0;
 static uint32_t g_slave_id = 0;
@@ -66,7 +70,7 @@ typedef struct WritablePage {
 #define PAGE_POOL_SIZE 4096
 static WritablePage g_page_pool[PAGE_POOL_SIZE];
 static void* g_image_pool[PAGE_POOL_SIZE]; // 预分配快照空间
-static atomic_int g_pool_idx = 0;
+static atomic_uint g_pool_idx = 0; /* [FIX] 必须无符号，防止 21 亿次写缺页后有符号溢出导致负数取模越界 */
 
 static volatile bool g_threads_running = false;
 static pthread_t g_listen_thread;
@@ -92,11 +96,11 @@ static int g_block_count = 0;
 void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa) {
     if (!g_fault_hook_checked) {
         const char *hook_env = getenv("WVM_ENABLE_FAULT_HOOK");
-        g_fault_hook_enabled = (hook_env && atoi(hook_env) != 0);
+        g_fault_hook_enabled = (!hook_env || atoi(hook_env) != 0);
         g_fault_hook_checked = true;
     }
     if (g_block_count >= MAX_RAM_BLOCKS) exit(1);
-    if (g_fault_hook_enabled) {
+    if (!kvm_enabled()) {
         mprotect(hva, size, PROT_NONE);
     }
     g_mem_blocks[g_block_count].hva_start = (uintptr_t)hva;
@@ -147,19 +151,25 @@ static void flush_lazy_ro_queue(void) {
     if (t_lazy_count == 0) return;
     for (int i = 0; i < t_lazy_count; i++) {
         uint64_t gpa = t_lazy_ro_queue[i];
-        mprotect((uint8_t*)g_ram_base + gpa, 4096, PROT_READ);
+        void *hva = gpa_to_hva_safe(gpa);
+        if (hva) mprotect(hva, 4096, PROT_READ);
     }
     t_lazy_count = 0;
 }
 
 static void defer_ro_protect(uint64_t gpa) {
+    if (kvm_enabled()) return; /* KVM 脏页由 dirty log 跟踪，绝不能 mprotect 降权，否则 EPT 违例 → exit=17 */
     t_lazy_ro_queue[t_lazy_count++] = gpa;
     if (t_lazy_count >= LAZY_QUEUE_SIZE) flush_lazy_ro_queue();
 }
 
 // 发送 PUSH 包 (Diff 或 Zero)
 static void send_push_packet(uint64_t gpa, uint64_t version, void *data, uint16_t size, uint8_t flags) {
-    if (g_fd_push < 0) return;
+    if (g_is_slave && g_fd_push < 0) return;
+    if (!g_is_slave && g_ipc_diff_sock < 0) {
+        g_ipc_diff_sock = internal_connect_master();
+        if (g_ipc_diff_sock < 0) return;
+    }
     size_t pl_len = sizeof(struct wvm_diff_log) + size;
     size_t pkt_len = sizeof(struct wvm_header) + pl_len;
     uint8_t *buf = malloc(pkt_len);
@@ -170,6 +180,7 @@ static void send_push_packet(uint64_t gpa, uint64_t version, void *data, uint16_
     hdr->msg_type = htons(MSG_COMMIT_DIFF);
     hdr->payload_len = htons(pl_len);
     hdr->slave_id = htonl(g_slave_id);
+    hdr->target_id = htonl(WVM_NODE_AUTO_ROUTE); // [V31 Fix] 本地通信标记
     hdr->req_id = 0;
     hdr->qos_level = 1;
     hdr->flags = flags; // [关键]
@@ -184,7 +195,12 @@ static void send_push_packet(uint64_t gpa, uint64_t version, void *data, uint16_
     if (size > 0 && data) memcpy(log->data, data, size);
 
     hdr->crc32 = htonl(calculate_crc32(buf, pkt_len));
-    send(g_fd_push, buf, pkt_len, 0);
+    // [FIX-G1] Master TCG 走 IPC
+    if (g_is_slave) {
+        send(g_fd_push, buf, pkt_len, 0);
+    } else {
+        send_diff_via_ipc(buf, pkt_len);
+    }
     free(buf);
 }
 
@@ -253,8 +269,12 @@ static void buffer_future_packet(uint64_t gpa, uint64_t version, uint16_t type, 
     pthread_spin_unlock(&g_reorder_lock);
 }
 
-/* 
- * [物理意图] 接收并应用来自 P2P 网络的“真理推送”，更新本地物理内存。
+/* [FIX-F3] Forward declaration: KVM proactive page fetch (defined after request_page_sync) */
+static void kvm_proactive_page_fetch(uint64_t gpa);
+static int request_page_sync(uintptr_t fault_addr, bool is_write);
+
+/*
+ * [物理意图] 接收并应用来自 P2P 网络的"真理推送"，更新本地物理内存。
  * [关键逻辑] 执行严格的版本判定（is_next_version）：顺序包直接 memcpy，版本断层包则强制失效（Invalidate）本地映射。
  * [后果] 实现了 MESI 协议的远程写入动作。它保证了即便在乱序网络下，本地 vCPU 看到的内存也是单调递增的一致性状态。
  */
@@ -282,10 +302,12 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
             // 边界检查：防止恶意包导致 Segfault
             if (offset + size > 4096) return;
 
-            // 1. 临时开放写权限
-            mprotect((uint8_t*)g_ram_base + gpa, 4096, PROT_READ | PROT_WRITE);
+            // 1. 安全 GPA→HVA 转换（兼容 PCI hole 多段 RAM）
+            void *page_hva = gpa_to_hva_safe(gpa);
+            if (!page_hva) return;
+            mprotect(page_hva, 4096, PROT_READ | PROT_WRITE);
             // 2. 应用增量数据
-            memcpy((uint8_t*)g_ram_base + gpa + offset, log->data, size);
+            memcpy((uint8_t*)page_hva + offset, log->data, size);
             // 3. 放入惰性锁回队列 (性能优化)
             defer_ro_protect(gpa);
             
@@ -297,12 +319,19 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
         else {
             // 此时内存状态已不可信，必须强制失效
             // 下次访问触发 sigsegv -> request_page_sync (V28 Pull) 拉取最新全量
-            if (g_fault_hook_enabled) {
-                mprotect((uint8_t*)g_ram_base + gpa, 4096, PROT_NONE);
+            if (!kvm_enabled()) {
+                void *inv_hva = gpa_to_hva_safe(gpa);
+                if (inv_hva) mprotect(inv_hva, 4096, PROT_NONE);
             }
-            
+
             // 将本地版本置 0，确保下次 Pull 回来的数据（无论版本多少）都能成功覆盖
-            set_local_page_version(gpa, 0); 
+            set_local_page_version(gpa, 0);
+
+            // [FIX-F3] KVM 模式下 mprotect(PROT_NONE) 被跳过，guest 不会触发 SIGSEGV，
+            // 必须主动拉取最新页面，否则 guest 永远读到 stale 数据。
+            if (kvm_enabled()) {
+                kvm_proactive_page_fetch(gpa);
+            }
         }
     }
     // --- 分支 2: 全页推送 / 强制同步 ---
@@ -312,8 +341,10 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
         uint64_t push_ver = WVM_NTOHLL(full->version);
         
         if (is_newer_version(get_local_page_version(gpa), push_ver)) {
-            mprotect((uint8_t*)g_ram_base + gpa, 4096, PROT_READ | PROT_WRITE);
-            memcpy((uint8_t*)g_ram_base + gpa, full->data, 4096);
+            void *page_hva = gpa_to_hva_safe(gpa);
+            if (!page_hva) return;
+            mprotect(page_hva, 4096, PROT_READ | PROT_WRITE);
+            memcpy(page_hva, full->data, 4096);
             
             // 惰性锁回
             defer_ro_protect(gpa);
@@ -323,11 +354,30 @@ void wvm_apply_remote_push(uint16_t msg_type, void *payload) {
     }
     // --- 分支 3: Prophet RPC (V29 新增) ---
     else if (msg_type == MSG_RPC_BATCH_MEMSET) {
-        // RPC 指令通常意味着大范围内存变动，这里不做 Lazy 处理
-        // 让 wavevm-all.c 里的 tb_flush 去处理一致性
-        // 这里主要负责更新版本号（如果有必要）
-        // 但注意：Prophet 的执行是在 handle_rpc_batch_execution 里直接写内存的
-        // 这里收到的只是通知，通常不需要做 mprotect 操作，除非为了 invalidation
+        // [FIX] Daemon 的 handle_rpc_batch_execution 只修改了 g_shm_ptr，
+        // 但 QEMU TCG 模式使用独立的匿名 RAM (g_ram_base)，必须同步执行物理填充，
+        // 否则 Guest 看到的内存不会被清零，Prophet 指令形同虚设。
+        struct wvm_rpc_batch_memset *batch = (struct wvm_rpc_batch_memset *)payload;
+        uint32_t count = ntohl(batch->count);
+        uint32_t val = ntohl(batch->val);
+        struct wvm_rpc_region *regions = (struct wvm_rpc_region *)(batch + 1);
+        for (uint32_t i = 0; i < count; i++) {
+            uint64_t gpa = WVM_NTOHLL(regions[i].gpa);
+            uint64_t r_len = WVM_NTOHLL(regions[i].len);
+            if (gpa + r_len <= g_ram_size) {
+                void *rpc_hva = gpa_to_hva_safe(gpa);
+                if (!rpc_hva) continue;
+                mprotect(rpc_hva, r_len, PROT_READ | PROT_WRITE);
+                memset(rpc_hva, val, r_len);
+                // [FIX] 同步 Prophet 版本号，否则后续 diff 引擎认为该页没变过，
+                //       导致远端节点版本断层无法收敛。
+                for (uint64_t pg = gpa & ~0xFFFULL; pg < gpa + r_len; pg += 4096) {
+                    uint64_t v = get_local_page_version(pg);
+                    set_local_page_version(pg, v + 1);
+                }
+                // tb_flush 在 wavevm-all.c 的 IPC 处理路径中已执行，此处不重复
+            }
+        }
     }
 }
 
@@ -375,7 +425,6 @@ hit:
 }
 
 static WritablePage *g_writable_pages_list = NULL;
-static pthread_mutex_t g_writable_list_lock = PTHREAD_MUTEX_INITIALIZER;
 
 // 线程局部
 static __thread int t_com_sock = -1; 
@@ -412,6 +461,7 @@ static uint64_t get_local_page_version(uint64_t gpa) {
 static void set_local_page_version(uint64_t gpa, uint64_t version) {
     if (!g_ver_root) {
         g_ver_root = calloc(L1_SIZE, sizeof(uint64_t *));
+        if (!g_ver_root) return; // OOM: 静默放弃版本追踪，不会崩溃
     }
 
     uint64_t pfn = gpa >> PAGE_SHIFT;
@@ -420,6 +470,7 @@ static void set_local_page_version(uint64_t gpa, uint64_t version) {
 
     if (g_ver_root[l1_idx] == NULL) {
         g_ver_root[l1_idx] = calloc(L2_SIZE, sizeof(uint64_t));
+        if (!g_ver_root[l1_idx]) return; // OOM: 同上
     }
     __atomic_store_n(&g_ver_root[l1_idx][l2_idx], version, __ATOMIC_RELEASE);
 }
@@ -468,8 +519,73 @@ void wvm_set_ttl_interval(int ms) {
     // 留空：不再启动 V28 的收割者线程
 }
 
-void wvm_register_volatile_ram(uint64_t gpa, uint64_t size) { 
+void wvm_register_volatile_ram(uint64_t gpa, uint64_t size) {
     // 留空：不再维护易失性区域链表
+}
+
+/* [FIX-F3] KVM 主动页面拉取：KVM 模式下 mprotect(PROT_NONE) 不可用的替代方案。
+ *
+ * 背景：TCG 模式通过 mprotect(PROT_NONE) + SIGSEGV 触发缺页拉取。
+ * KVM 模式下 PROT_NONE 会导致 EPT violation 风暴，所以所有 mprotect(PROT_NONE) 调用
+ * 都被 !kvm_enabled() 守卫跳过。
+ *
+ * 问题：当版本断层发生时，set_local_page_version(gpa, 0) 被调用，但因为没有
+ * mprotect(PROT_NONE)，guest 不会触发缺页，旧数据会被永久读取。
+ *
+ * 修复：在 KVM 模式下检测到版本断层时，主动通过 IPC 向 Master 发起同步页面拉取，
+ * 将最新数据写入 HVA 并更新版本号。不依赖 guest 触发的 SIGSEGV。
+ */
+static void kvm_proactive_page_fetch(uint64_t gpa) {
+    if (!g_ram_base) return;
+
+    /* 使用线程局部 IPC socket (与 request_page_sync Master 路径相同) */
+    if (!g_is_slave) {
+        /* Master 模式：通过本地 IPC socket 请求 */
+        if (t_com_sock == -1) {
+            t_com_sock = internal_connect_master();
+            if (t_com_sock < 0) {
+                fprintf(stderr, "[FIX-F3] KVM proactive fetch: IPC connect failed for GPA 0x%"
+                        PRIx64 "\n", gpa);
+                return;
+            }
+        }
+
+        struct wvm_ipc_fault_req req = { .gpa = gpa, .len = 4096, .vcpu_id = 0 };
+        struct wvm_ipc_header_t ipc_hdr = { .type = WVM_IPC_TYPE_MEM_FAULT, .len = sizeof(req) };
+        struct iovec iov[2] = { {&ipc_hdr, sizeof(ipc_hdr)}, {&req, sizeof(req)} };
+        struct msghdr msg = { .msg_iov = iov, .msg_iovlen = 2 };
+
+        if (sendmsg(t_com_sock, &msg, 0) < 0) {
+            /* 连接断开，关闭以便下次重建 */
+            close(t_com_sock);
+            t_com_sock = -1;
+            fprintf(stderr, "[FIX-F3] KVM proactive fetch: IPC send failed for GPA 0x%"
+                    PRIx64 "\n", gpa);
+            return;
+        }
+
+        struct wvm_ipc_fault_ack ack;
+        if (read_exact(t_com_sock, &ack, sizeof(ack)) < 0) {
+            close(t_com_sock);
+            t_com_sock = -1;
+            fprintf(stderr, "[FIX-F3] KVM proactive fetch: IPC recv failed for GPA 0x%"
+                    PRIx64 "\n", gpa);
+            return;
+        }
+
+        if (ack.status == 0) {
+            set_local_page_version(gpa, ack.version);
+        }
+    } else {
+        /* Slave 模式：复用 request_page_sync 的 UDP 路径。
+         * 由于 request_page_sync 接受 fault_addr (HVA) 参数，
+         * 这里构造 HVA 并直接调用它。
+         */
+        void *fetch_hva = gpa_to_hva_safe(gpa);
+        if (!fetch_hva) return;
+        uintptr_t fault_addr = (uintptr_t)fetch_hva;
+        request_page_sync(fault_addr, false);
+    }
 }
 
 // =============================================================
@@ -477,9 +593,10 @@ void wvm_register_volatile_ram(uint64_t gpa, uint64_t size) {
 // =============================================================
 
 static int request_page_sync(uintptr_t fault_addr, bool is_write) {
-    uint64_t gpa = fault_addr - (uintptr_t)g_ram_base;
-    gpa &= ~4095ULL; 
-    uintptr_t aligned_addr = (uintptr_t)g_ram_base + gpa;
+    uint64_t gpa = hva_to_gpa_safe(fault_addr);
+    if (gpa == (uint64_t)-1) return -1;
+    gpa &= ~4095ULL;
+    uintptr_t aligned_addr = fault_addr & ~4095ULL;
     
     // --- Master Mode (IPC) ---
     if (!g_is_slave) {
@@ -555,11 +672,12 @@ static int request_page_sync(uintptr_t fault_addr, bool is_write) {
         hdr->msg_type = htons(MSG_MEM_READ); // V29 标准回退
     #endif
 
-    hdr->payload_len = htons(8); 
+    hdr->payload_len = htons(8);
     hdr->slave_id = htonl(g_slave_id);
-    hdr->req_id = WVM_HTONLL((uint64_t)gpa); 
-    hdr->mode_tcg = 1; 
-    hdr->qos_level = 1; 
+    hdr->target_id = htonl(WVM_NODE_AUTO_ROUTE); // [V31 Fix] 本地通信标记，防止 vm_id 过滤误杀
+    hdr->req_id = WVM_HTONLL((uint64_t)gpa);
+    hdr->mode_tcg = 1;
+    hdr->qos_level = 1;
 
     // [保留] Payload: GPA
     *(uint64_t *)(t_net_buf + sizeof(struct wvm_header)) = WVM_HTONLL(gpa);
@@ -730,7 +848,8 @@ static void send_commit_diff_dual_mode(uint64_t gpa, uint16_t offset, uint16_t s
     hdr->msg_type = htons(MSG_COMMIT_DIFF);
     hdr->payload_len = htons(pl_len);
     hdr->slave_id = htonl(g_slave_id);
-    hdr->req_id = 0; 
+    hdr->target_id = htonl(WVM_NODE_AUTO_ROUTE); // [V31 Fix] 本地通信标记
+    hdr->req_id = 0;
     hdr->qos_level = 1; // 走快车道
     hdr->crc32 = 0;     // 先清零
     hdr->flags = 0;
@@ -762,12 +881,45 @@ static struct {
     .lock = PTHREAD_MUTEX_INITIALIZER 
 };
 
+// [FIX-G1] Master TCG 模式：将 diff 数据封装为 IPC 发给 Master Daemon
+// 每个聚合包内可能有多个 wvm_header 子包（聚合格式），需要拆包后逐个以 IPC 发送
+static void send_diff_via_ipc(void *buf, size_t len) {
+    if (g_ipc_diff_sock < 0) {
+        g_ipc_diff_sock = internal_connect_master();
+        if (g_ipc_diff_sock < 0) return;
+    }
+    // 遍历聚合缓冲区中的每个子包
+    size_t off = 0;
+    while (off + sizeof(struct wvm_header) <= len) {
+        struct wvm_header *sub = (struct wvm_header *)((uint8_t *)buf + off);
+        uint16_t pl = ntohs(sub->payload_len);
+        size_t sub_len = sizeof(struct wvm_header) + pl;
+        if (off + sub_len > len) break;
+        // 只取 payload 部分（wvm_diff_log），封装为 IPC
+        wvm_ipc_header_t ipc_hdr = { .type = WVM_IPC_TYPE_COMMIT_DIFF, .len = pl };
+        void *payload = (uint8_t *)sub + sizeof(struct wvm_header);
+        // 发送 IPC header + payload（两次 write，由于是流式 socket 合并发送）
+        if (write(g_ipc_diff_sock, &ipc_hdr, sizeof(ipc_hdr)) < 0 ||
+            write(g_ipc_diff_sock, payload, pl) < 0) {
+            // 连接断开，尝试重连
+            close(g_ipc_diff_sock);
+            g_ipc_diff_sock = internal_connect_master();
+            break; // 放弃本轮剩余包
+        }
+        off += sub_len;
+    }
+}
+
 // 发送函数：将缓冲区推向网络
 static void flush_aggregator(void) {
     if (g_aggregator.curr_offset == 0) return;
-    // 使用 send 发往 g_fd_push。由于 t_req_sock 的 connect 逻辑，这里直接发。
-    if (send(g_fd_push, g_aggregator.buf, g_aggregator.curr_offset, 0) < 0) {
-        // 网络拥塞处理：如果发送失败，我们也只能清空，版本号一致性由 FORCE_SYNC 保证
+    // [FIX-G1] Master TCG 走 IPC, Slave 走 UDP push socket
+    if (g_is_slave) {
+        if (send(g_fd_push, g_aggregator.buf, g_aggregator.curr_offset, 0) < 0) {
+            // 网络拥塞处理：如果发送失败，清空，版本号一致性由 FORCE_SYNC 保证
+        }
+    } else {
+        send_diff_via_ipc(g_aggregator.buf, g_aggregator.curr_offset);
     }
     g_aggregator.curr_offset = 0;
 }
@@ -802,7 +954,12 @@ static void add_to_aggregator(uint64_t gpa, uint64_t version, uint16_t off, uint
         l->size = htons(sz);
         if (sz > 0) memcpy(l->data, data, sz);
         h->crc32 = htonl(calculate_crc32(tmp, needed));
-        send(g_fd_push, tmp, needed, 0);
+        // [FIX-G1] Master TCG 走 IPC
+        if (g_is_slave) {
+            send(g_fd_push, tmp, needed, 0);
+        } else {
+            send_diff_via_ipc(tmp, needed);
+        }
         free(tmp);
         pthread_mutex_unlock(&g_aggregator.lock);
         return;
@@ -814,6 +971,7 @@ static void add_to_aggregator(uint64_t gpa, uint64_t version, uint16_t off, uint
     hdr->msg_type = htons(MSG_COMMIT_DIFF);
     hdr->payload_len = htons(payload_len);
     hdr->slave_id = htonl(g_slave_id);
+    hdr->target_id = htonl(WVM_NODE_AUTO_ROUTE); // [V31 Fix] 本地通信标记
     hdr->qos_level = 1;
     hdr->flags = flags;
     hdr->crc32 = 0;
@@ -847,21 +1005,42 @@ static void *diff_harvester_thread_fn(void *arg) {
     while (g_threads_running) {
         usleep(1000); // 1ms 采集周期
 
-        // 1. 偷走链表 (Detach List)
-        WritablePage *batch_head = NULL;
-        pthread_mutex_lock(&g_writable_list_lock);
-        if (g_writable_pages_list) {
-            batch_head = g_writable_pages_list;
-            g_writable_pages_list = NULL; 
+        // KVM 模式：基于脏页日志收割，不依赖 SIGSEGV/PROT_NONE。
+        // [FIX] 遍历 g_mem_blocks 而非 flat 0~g_ram_size，
+        //       并用 qemu_ram_addr_from_host 将 HVA 转为正确的 ram_addr_t，
+        //       修复 PCI hole (3G-4G) 导致的 gpa != ram_addr_t 问题。
+        if (kvm_enabled()) {
+            for (int bi = 0; bi < g_block_count; bi++) {
+                GVMRamBlock *blk = &g_mem_blocks[bi];
+                /* 将 block 起始 HVA 转为 ram_addr_t 基址（一次性，避免每页调用） */
+                ram_addr_t ram_base = qemu_ram_addr_from_host((void *)blk->hva_start);
+                if (ram_base == RAM_ADDR_INVALID) continue;
+
+                for (uint64_t off = 0; off + 4096 <= blk->size; off += 4096) {
+                    ram_addr_t ra = ram_base + off;
+                    if (!cpu_physical_memory_test_and_clear_dirty(ra, 4096, DIRTY_MEMORY_MIGRATION)) {
+                        continue;
+                    }
+                    uint64_t gpa = blk->gpa_start + off;
+                    void *hva = (void *)(blk->hva_start + off);
+                    uint64_t ver = get_local_page_version(gpa);
+                    add_to_aggregator(gpa, ver + 1, 0, 4096, hva, 0);
+                    set_local_page_version(gpa, ver + 1);
+                }
+            }
+            flush_aggregator();
+            continue;
         }
-        pthread_mutex_unlock(&g_writable_list_lock);
+
+        // 1. 偷走链表 (Detach List) — 必须用原子交换，与信号处理函数的 CAS 配合
+        WritablePage *batch_head = __atomic_exchange_n(&g_writable_pages_list, NULL, __ATOMIC_ACQ_REL);
 
         if (!batch_head) continue;
 
         // 2. 遍历处理脏页
         WritablePage *curr = batch_head;
         while (curr) {
-            void *page_addr = (uint8_t*)g_ram_base + curr->gpa;
+            void *page_addr = gpa_to_hva_safe(curr->gpa);
             if (!page_addr) { 
                 // 错误处理：释放资源并跳过
                 WritablePage *nxt = curr->next; curr = nxt;
@@ -1005,6 +1184,8 @@ void wvm_set_client_sync_mode(int batch_size, int auto_tune) {
  * [后果] 确保了分布式内存的“强顺序一致性”。它防止了在执行关键 IO 指令（如 GPU 命令提交）时，内存数据尚未同步完成的情况。
  */
 static long wait_for_directory_ack_safe(void) {
+    // Master TCG 模式走 IPC，本地不需要网络栅栏
+    if (!g_is_slave) return 100;
     if (g_fd_push < 0) return -1;
 
     // 1. 准备发送 PING
@@ -1013,6 +1194,7 @@ static long wait_for_directory_ack_safe(void) {
     hdr.magic = htonl(WVM_MAGIC);
     hdr.msg_type = htons(MSG_PING);
     hdr.slave_id = htonl(g_slave_id);
+    hdr.target_id = htonl(WVM_NODE_AUTO_ROUTE);
     hdr.req_id = WVM_HTONLL(SYNC_MAGIC); // 特殊标记
 
     // 2. 【关键】先加锁，重置状态位
@@ -1081,10 +1263,14 @@ static void *mem_push_listener_thread(void *arg) {
                     
                     // 触发强制同步
                     void* hva = gpa_to_hva_safe(stale_gpa);
-                    if (hva && g_fault_hook_enabled) {
+                    if (hva && !kvm_enabled()) {
                         mprotect(hva, 4096, PROT_NONE);
                     }
                     set_local_page_version(stale_gpa, 0);
+                    // [FIX-F3] KVM 模式下主动拉取过期重排缓冲区中的页面
+                    if (kvm_enabled()) {
+                        kvm_proactive_page_fetch(stale_gpa);
+                    }
                 }
             }
             pthread_spin_unlock(&g_reorder_lock);
@@ -1144,10 +1330,15 @@ static void *mem_push_listener_thread(void *arg) {
                         } else {
                             // 严重乱序：回退到 Pull 模式
                             // 这种情况下必须立即锁回，不能 Lazy，因为状态已重置
-                            if (g_fault_hook_enabled) {
-                                mprotect((uint8_t*)g_ram_base + gpa, 4096, PROT_NONE);
+                            if (!kvm_enabled()) {
+                                void *inv_hva2 = gpa_to_hva_safe(gpa);
+                                if (inv_hva2) mprotect(inv_hva2, 4096, PROT_NONE);
                             }
                             set_local_page_version(gpa, 0);
+                            // [FIX-F3] KVM 下主动拉取，替代 SIGSEGV 驱动的缺页
+                            if (kvm_enabled()) {
+                                kvm_proactive_page_fetch(gpa);
+                            }
                         }
                     }
                 } 
@@ -1189,10 +1380,19 @@ static void *mem_push_listener_thread(void *arg) {
 void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
     g_ram_base = ram_ptr;
     g_ram_size = ram_size;
-    bool enable_fault_hook = false;
+    bool enable_fault_hook = true;
     const char *hook_env = getenv("WVM_ENABLE_FAULT_HOOK");
-    if (hook_env && atoi(hook_env) != 0) {
-        enable_fault_hook = true;
+    if (hook_env && atoi(hook_env) == 0) {
+        enable_fault_hook = false;
+    }
+
+    // KVM + PROT_NONE 会导致 EPT violation，KVM 下：
+    //   1. 启用 migration dirty log 替代 mprotect 追踪脏页
+    //   2. 各调用点用 !kvm_enabled() 守卫跳过 mprotect(PROT_NONE)
+    // 注意：fault hook（SIGSEGV 拦截器）仍然保留，它是分布式缺页请求的核心通道。
+    if (kvm_enabled()) {
+        memory_global_dirty_log_start();
+        fprintf(stderr, "[WaveVM] KVM detected: PROT_NONE path bypassed, migration dirty log enabled.\n");
     }
     g_fault_hook_enabled = enable_fault_hook;
     g_fault_hook_checked = true;
@@ -1215,18 +1415,25 @@ void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
         g_fd_req = atoi(env_req);
         g_fd_push = atoi(env_push);
         g_slave_id = env_id ? atoi(env_id) : 0;
-        
+
         printf("[WaveVM-User] V29 Wavelet Engine Active (Slave ID: %d)\n", g_slave_id);
-        
+
         g_threads_running = true;
         pthread_create(&g_listen_thread, NULL, mem_push_listener_thread, NULL);
         pthread_create(&g_harvester_thread, NULL, diff_harvester_thread_fn, NULL);
     }
+    // [FIX-G1] Master TCG 模式：无 WVM_SOCK_PUSH 但仍需启动 harvester
+    // Listener 由 wavevm-all.c 的 wavevm_master_ipc_thread 处理，此处只启 harvester
+    else if (!kvm_enabled()) {
+        printf("[WaveVM-User] V31 Master TCG Harvester Active (IPC Diff Path)\n");
+        g_threads_running = true;
+        pthread_create(&g_harvester_thread, NULL, diff_harvester_thread_fn, NULL);
+    }
 
-    if (enable_fault_hook) {
+    if (!kvm_enabled()) {
         struct sigaction sa;
         memset(&sa, 0, sizeof(sa));
-        sa.sa_flags = SA_SIGINFO | SA_NODEFER; 
+        sa.sa_flags = SA_SIGINFO; // [FIX-M6] 移除 SA_NODEFER，防止 handler 内递归 SIGSEGV 导致栈溢出
         sa.sa_sigaction = sigsegv_handler;
         sigemptyset(&sa.sa_mask);
         sigaction(SIGSEGV, &sa, NULL);

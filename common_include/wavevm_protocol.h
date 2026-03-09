@@ -17,6 +17,7 @@
 
 #include "wavevm_config.h"
 #include "platform_defs.h"
+#include <linux/kvm.h>
 
 /*
  * WaveVM V29.5 "Wavelet" Protocol Definition (FINAL FIXED)
@@ -176,7 +177,22 @@ typedef struct wvm_ipc_header_t {
 #define WVM_IPC_TYPE_RPC_PASSTHROUGH 99
 
 // 前后端分离路由占位符
-#define WVM_NODE_AUTO_ROUTE 0x3FFFFFFF
+#define WVM_NODE_AUTO_ROUTE 0xFFFFFFFF  // 旧值 0x3FFFFFFF，改为全 1 避免与 vm_id 编码冲突
+
+// --- Multi-VM Resource Pooling: VM ID 编解码 ---
+// slave_id / target_id 的高 8 位编码 vm_id，低 24 位编码 node_id
+// 协议头 48 字节不变，向后兼容：vm_id=0 时 ENCODE_ID(0,n) == n
+#define WVM_VMID_SHIFT    24
+#define WVM_VMID_MASK     (0xFFu << WVM_VMID_SHIFT)    // 0xFF000000
+#define WVM_NODEID_MASK   ((1u << WVM_VMID_SHIFT) - 1)  // 0x00FFFFFF
+
+#define WVM_ENCODE_ID(vm, node) (((uint32_t)(vm) << WVM_VMID_SHIFT) | ((node) & WVM_NODEID_MASK))
+#define WVM_GET_VMID(id)        (((uint32_t)(id) >> WVM_VMID_SHIFT) & 0xFF)
+#define WVM_GET_NODEID(id)      ((uint32_t)(id) & WVM_NODEID_MASK)
+
+// [Fix #3] AUTO_ROUTE 是 sentinel 值 (0xFFFFFFFF)，不能做 GET_NODEID 后参与普通比较
+// 所有需要判断"是否是有效路由目标"的地方必须先过此检查
+#define WVM_IS_VALID_TARGET(id) ((uint32_t)(id) != WVM_NODE_AUTO_ROUTE)
 
 #define WVM_CTRL_MAGIC 0x57564D43
 
@@ -234,7 +250,7 @@ typedef struct {
 
 struct wvm_ipc_cpu_run_req {
     uint32_t mode_tcg;
-    uint32_t slave_id;   // 如果设为 WVM_NODE_AUTO_ROUTE (0x3FFFFFFF)，由后端决定
+    uint32_t slave_id;   // 如果设为 WVM_NODE_AUTO_ROUTE (0xFFFFFFFF)，由后端决定
     uint32_t vcpu_index; // 传递 vCPU 序号用于查表路由
     union {
         wvm_kvm_context_t kvm;
@@ -290,5 +306,32 @@ extern int g_ctrl_port;
 #define POOL_ITEM_SIZE 4200
 
 #include "crc32.h"
+
+//[V30 异构适配器] 提取并转换 TCG 与 KVM 之间的寄存器状态（含关键段寄存器）
+static void wvm_translate_tcg_to_kvm(wvm_tcg_context_t *t, struct kvm_regs *k, struct kvm_sregs *s) {
+    k->rax = t->regs[0]; k->rcx = t->regs[1]; k->rdx = t->regs[2]; k->rbx = t->regs[3];
+    k->rsp = t->regs[4]; k->rbp = t->regs[5]; k->rsi = t->regs[6]; k->rdi = t->regs[7];
+    k->r8  = t->regs[8]; k->r9  = t->regs[9]; k->r10 = t->regs[10];k->r11 = t->regs[11];
+    k->r12 = t->regs[12];k->r13 = t->regs[13];k->r14 = t->regs[14];k->r15 = t->regs[15];
+    k->rip = t->eip; k->rflags = t->eflags;
+    // 关键段寄存器与控制寄存器映射
+    s->cr0 = t->cr[0]; s->cr2 = t->cr[2]; s->cr3 = t->cr[3]; s->cr4 = t->cr[4];
+    s->fs.base = t->fs_base; s->gs.base = t->gs_base;
+    s->gdt.base = t->gdt_base; s->gdt.limit = t->gdt_limit;
+    s->idt.base = t->idt_base; s->idt.limit = t->idt_limit;
+}
+
+static void wvm_translate_kvm_to_tcg(struct kvm_regs *k, struct kvm_sregs *s, wvm_tcg_context_t *t) {
+    t->regs[0] = k->rax; t->regs[1] = k->rcx; t->regs[2] = k->rdx; t->regs[3] = k->rbx;
+    t->regs[4] = k->rsp; t->regs[5] = k->rbp; t->regs[6] = k->rsi; t->regs[7] = k->rdi;
+    t->regs[8] = k->r8;  t->regs[9] = k->r9;  t->regs[10]= k->r10; t->regs[11]= k->r11;
+    t->regs[12]= k->r12; t->regs[13]= k->r13; t->regs[14]= k->r14; t->regs[15]= k->r15;
+    t->eip = k->rip; t->eflags = k->rflags;
+    // 关键段寄存器与控制寄存器映射
+    t->cr[0] = s->cr0; t->cr[2] = s->cr2; t->cr[3] = s->cr3; t->cr[4] = s->cr4;
+    t->fs_base = s->fs.base; t->gs_base = s->gs.base;
+    t->gdt_base = s->gdt.base; t->gdt_limit = s->gdt.limit;
+    t->idt_base = s->idt.base; t->idt_limit = s->idt.limit;
+}
 
 #endif // WAVEVM_PROTOCOL_H

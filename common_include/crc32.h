@@ -35,7 +35,11 @@ static int crc32_table_inited = 0;
 
 // 运行时生成表，比硬编码几千个 hex 优雅且不易错
 static void init_crc32_table(void) {
-    uint32_t polynomial = 0xEDB88320;
+    /*
+     * Keep software fallback aligned with SSE4.2 _mm_crc32_u* instructions,
+     * which implement CRC32C (Castagnoli), not IEEE CRC32.
+     */
+    uint32_t polynomial = 0x82F63B78;
     for (uint32_t i = 0; i < 256; i++) {
         uint32_t c = i;
         for (int j = 0; j < 8; j++) {

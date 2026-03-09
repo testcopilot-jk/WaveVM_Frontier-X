@@ -87,6 +87,7 @@ static int enable_bus_master(int device_fd) {
  * [后果] 它是中断转发的源头。如果没有 eventfd 的正确绑定，Slave 端的显卡在完成任务后将无法通知 Master 端的 vCPU。
  */
 static int setup_irq(wvm_vfio_device_t *dev) {
+    dev->irq_fd = -1; /* 防止零初始化（0=stdin）被 poll 循环误注册 */
     // 为简单起见，且为了保证通用性，我们优先尝试启用 INTx (Legacy Interrupt)
     // 真实的 GPU 驱动通常会请求 MSI-X，这需要拦截配置空间的写操作来动态建立映射。
     // 由于 V27.0 不拦截 Config Space 写（太复杂），我们假设 Host VFIO 驱动
@@ -244,7 +245,7 @@ int wvm_vfio_init(const char *config_file) {
         if (strncmp(line, "DEVICE", 6) == 0) {
             if (parsing) init_device(pci_id, group_path, bar_gpas, bar_sizes);
             
-            sscanf(line, "DEVICE %s %s", pci_id, group_path);
+            sscanf(line, "DEVICE %31s %63s", pci_id, group_path);
             memset(bar_gpas, 0, sizeof(bar_gpas));
             memset(bar_sizes, 0, sizeof(bar_sizes));
             parsing = 1;
@@ -372,7 +373,8 @@ void wvm_vfio_poll_irqs(int master_sock, struct sockaddr_in *master_addr) {
                 hdr.magic = htonl(WVM_MAGIC);
                 hdr.msg_type = htons(MSG_VFIO_IRQ);
                 hdr.payload_len = 0;
-                hdr.slave_id = 0; 
+                hdr.slave_id = htonl(WVM_NODE_AUTO_ROUTE);
+                hdr.target_id = htonl(WVM_NODE_AUTO_ROUTE);
                 hdr.req_id = 0;
                 hdr.qos_level = 1; 
                 

@@ -18,7 +18,7 @@ struct dsm_driver_ops {
     int      (*is_atomic_context)(void);
     void     (*touch_watchdog)(void);
 
-    uint64_t (*alloc_req_id)(void *rx_buffer); 
+    uint64_t (*alloc_req_id)(void *rx_buffer, uint32_t buffer_size); // [FIX-G3]
     void     (*free_req_id)(uint64_t id);
     uint64_t (*get_time_us)(void);
     uint64_t (*time_diff_us)(uint64_t start);

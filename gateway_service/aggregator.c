@@ -41,6 +41,7 @@
 typedef struct {
     uint32_t id;                    // Key for the hash table (slave_id)
     struct sockaddr_in addr;        // Slave's network address, pre-filled
+    uint8_t static_pinned;          // 1 when seeded by config/control plane; don't auto-learn overwrite
     slave_buffer_t *buffer;         // Pointer to the aggregation buffer, LAZILY ALLOCATED
     pthread_mutex_t lock;           // Per-node lock for buffer access
     UT_hash_handle hh;              // Makes this structure hashable by uthash
@@ -144,6 +145,7 @@ static int load_slave_config(const char *path) {
                         node->addr.sin_family = AF_INET;
                         node->addr.sin_addr.s_addr = inet_addr(ip_str);
                         node->addr.sin_port = htons(port);
+                        node->static_pinned = 1;
                     }
                 }
                 routes_loaded++;
@@ -156,9 +158,15 @@ static int load_slave_config(const char *path) {
 }
 
 // Sends a raw datagram to a specific downstream node address.
+// [FIX-M8] 快照 node->addr 防止与 learn_route 竞争导致部分读取
 static int raw_send_to_downstream(int fd, gateway_node_t *node, void *data, int len) {
-    if (!node || node->addr.sin_port == 0) return -EHOSTUNREACH; 
-    return sendto(fd, data, len, MSG_DONTWAIT, (struct sockaddr*)&node->addr, sizeof(node->addr));
+    if (!node) return -EHOSTUNREACH;
+    struct sockaddr_in addr_snap;
+    pthread_mutex_lock(&node->lock);
+    addr_snap = node->addr;
+    pthread_mutex_unlock(&node->lock);
+    if (addr_snap.sin_port == 0) return -EHOSTUNREACH;
+    return sendto(fd, data, len, MSG_DONTWAIT, (struct sockaddr*)&addr_snap, sizeof(addr_snap));
 }
 
 /* 
@@ -225,6 +233,15 @@ static int internal_push(int fd, uint32_t slave_id, void *data, int len) {
     // 1. 读锁保护查找，防止与动态路由更新冲突
     pthread_rwlock_rdlock(&g_map_lock);
     gateway_node_t *node = find_node(slave_id);
+    // [Multi-VM Fallback] composite ID 查不到时，strip vm_id 用裸 node_id 再查一次
+    // 兼容 routes.conf 只写裸 ID、实际流量带 composite ID 的分形集群场景
+    // vm_id=0 时 WVM_GET_NODEID(id)==id，fallback 等价于 no-op 不影响性能
+    if (!node) {
+        uint32_t raw_id = WVM_GET_NODEID(slave_id);
+        if (raw_id != slave_id) {
+            node = find_node(raw_id);
+        }
+    }
     if (!node) {
         pthread_rwlock_unlock(&g_map_lock);
         return -1;
@@ -326,11 +343,16 @@ static void learn_route(uint32_t slave_id, struct sockaddr_in *addr) {
     gateway_node_t *node = NULL;
     pthread_rwlock_rdlock(&g_map_lock);
     HASH_FIND_INT(g_node_map, &slave_id, node);
-    if (node && 
-        node->addr.sin_addr.s_addr == addr->sin_addr.s_addr &&
-        node->addr.sin_port == addr->sin_port) {
-        pthread_rwlock_unlock(&g_map_lock);
-        return; // 路由稳定，无需更新
+    if (node) {
+        if (node->static_pinned) {
+            pthread_rwlock_unlock(&g_map_lock);
+            return; // 静态路由不允许被自学习覆盖
+        }
+        if (node->addr.sin_addr.s_addr == addr->sin_addr.s_addr &&
+            node->addr.sin_port == addr->sin_port) {
+            pthread_rwlock_unlock(&g_map_lock);
+            return; // 路由稳定，无需更新
+        }
     }
     pthread_rwlock_unlock(&g_map_lock);
 
@@ -348,8 +370,11 @@ static void learn_route(uint32_t slave_id, struct sockaddr_in *addr) {
         }
     }
     
-    if (node) {
+    if (node && !node->static_pinned) {
+        // [FIX-M8] 同时持有 node->lock 保护 addr 写入，与读端保持一致
+        pthread_mutex_lock(&node->lock);
         node->addr = *addr;
+        pthread_mutex_unlock(&node->lock);
         // printf("[Gateway-Auto] Updated Route Node: %u\n", slave_id);
     }
     pthread_rwlock_unlock(&g_map_lock);
@@ -396,6 +421,11 @@ static void* gateway_worker(void *arg) {
     struct iovec iovecs[BATCH_SIZE];
     struct sockaddr_in src_addrs[BATCH_SIZE];
     uint8_t *buffer_pool = malloc(BATCH_SIZE * WVM_MAX_PACKET_SIZE);
+    if (!buffer_pool) {
+        perror("[Gateway] Worker buffer_pool alloc failed");
+        close(local_fd);
+        return NULL;
+    }
 
     for (int i = 0; i < BATCH_SIZE; i++) {
         iovecs[i].iov_base = buffer_pool + (i * WVM_MAX_PACKET_SIZE);
@@ -429,25 +459,30 @@ static void* gateway_worker(void *arg) {
             // [关键]：只要收到合法的 WVM 包，就学习源路由
             // 排除掉 Upstream (Master/Core) 的 ID，只学习 Downstream (Leaf) 节点
             // 这里可以通过 ID 范围判断，或者简单地全部学习（Upstream 路由更新也无妨）
-            if (source_id < WVM_MAX_SLAVES) {
+            if (source_id != WVM_NODE_AUTO_ROUTE) {
                 learn_route(source_id, &src_addrs[i]);
             }
 
-            // Classify upstream packets by source IP to tolerate NAT/ephemeral source port changes.
-            if (src->sin_addr.s_addr == g_upstream_addr.sin_addr.s_addr) {
-                uint32_t route_id = source_id; // 兼容旧包：没有目标信息时按旧字段转发
-                if (target_id < WVM_MAX_SLAVES) {
-                    route_id = target_id;
-                } else if (target_id == WVM_NODE_AUTO_ROUTE) {
-                    route_id = source_id;
-                }
-                int r = internal_push(local_fd, route_id, ptr, pkt_len);
-                if (r < 0 && msg_type == MSG_VCPU_RUN) {
-                    fprintf(stderr, "[Gateway] upstream->route failed msg=%u route=%u err=%d\n",
-                            (unsigned)msg_type, route_id, r);
-                }
+            /*
+             * Route by logical destination first. This avoids source-IP based
+             * misclassification loops in multi-hop or same-host multi-instance
+             * deployments. Fallback to upstream only when no local route exists.
+             */
+            // [FIX-M7] 当 target_id 无效时不再 fallback 到 source_id，
+            // 防止 AUTO_ROUTE 包被回送给发送者形成环路
+            uint32_t route_id;
+            if (WVM_IS_VALID_TARGET(target_id)) {
+                route_id = target_id;
             } else {
-                // Packets from anywhere else are considered upstream.
+                // 无有效目标，直接交给 upstream 处理
+                int tx_fd = (g_upstream_tx_socket >= 0) ? g_upstream_tx_socket : local_fd;
+                sendto(tx_fd, ptr, pkt_len, MSG_DONTWAIT,
+                       (struct sockaddr*)&g_upstream_addr, sizeof(g_upstream_addr));
+                continue;
+            }
+
+            int r = internal_push(local_fd, route_id, ptr, pkt_len);
+            if (r < 0) {
                 int tx_fd = (g_upstream_tx_socket >= 0) ? g_upstream_tx_socket : local_fd;
                 ssize_t sret = sendto(tx_fd, ptr, pkt_len, MSG_DONTWAIT,
                                       (struct sockaddr*)&g_upstream_addr, sizeof(g_upstream_addr));
@@ -462,6 +497,18 @@ static void* gateway_worker(void *arg) {
                             up_ip, (unsigned)ntohs(g_upstream_addr.sin_port),
                             sret, (sret < 0) ? errno : 0);
                 }
+            } else if (msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT) {
+                gateway_node_t *dst = find_node(route_id);
+                char dst_ip[INET_ADDRSTRLEN] = {0};
+                unsigned dst_port = 0;
+                if (dst) {
+                    inet_ntop(AF_INET, &dst->addr.sin_addr, dst_ip, sizeof(dst_ip));
+                    dst_port = (unsigned)ntohs(dst->addr.sin_port);
+                }
+                fprintf(stderr, "[Gateway] route->local msg=%u route=%u src=%s:%u dst=%s:%u\n",
+                        (unsigned)msg_type, route_id,
+                        inet_ntoa(src->sin_addr), (unsigned)ntohs(src->sin_port),
+                        dst_ip[0] ? dst_ip : "0.0.0.0", dst_port);
             }
         }
     }
@@ -494,6 +541,7 @@ void dynamic_add_route(uint32_t node_id, uint32_t ip, uint16_t port) {
         node = (gateway_node_t*)calloc(1, sizeof(gateway_node_t));
         if (node) {
             node->id = node_id;
+            node->static_pinned = 1;
             pthread_mutex_init(&node->lock, NULL); // 节点内部的Buffer锁保持Mutex
             node->buffer = NULL; 
             HASH_ADD_INT(g_node_map, id, node);
@@ -501,9 +549,12 @@ void dynamic_add_route(uint32_t node_id, uint32_t ip, uint16_t port) {
     }
     
     if (node) {
+        pthread_mutex_lock(&node->lock);
+        node->static_pinned = 1;
         node->addr.sin_family = AF_INET;
         node->addr.sin_addr.s_addr = ip;
         node->addr.sin_port = port;
+        pthread_mutex_unlock(&node->lock);
         printf("[Gateway] Route Added/Updated: Node %u -> %s:%d\n", 
                node_id, inet_ntoa(node->addr.sin_addr), ntohs(port));
     }

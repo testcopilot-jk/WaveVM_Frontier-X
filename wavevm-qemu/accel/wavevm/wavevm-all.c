@@ -6,6 +6,7 @@
 #include "sysemu/accel.h"
 #include "sysemu/cpus.h"
 #include "sysemu/sysemu.h"
+#include "qom/object.h"
 #include "hw/boards.h"
 #include "qemu/option.h"
 #include <sys/ioctl.h>
@@ -46,6 +47,12 @@ static void *g_primary_ram_hva = NULL;
 static uint64_t g_primary_ram_size = 0;
 static bool g_user_mem_inited = false;
 static uint64_t g_user_ram_size_hint = 0;
+static bool g_wvm_kvm_bootstrap_done = false;
+static AccelState *g_wvm_kvm_accel = NULL;
+
+static const CpusAccel wavevm_cpus = {
+    .create_vcpu_thread = wavevm_start_vcpu_thread,
+};
 
 static int wavevm_auto_split_from_vcpus(int vcpus)
 {
@@ -208,18 +215,24 @@ static void *wavevm_master_ipc_thread(void *arg) {
         }
         // 2. 处理内存失效 (MESI Invalidate)
         else if (hdr.type == WVM_IPC_TYPE_MEM_WRITE) {
+            if (hdr.len < (int)sizeof(struct wvm_ipc_write_req)) continue;
             struct wvm_ipc_write_req *req = (struct wvm_ipc_write_req *)payload_buf;
             // 约定：len=0 表示 Invalidate
             if (req->len == 0) {
                 hwaddr len = 4096;
                 void *host_addr = cpu_physical_memory_map(req->gpa, &len, 1);
                 if (host_addr && len >= 4096) {
-                    mprotect(host_addr, 4096, PROT_NONE);
+                    // KVM 模式下不能用 mprotect(PROT_NONE)，
+                    // 否则 EPT 无法解析已被 mprotect 撤销的 HVA 映射，导致 VM Exit 风暴。
+                    if (!kvm_enabled()) {
+                        mprotect(host_addr, 4096, PROT_NONE);
+                    }
                     cpu_physical_memory_unmap(host_addr, len, 1, 0);
                 }
             }
         }
         else if (hdr.type == WVM_IPC_TYPE_INVALIDATE) { // Type 6
+            if (hdr.len < (int)sizeof(struct wvm_header)) continue;
             // 解包内部的 wvm_header
             struct wvm_header *net_hdr = (struct wvm_header *)payload_buf;
             void *net_payload = payload_buf + sizeof(struct wvm_header);
@@ -299,12 +312,26 @@ static void *wavevm_kernel_irq_thread(void *arg) {
     return NULL;
 }
 
+// Validate GPA range against actual QEMU RAM mapping (handles discontiguous RAM segments).
+static bool wavevm_gpa_range_valid(uint64_t gpa, uint32_t len, bool is_write)
+{
+    hwaddr map_len = len;
+    void *host_addr = cpu_physical_memory_map(gpa, &map_len, is_write ? 1 : 0);
+    if (!host_addr || map_len < len) {
+        if (host_addr) {
+            cpu_physical_memory_unmap(host_addr, map_len, is_write ? 1 : 0, 0);
+        }
+        return false;
+    }
+    cpu_physical_memory_unmap(host_addr, map_len, is_write ? 1 : 0, 0);
+    return true;
+}
+
 // Slave 网络处理线程 (支持 KVM 和 TCG 双模)
 static void *wavevm_slave_net_thread(void *arg) {
     WaveVMAccelState *s = (WaveVMAccelState *)arg;
-    CPUState *cpu = first_cpu; 
     #define BATCH_SIZE 64
-    #define MAX_PKT_SIZE 4096 
+    #define MAX_PKT_SIZE 8192
 
     struct mmsghdr msgs[BATCH_SIZE];
     struct iovec iovecs[BATCH_SIZE];
@@ -340,66 +367,141 @@ static void *wavevm_slave_net_thread(void *arg) {
                 struct wvm_header *hdr = (struct wvm_header *)buf;
                 void *payload = buf + sizeof(struct wvm_header);
 
+                // [安全] Magic 校验，丢弃非 WaveVM 包
+                if (ntohl(hdr->magic) != WVM_MAGIC) {
+                    continue;
+                }
+
+                // [字节序] 从网络字节序解码到主机序
+                uint16_t msg_type = ntohs(hdr->msg_type);
+                uint16_t pkt_payload_len = ntohs(hdr->payload_len);
+                int actual_payload = len - sizeof(struct wvm_header);
+
+                // [安全] 报文实际长度 vs 头部声明长度一致性校验
+                if (pkt_payload_len > actual_payload) {
+                    continue; // 截断包，丢弃
+                }
+
                 // 1. 内存写 (Master -> Slave)
-                if (hdr->msg_type == MSG_MEM_WRITE) {
-                    qemu_mutex_lock_iothread(); 
-                    if (hdr->payload_len > 8) {
-                        uint64_t gpa = *(uint64_t *)payload;
-                        uint32_t data_len = hdr->payload_len - 8;
+                if (msg_type == MSG_MEM_WRITE) {
+                    qemu_mutex_lock_iothread();
+                    if (pkt_payload_len > 8 && actual_payload >= pkt_payload_len) {
+                        uint64_t gpa = WVM_NTOHLL(*(uint64_t *)payload);
+                        uint32_t data_len = pkt_payload_len - 8;
                         void *data_ptr = (uint8_t *)payload + 8;
-                        cpu_physical_memory_write(gpa, data_ptr, data_len);
+                        bool gpa_ok = wavevm_gpa_range_valid(gpa, data_len, true);
+                        if (gpa_ok) {
+                            cpu_physical_memory_write(gpa, data_ptr, data_len);
+                        }
                     }
                     qemu_mutex_unlock_iothread();
-                    hdr->msg_type = MSG_MEM_ACK;
+                    hdr->msg_type = htons(MSG_MEM_ACK);
                     hdr->payload_len = 0;
-                    sendto(s->master_sock, buf, sizeof(struct wvm_header), 0, 
+                    hdr->crc32 = 0;
+                    hdr->crc32 = htonl(calculate_crc32(buf, sizeof(struct wvm_header)));
+                    sendto(s->master_sock, buf, sizeof(struct wvm_header), 0,
                           (struct sockaddr *)&addrs[i], sizeof(struct sockaddr_in));
                 }
                 // 2. 内存读 (Master -> Slave)
-                else if (hdr->msg_type == MSG_MEM_READ) {
-                    uint64_t gpa = *(uint64_t *)payload;
-                    uint32_t read_len = 4096; 
+                else if (msg_type == MSG_MEM_READ) {
+                    if (pkt_payload_len < 8) continue; // 至少需要 8 字节的 gpa
+                    uint64_t gpa = WVM_NTOHLL(*(uint64_t *)payload);
+                    uint32_t read_len = 4096;
+                    qemu_mutex_lock_iothread();
+                    bool gpa_ok = wavevm_gpa_range_valid(gpa, read_len, false);
+                    if (!gpa_ok) {
+                        qemu_mutex_unlock_iothread();
+                        hdr->msg_type = htons(MSG_MEM_ACK);
+                        hdr->payload_len = 0;
+                        hdr->crc32 = 0;
+                        hdr->crc32 = htonl(calculate_crc32(buf, sizeof(struct wvm_header)));
+                        sendto(s->master_sock, buf, sizeof(struct wvm_header), 0,
+                              (struct sockaddr *)&addrs[i], sizeof(struct sockaddr_in));
+                        continue;
+                    }
                     if (sizeof(struct wvm_header) + read_len <= MAX_PKT_SIZE) {
                         cpu_physical_memory_read(gpa, payload, read_len);
-                        hdr->msg_type = MSG_MEM_ACK;
-                        hdr->payload_len = read_len;
-                        sendto(s->master_sock, buf, sizeof(struct wvm_header) + read_len, 0, 
+                        qemu_mutex_unlock_iothread();
+                        hdr->msg_type = htons(MSG_MEM_ACK);
+                        hdr->payload_len = htons(read_len);
+                        hdr->crc32 = 0;
+                        hdr->crc32 = htonl(calculate_crc32(buf, sizeof(struct wvm_header) + read_len));
+                        sendto(s->master_sock, buf, sizeof(struct wvm_header) + read_len, 0,
                               (struct sockaddr *)&addrs[i], sizeof(struct sockaddr_in));
+                    } else {
+                        qemu_mutex_unlock_iothread();
                     }
                 }
                 // 3. 远程执行 (Master -> Slave)
-                else if (hdr->msg_type == MSG_VCPU_RUN) {
+                else if (msg_type == MSG_VCPU_RUN) {
+                    if (actual_payload < (int)sizeof(struct wvm_ipc_cpu_run_req)) continue;
                     struct wvm_ipc_cpu_run_req *req = (struct wvm_ipc_cpu_run_req *)payload;
                     qemu_mutex_lock_iothread(); // TCG 必须持有 BQL
+                    CPUState *cpu = first_cpu;
+                    if (!cpu) {
+                        qemu_mutex_unlock_iothread();
+                        fprintf(stderr, "[WaveVM-Slave] CPU not ready, skip MSG_VCPU_RUN.\n");
+                        continue;
+                    }
                     
-                    // A. 恢复上下文
-                    if (hdr->mode_tcg) {
-                        // TCG 模式：直接写入 env
-                        wvm_tcg_set_state(cpu, &req->ctx.tcg);
-                    } else if (kvm_enabled()) {
-                        // KVM 模式：ioctl 设置
-                        struct kvm_regs kregs; struct kvm_sregs ksregs;
-                        wvm_kvm_context_t *kctx = &req->ctx.kvm;
-                        kregs.rax = kctx->rax; kregs.rbx = kctx->rbx; kregs.rcx = kctx->rcx;
-                        kregs.rdx = kctx->rdx; kregs.rsi = kctx->rsi; kregs.rdi = kctx->rdi;
-                        kregs.rsp = kctx->rsp; kregs.rbp = kctx->rbp;
-                        kregs.r8  = kctx->r8;  kregs.r9  = kctx->r9;  kregs.r10 = kctx->r10;
-                        kregs.r11 = kctx->r11; kregs.r12 = kctx->r12; kregs.r13 = kctx->r13;
-                        kregs.r14 = kctx->r14; kregs.r15 = kctx->r15;
-                        kregs.rip = kctx->rip; kregs.rflags = kctx->rflags;
-                        memcpy(&ksregs, kctx->sregs_data, sizeof(ksregs));
-                        kvm_vcpu_ioctl(cpu, KVM_SET_SREGS, &ksregs);
-                        kvm_vcpu_ioctl(cpu, KVM_SET_REGS, &kregs);
+                    bool local_is_tcg = !kvm_enabled(); // 判定本地引擎
+                    
+                    // A. 恢复上下文：只有不一样的时候才转换
+                    if (hdr->mode_tcg == local_is_tcg) {
+                        // 同态：零转换
+                        if (local_is_tcg) {
+                            wvm_tcg_set_state(cpu, &req->ctx.tcg);
+                        } else {
+                            // KVM 模式：ioctl 设置
+                            struct kvm_regs kregs; struct kvm_sregs ksregs;
+                            wvm_kvm_context_t *kctx = &req->ctx.kvm;
+                            kregs.rax = kctx->rax; kregs.rbx = kctx->rbx; kregs.rcx = kctx->rcx;
+                            kregs.rdx = kctx->rdx; kregs.rsi = kctx->rsi; kregs.rdi = kctx->rdi;
+                            kregs.rsp = kctx->rsp; kregs.rbp = kctx->rbp;
+                            kregs.r8  = kctx->r8;  kregs.r9  = kctx->r9;  kregs.r10 = kctx->r10;
+                            kregs.r11 = kctx->r11; kregs.r12 = kctx->r12; kregs.r13 = kctx->r13;
+                            kregs.r14 = kctx->r14; kregs.r15 = kctx->r15;
+                            kregs.rip = kctx->rip; kregs.rflags = kctx->rflags;
+                            memcpy(&ksregs, kctx->sregs_data, sizeof(ksregs));
+                            kvm_vcpu_ioctl(cpu, KVM_SET_SREGS, &ksregs);
+                            kvm_vcpu_ioctl(cpu, KVM_SET_REGS, &kregs);
+                        }
+                    } else {
+                        // 异构：转换计算
+                        if (local_is_tcg) { // 远端 KVM，本地 TCG
+                            wvm_tcg_context_t t_ctx;
+                            struct kvm_regs kregs; struct kvm_sregs ksregs;
+                            // 1. 从 req 取出 kvm 格式
+                            kregs.rax = req->ctx.kvm.rax; kregs.rbx = req->ctx.kvm.rbx; kregs.rcx = req->ctx.kvm.rcx;
+                            kregs.rdx = req->ctx.kvm.rdx; kregs.rsi = req->ctx.kvm.rsi; kregs.rdi = req->ctx.kvm.rdi;
+                            kregs.rsp = req->ctx.kvm.rsp; kregs.rbp = req->ctx.kvm.rbp;
+                            kregs.r8  = req->ctx.kvm.r8;  kregs.r9  = req->ctx.kvm.r9;  kregs.r10 = req->ctx.kvm.r10;
+                            kregs.r11 = req->ctx.kvm.r11; kregs.r12 = req->ctx.kvm.r12; kregs.r13 = req->ctx.kvm.r13;
+                            kregs.r14 = req->ctx.kvm.r14; kregs.r15 = req->ctx.kvm.r15;
+                            kregs.rip = req->ctx.kvm.rip; kregs.rflags = req->ctx.kvm.rflags;
+                            memcpy(&ksregs, req->ctx.kvm.sregs_data, sizeof(ksregs));
+                            // 2. 换成本地格式
+                            wvm_translate_kvm_to_tcg(&kregs, &ksregs, &t_ctx);
+                            wvm_tcg_set_state(cpu, &t_ctx);
+                        } else { // 远端 TCG，本地 KVM
+                            struct kvm_regs kregs; struct kvm_sregs ksregs;
+                            kvm_vcpu_ioctl(cpu, KVM_GET_SREGS, &ksregs); // 取底版
+                            // 换成本地格式
+                            wvm_translate_tcg_to_kvm(&req->ctx.tcg, &kregs, &ksregs);
+                            kvm_vcpu_ioctl(cpu, KVM_SET_SREGS, &ksregs);
+                            kvm_vcpu_ioctl(cpu, KVM_SET_REGS, &kregs);
+                        }
                     }
 
                     // B. 执行循环
                     cpu->stop = false; cpu->halted = 0; cpu->exception_index = -1;
                     
-                    if (hdr->mode_tcg) {
+                    if (local_is_tcg) {
                         // [TCG 关键] 使用 cpu_exec 运行直到退出/中断/异常
                         cpu_exec(cpu);
-                    } else if (kvm_enabled()) {
+                    } else {
                         // [KVM 关键]
+                        qemu_mutex_unlock_iothread();
                         int ret;
                         do {
                             ret = kvm_vcpu_ioctl(cpu, KVM_RUN, 0);
@@ -410,55 +512,90 @@ static void *wavevm_slave_net_thread(void *arg) {
                                     reason == KVM_EXIT_FAIL_ENTRY) break;
                             }
                         } while (ret > 0 || ret == -EINTR);
+                        qemu_mutex_lock_iothread();
                     }
 
                     // C. 导出上下文并回包
                     struct wvm_ipc_cpu_run_ack *ack = (struct wvm_ipc_cpu_run_ack *)payload;
-                    if (hdr->mode_tcg) {
-                        ack->mode_tcg = 1;
-                        wvm_tcg_get_state(cpu, &ack->ctx.tcg);
-                    } else if (kvm_enabled()) {
-                        ack->mode_tcg = 0;
-                        struct kvm_regs kregs; struct kvm_sregs ksregs;
-                        wvm_kvm_context_t *kctx = &ack->ctx.kvm;
-                        kvm_vcpu_ioctl(cpu, KVM_GET_REGS, &kregs);
-                        kvm_vcpu_ioctl(cpu, KVM_GET_SREGS, &ksregs);
-                        kctx->rax = kregs.rax; kctx->rbx = kregs.rbx; kctx->rcx = kregs.rcx;
-                        kctx->rdx = kregs.rdx; kctx->rsi = kregs.rsi; kctx->rdi = kregs.rdi;
-                        kctx->rsp = kregs.rsp; kctx->rbp = kregs.rbp;
-                        kctx->r8  = kregs.r8;  kctx->r9  = kregs.r9;  kctx->r10 = kregs.r10;
-                        kctx->r11 = kregs.r11; kctx->r12 = kregs.r12; kctx->r13 = kregs.r13;
-                        kctx->r14 = kregs.r14; kctx->r15 = kregs.r15;
-                        kctx->rip = kregs.rip; kctx->rflags = kregs.rflags;
-                        memcpy(kctx->sregs_data, &ksregs, sizeof(ksregs));
+                    ack->mode_tcg = hdr->mode_tcg; 
+                    
+                    if (hdr->mode_tcg == local_is_tcg) {
+                        // 同态返回
+                        if (local_is_tcg) {
+                            wvm_tcg_get_state(cpu, &ack->ctx.tcg);
+                            ack->ctx.tcg.exit_reason = cpu->exception_index;
+                        }
+                        else {
+                            struct kvm_regs kregs; struct kvm_sregs ksregs;
+                            wvm_kvm_context_t *kctx = &ack->ctx.kvm;
+                            kvm_vcpu_ioctl(cpu, KVM_GET_REGS, &kregs);
+                            kvm_vcpu_ioctl(cpu, KVM_GET_SREGS, &ksregs);
+                            kctx->rax = kregs.rax; kctx->rbx = kregs.rbx; kctx->rcx = kregs.rcx;
+                            kctx->rdx = kregs.rdx; kctx->rsi = kregs.rsi; kctx->rdi = kregs.rdi;
+                            kctx->rsp = kregs.rsp; kctx->rbp = kregs.rbp;
+                            kctx->r8  = kregs.r8;  kctx->r9  = kregs.r9;  kctx->r10 = kregs.r10;
+                            kctx->r11 = kregs.r11; kctx->r12 = kregs.r12; kctx->r13 = kregs.r13;
+                            kctx->r14 = kregs.r14; kctx->r15 = kregs.r15;
+                            kctx->rip = kregs.rip; kctx->rflags = kregs.rflags;
+                            memcpy(kctx->sregs_data, &ksregs, sizeof(ksregs));
                         
-                        struct kvm_run *run = cpu->kvm_run;
-                        kctx->exit_reason = run->exit_reason;
-                        if (run->exit_reason == KVM_EXIT_IO) {
-                            kctx->io.direction = run->io.direction;
-                            kctx->io.size      = run->io.size;
-                            kctx->io.port      = run->io.port;
-                            kctx->io.count     = run->io.count;
-                            if (run->io.direction == KVM_EXIT_IO_OUT) {
-                                size_t io_bytes = run->io.size * run->io.count;
-                                if (io_bytes > sizeof(kctx->io.data)) {
-                                    io_bytes = sizeof(kctx->io.data);
+                            struct kvm_run *run = cpu->kvm_run;
+                            kctx->exit_reason = run->exit_reason;
+                            if (run->exit_reason == KVM_EXIT_IO) {
+                                kctx->io.direction = run->io.direction;
+                                kctx->io.size      = run->io.size;
+                                kctx->io.port      = run->io.port;
+                                kctx->io.count     = run->io.count;
+                                if (run->io.direction == KVM_EXIT_IO_OUT) {
+                                    size_t io_bytes = run->io.size * run->io.count;
+                                    if (io_bytes > sizeof(kctx->io.data)) {
+                                        io_bytes = sizeof(kctx->io.data);
+                                    }
+                                    memcpy(kctx->io.data,
+                                           (uint8_t *)run + run->io.data_offset,
+                                           io_bytes);
                                 }
-                                memcpy(kctx->io.data,
-                                       (uint8_t *)run + run->io.data_offset,
-                                       io_bytes);
+                            } else if (run->exit_reason == KVM_EXIT_MMIO) {
+                                kctx->mmio.phys_addr = run->mmio.phys_addr;
+                                kctx->mmio.len       = run->mmio.len;
+                                kctx->mmio.is_write  = run->mmio.is_write;
+                                memcpy(kctx->mmio.data, run->mmio.data, 8);
                             }
-                        } else if (run->exit_reason == KVM_EXIT_MMIO) {
-                            kctx->mmio.phys_addr = run->mmio.phys_addr;
-                            kctx->mmio.len       = run->mmio.len;
-                            kctx->mmio.is_write  = run->mmio.is_write;
-                            memcpy(kctx->mmio.data, run->mmio.data, 8);
+                        }
+                    } else {
+                        // 异构转换返回
+                        if (local_is_tcg) { // 本地 TCG 跑完，要还回 KVM
+                            wvm_tcg_context_t t_ctx;
+                            wvm_tcg_get_state(cpu, &t_ctx);
+                            struct kvm_regs kregs; struct kvm_sregs ksregs;
+                            
+                            // 因为 TCG 不修改隐藏段，直接把原来的 sregs 抄过来，再用 translate 覆盖可见部分
+                            memcpy(&ksregs, req->ctx.kvm.sregs_data, sizeof(ksregs));
+                            wvm_translate_tcg_to_kvm(&t_ctx, &kregs, &ksregs);
+                            ack->ctx.kvm.rax = kregs.rax; ack->ctx.kvm.rbx = kregs.rbx; ack->ctx.kvm.rcx = kregs.rcx;
+                            ack->ctx.kvm.rdx = kregs.rdx; ack->ctx.kvm.rsi = kregs.rsi; ack->ctx.kvm.rdi = kregs.rdi;
+                            ack->ctx.kvm.rsp = kregs.rsp; ack->ctx.kvm.rbp = kregs.rbp;
+                            ack->ctx.kvm.r8  = kregs.r8;  ack->ctx.kvm.r9  = kregs.r9;  ack->ctx.kvm.r10 = kregs.r10;
+                            ack->ctx.kvm.r11 = kregs.r11; ack->ctx.kvm.r12 = kregs.r12; ack->ctx.kvm.r13 = kregs.r13;
+                            ack->ctx.kvm.r14 = kregs.r14; ack->ctx.kvm.r15 = kregs.r15;
+                            ack->ctx.kvm.rip = kregs.rip; ack->ctx.kvm.rflags = kregs.rflags;
+                            ack->ctx.kvm.exit_reason = t_ctx.exit_reason;
+                            memcpy(ack->ctx.kvm.sregs_data, &ksregs, sizeof(ksregs));
+                        } else { // 本地 KVM 跑完，要还回 TCG
+                            struct kvm_regs kregs; struct kvm_sregs ksregs;
+                            kvm_vcpu_ioctl(cpu, KVM_GET_REGS, &kregs);
+                            kvm_vcpu_ioctl(cpu, KVM_GET_SREGS, &ksregs);
+                            wvm_translate_kvm_to_tcg(&kregs, &ksregs, &ack->ctx.tcg);
+                            ack->ctx.tcg.exit_reason = cpu->kvm_run->exit_reason;
                         }
                     }
                     qemu_mutex_unlock_iothread();
-                    sendto(s->master_sock, buf, msgs[i].msg_len, 0, 
+                    hdr->msg_type = htons(MSG_VCPU_EXIT);
+                    hdr->crc32 = 0;
+                    hdr->crc32 = htonl(calculate_crc32(buf, msgs[i].msg_len));
+                    sendto(s->master_sock, buf, msgs[i].msg_len, 0,
                           (struct sockaddr *)&addrs[i], sizeof(struct sockaddr_in));
-                } else if (hdr->msg_type == MSG_PING) {
+                } else if (msg_type == MSG_PING) {
                     // [FIX] 透传 PING 给 Gateway/Master，由真正的 Owner 回复 ACK
                     sendto(s->master_sock, buf, sizeof(struct wvm_header), 0, 
                           (struct sockaddr *)&addrs[i], sizeof(struct sockaddr_in));
@@ -510,12 +647,17 @@ static int wavevm_init_machine_user(WaveVMAccelState *s, MachineState *ms) {
         wavevm_setup_memory_region(ms->ram, ms->ram_size, shm_fd);
         close(shm_fd);
         
-        // Start KVM Sync Thread (Only needed for KVM Master)
+        // [FIX-G4] IPC 监听线程必须无条件启动 (KVM + TCG 都需要接收 Invalidate)
+        // dirty_sync_thread 仅 KVM 需要 (TCG 由 user-mem harvester 处理)
+        s->sync_thread_running = true;
+
+        // [FIX-F1] 初始化 Block IO 持久连接状态
+        s->block_io_sock = -1;
+        qemu_mutex_init(&s->block_io_lock);
+
+        qemu_thread_create(&s->ipc_thread, "wvm-ipc-rx", wavevm_master_ipc_thread, s, QEMU_THREAD_DETACHED);
         if (kvm_enabled()) {
-            s->sync_thread_running = true;
             qemu_thread_create(&s->sync_thread, "wvm-sync", wavevm_dirty_sync_thread, s, QEMU_THREAD_DETACHED);
-            // 启动 IPC 监听线程 (处理 VFIO 中断)
-            qemu_thread_create(&s->ipc_thread, "wvm-ipc-rx", wavevm_master_ipc_thread, s, QEMU_THREAD_DETACHED);
         }
     }
         
@@ -546,6 +688,14 @@ static int wavevm_init_machine_user(WaveVMAccelState *s, MachineState *ms) {
 
 static struct wvm_ioctl_mem_layout global_layout;
 
+static bool wavevm_user_mode_enabled(void)
+{
+    if (!current_machine || !current_machine->accelerator) {
+        return false;
+    }
+    return WAVEVM_ACCEL(current_machine->accelerator)->mode == WVM_MODE_USER;
+}
+
 static void wavevm_region_add(MemoryListener *listener, MemoryRegionSection *section) {
     if (!memory_region_is_ram(section->mr)) return;
 
@@ -560,17 +710,30 @@ static void wavevm_region_add(MemoryListener *listener, MemoryRegionSection *sec
         global_layout.slots[global_layout.count].size = size;
         global_layout.count++;
         
-        // 同时通知 User-Mem 映射表
         void *hva = memory_region_get_ram_ptr(section->mr) + section->offset_within_region;
-        extern void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa);
-        wavevm_register_ram_block(hva, size, start_gpa);
+
+        /* User-mem fault hook is only valid in user mode. */
+        if (wavevm_user_mode_enabled()) {
+            extern void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa);
+            wavevm_register_ram_block(hva, size, start_gpa);
+        }
         if (start_gpa == 0 && !g_primary_ram_hva) {
             g_primary_ram_hva = hva;
             g_primary_ram_size = size;
         }
-        if (start_gpa == 0 && !g_user_mem_inited) {
+        if (wavevm_user_mode_enabled() && start_gpa == 0 && !g_user_mem_inited) {
             wavevm_user_mem_init(hva, g_user_ram_size_hint ? g_user_ram_size_hint : size);
             g_user_mem_inited = true;
+        }
+
+        /* [FIX] Mode A: 每次新增 RAM block 都实时同步给内核模块，
+         * 修复 wavevm_init_machine 中 wavevm_sync_topology 先于 RAM 创建的时序问题。
+         * 若不实时同步，wvm_fault_handler 的 g_mem_slots 为空 → VM_FAULT_SIGBUS → exit=17。 */
+        if (!wavevm_user_mode_enabled()) {
+            WaveVMAccelState *ws = WAVEVM_ACCEL(current_machine->accelerator);
+            if (ws->dev_fd >= 0) {
+                wavevm_sync_topology(ws->dev_fd);
+            }
         }
     }
 }
@@ -590,6 +753,8 @@ static MemoryListener wavevm_mem_listener = {
 static int wavevm_init_machine(MachineState *ms) {
     WaveVMAccelState *s = WAVEVM_ACCEL(ms->accelerator);
     bool has_wvm_dev = (access("/dev/wavevm", R_OK | W_OK) == 0);
+    const char *disable_auto_kvm = getenv("WVM_DISABLE_AUTO_KVM");
+    bool auto_kvm_enabled = !(disable_auto_kvm && atoi(disable_auto_kvm) == 1);
     char *role = getenv("WVM_ROLE");
     bool is_slave = (role && strcmp(role, "SLAVE") == 0);
 
@@ -610,6 +775,50 @@ static int wavevm_init_machine(MachineState *ms) {
     wavevm_resolve_split(ms);
 
     memory_listener_register(&wavevm_mem_listener, &address_space_memory);
+
+    if (!g_wvm_kvm_bootstrap_done) {
+        AccelClass *kvm_ac;
+        AccelState *saved_accel;
+        const char *mode_str = (s->mode == WVM_MODE_USER) ? "user" : "kernel";
+
+        g_wvm_kvm_bootstrap_done = true;
+        if (!auto_kvm_enabled) {
+            fprintf(stderr, "[WaveVM] Auto-KVM disabled by WVM_DISABLE_AUTO_KVM=1 (mode=%s)\n",
+                    mode_str);
+        } else if (access("/dev/kvm", R_OK | W_OK) == 0) {
+            kvm_ac = accel_find("kvm");
+            if (kvm_ac && kvm_ac->init_machine) {
+                g_wvm_kvm_accel = ACCEL(object_new(ACCEL_CLASS_NAME("kvm")));
+                if (g_wvm_kvm_accel) {
+#ifdef CONFIG_KVM
+                    kvm_allowed = true;
+#endif
+                    saved_accel = ms->accelerator;
+                    ms->accelerator = g_wvm_kvm_accel;
+                    ret = kvm_ac->init_machine(ms);
+                    ms->accelerator = saved_accel;
+
+                    if (ret == 0) {
+                        cpus_register_accel(&wavevm_cpus);
+                        fprintf(stderr, "[WaveVM] KVM bootstrap OK (mode=%s), keep wavevm vCPU control (kvm_enabled=%d)\n",
+                                mode_str, kvm_enabled() ? 1 : 0);
+                    } else {
+#ifdef CONFIG_KVM
+                        kvm_allowed = false;
+#endif
+                        object_unref(OBJECT(g_wvm_kvm_accel));
+                        g_wvm_kvm_accel = NULL;
+                        ret = 0;
+                        fprintf(stderr, "[WaveVM] KVM bootstrap failed (mode=%s), stay on TCG path\n",
+                                mode_str);
+                    }
+                }
+            }
+        } else {
+            fprintf(stderr, "[WaveVM] /dev/kvm not available (mode=%s), stay on TCG path\n",
+                    mode_str);
+        }
+    }
 
     if (s->mode == WVM_MODE_KERNEL) ret = wavevm_init_machine_kernel(s, ms);
     else ret = wavevm_init_machine_user(s, ms);
@@ -713,9 +922,6 @@ static void wavevm_accel_init(Object *obj) {
 }
 static void wavevm_accel_class_init(ObjectClass *oc, void *data) {
     AccelClass *ac = ACCEL_CLASS(oc);
-    static const CpusAccel wavevm_cpus = {
-        .create_vcpu_thread = wavevm_start_vcpu_thread,
-    };
 
     ac->name = "wavevm";
     ac->init_machine = wavevm_init_machine;
@@ -857,4 +1063,103 @@ int wvm_send_rpc_sync(uint16_t msg_type, void *payload, size_t len) {
 
     if (needs_close) close(fd);
     return -1; // Fail/Timeout
+}
+
+// -----------------------------------------------------------
+// [V30 BLOCK IO FINAL] 分布式存储 IPC 发送实现 (Thread-Safe)
+// -----------------------------------------------------------
+
+// 结构体必须与 Daemon 端严格对齐 (Packed 13 Bytes)
+struct wvm_ipc_block_req {
+    uint64_t lba;
+    uint32_t len;
+    uint8_t  is_write;
+    uint8_t  data[0];
+} __attribute__((packed));
+
+/*
+ * [物理意图] 将 virtio-blk 的 IO 请求序列化并通过 IPC 管道发送给 Master Daemon。
+ * [关键逻辑] 封装 WVM_IPC_TYPE_BLOCK_IO 消息头，如果是写操作则携带 Payload。
+ * [后果] 这是存储拦截的"出口"。没有它，wavevm-block-hook.c 拦截下来的 IO 请求就烂在肚子里了。
+ */
+int wvm_send_ipc_block_io(uint64_t lba, void *buf, uint32_t len, int is_write) {
+    WaveVMAccelState *s = WAVEVM_ACCEL(current_machine->accelerator);
+
+    // 1. Slave 模式不直接发起存储请求
+    char *role = getenv("WVM_ROLE");
+    if (role && strcmp(role, "SLAVE") == 0) {
+        return -1;
+    }
+
+    // [FIX-F1] 使用持久 IPC 连接，避免每次 Block IO 都 connect() -> Master pthread_create()
+    // 旧代码每次调用 connect_to_master_helper() 创建新连接，Master 侧每个 accept()
+    // 都 spawn 新线程，5000 IOPS 下秒创 5000 线程导致系统崩溃。
+    // 修复方案：保持一条持久连接，用 mutex 序列化请求。Block IO 本身是同步等待的，
+    // 串行化不会额外降低吞吐，反而消除了连接建立/销毁开销。
+    qemu_mutex_lock(&s->block_io_lock);
+
+    // 惰性初始化 + 断线重连
+    if (s->block_io_sock < 0) {
+        s->block_io_sock = connect_to_master_helper();
+        if (s->block_io_sock < 0) {
+            qemu_mutex_unlock(&s->block_io_lock);
+            return -1;
+        }
+    }
+
+    int fd = s->block_io_sock;
+
+    // 2. 计算包大小
+    size_t meta_size = sizeof(struct wvm_ipc_block_req);
+    size_t payload_len = meta_size + (is_write ? len : 0);
+    size_t total_size = sizeof(struct wvm_ipc_header_t) + payload_len;
+
+    // 3. 分配缓冲区
+    uint8_t *buffer = g_malloc(total_size);
+    if (!buffer) {
+        qemu_mutex_unlock(&s->block_io_lock);
+        return -1;
+    }
+
+    // 4. 填充头部
+    struct wvm_ipc_header_t *ipc_hdr = (struct wvm_ipc_header_t *)buffer;
+    ipc_hdr->type = WVM_IPC_TYPE_BLOCK_IO; // Type 7
+    ipc_hdr->len = payload_len;
+
+    // 5. 填充请求体
+    struct wvm_ipc_block_req *req = (struct wvm_ipc_block_req *)(buffer + sizeof(struct wvm_ipc_header_t));
+    req->lba = lba;
+    req->len = len;
+    req->is_write = (uint8_t)is_write;
+
+    if (is_write && buf) {
+        memcpy(req->data, buf, len);
+    }
+
+    // 6. 原子发送
+    int ret = 0;
+    if (write_all(fd, buffer, total_size) < 0) {
+        ret = -1;
+    }
+
+    // 7. 等待 Daemon 的同步确认与数据回传
+    uint8_t ack_byte;
+    if (ret == 0 && (read_all(fd, &ack_byte, 1) < 0 || ack_byte == 0)) {
+        ret = -1;
+    } else if (ret == 0 && !is_write && buf && len > 0) {
+        if (read_all(fd, buf, len) < 0) {
+            ret = -1;
+        }
+    }
+
+    g_free(buffer);
+
+    // [FIX-F1] 如果通信失败，关闭连接以便下次重建（断线重连）
+    if (ret < 0) {
+        close(s->block_io_sock);
+        s->block_io_sock = -1;
+    }
+
+    qemu_mutex_unlock(&s->block_io_lock);
+    return ret;
 }

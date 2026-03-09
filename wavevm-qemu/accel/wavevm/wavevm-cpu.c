@@ -5,11 +5,13 @@
 #include "sysemu/hw_accel.h"
 #include "sysemu/kvm.h" 
 #include "sysemu/runstate.h"
+#include "qapi/error.h"
 #include "linux/kvm.h"
 #include "hw/boards.h"
 #include "qemu/main-loop.h"
 #include "exec/address-spaces.h"
 #include "exec/cpu-all.h"
+#include "../kvm/kvm-cpus.h"
 #include "../../../common_include/wavevm_protocol.h" 
 #include "../../../common_include/wavevm_config.h"
 #include "../../../common_include/wavevm_ioctl.h"
@@ -167,14 +169,6 @@ static int remote_rpc_policy(int cpu_index) {
 
 static struct wavevm_policy_ops ops = { .schedule_policy = remote_rpc_policy };
 
-static uint32_t wavevm_pick_target_slave(const CPUState *cpu)
-{
-    if (g_wvm_local_split > 0 && cpu->cpu_index >= g_wvm_local_split) {
-        return 1;
-    }
-    return 0;
-}
-
 static bool wavevm_valid_io_exit(const struct kvm_run *run)
 {
     if (run->io.size != 1 && run->io.size != 2 &&
@@ -193,6 +187,28 @@ static bool wavevm_valid_mmio_exit(const struct kvm_run *run)
            run->mmio.len == 4 || run->mmio.len == 8;
 }
 
+/* Keep local APIC/interrupt state and only import architectural sregs fields. */
+static void wavevm_apply_arch_sregs(struct kvm_sregs *dst,
+                                    const struct kvm_sregs *src)
+{
+    dst->cs = src->cs;
+    dst->ds = src->ds;
+    dst->es = src->es;
+    dst->fs = src->fs;
+    dst->gs = src->gs;
+    dst->ss = src->ss;
+    dst->tr = src->tr;
+    dst->ldt = src->ldt;
+    dst->gdt = src->gdt;
+    dst->idt = src->idt;
+    dst->cr0 = src->cr0;
+    dst->cr2 = src->cr2;
+    dst->cr3 = src->cr3;
+    dst->cr4 = src->cr4;
+    dst->cr8 = src->cr8;
+    dst->efer = src->efer;
+}
+
 /* 
  * [物理意图] 充当远程 Slave 的“本地代理执行人”。
  * [关键逻辑] 当远程计算节点触发 PIO/MMIO 退出时，Master 在本地 QEMU 中代为执行该 I/O 操作并返回结果。
@@ -202,10 +218,14 @@ static void wavevm_handle_io(CPUState *cpu) {
     struct kvm_run *run = cpu->kvm_run;
     uint16_t port = run->io.port;
     void *data = (uint8_t *)run + run->io.data_offset;
-    
-    address_space_rw(&address_space_io, port, MEMTXATTRS_UNSPECIFIED,
-                     data, run->io.size,
-                     run->io.direction == KVM_EXIT_IO_OUT);
+    int is_write = (run->io.direction == KVM_EXIT_IO_OUT);
+
+    /* [FIX] 处理 string I/O (REP INS/OUTS)：count 可能 > 1，需逐个迭代 */
+    for (uint32_t i = 0; i < run->io.count; i++) {
+        address_space_rw(&address_space_io, port, MEMTXATTRS_UNSPECIFIED,
+                         data, run->io.size, is_write);
+        data = (uint8_t *)data + run->io.size;
+    }
 }
 
 static void wavevm_handle_mmio(CPUState *cpu) {
@@ -247,7 +267,7 @@ static void wavevm_remote_exec(CPUState *cpu) {
         struct wvm_ipc_cpu_run_ack ack;
         memset(&req, 0, sizeof(req));
         
-        req.slave_id = wavevm_pick_target_slave(cpu);
+        req.slave_id = WVM_NODE_AUTO_ROUTE;
         req.vcpu_index = cpu->cpu_index;
 
         // 2. 序列化 CPU 状态
@@ -302,7 +322,8 @@ static void wavevm_remote_exec(CPUState *cpu) {
             kregs.r14 = kctx->r14; kregs.r15 = kctx->r15;
             kregs.rip = kctx->rip; kregs.rflags = kctx->rflags;
             
-            memcpy(&ksregs, kctx->sregs_data, sizeof(ksregs));
+            ioctl(cpu->kvm_fd, KVM_GET_SREGS, &ksregs);
+            wavevm_apply_arch_sregs(&ksregs, (const struct kvm_sregs *)kctx->sregs_data);
             ioctl(cpu->kvm_fd, KVM_SET_SREGS, &ksregs);
             ioctl(cpu->kvm_fd, KVM_SET_REGS, &kregs);
             
@@ -357,7 +378,7 @@ static void wavevm_remote_exec(CPUState *cpu) {
     struct wvm_ipc_cpu_run_ack ack;
     memset(&req, 0, sizeof(req));
 
-    req.slave_id = wavevm_pick_target_slave(cpu);
+    req.slave_id = WVM_NODE_AUTO_ROUTE;
     req.vcpu_index = cpu->cpu_index;
 
     // 1. 序列化 CPU 状态 (Serialization)
@@ -369,7 +390,7 @@ static void wavevm_remote_exec(CPUState *cpu) {
         ioctl(cpu->kvm_fd, KVM_GET_SREGS, &ksregs);
 
         req.mode_tcg = 0;
-        
+
         wvm_kvm_context_t *kctx = &req.ctx.kvm;
         kctx->rax = kregs.rax; kctx->rbx = kregs.rbx; kctx->rcx = kregs.rcx;
         kctx->rdx = kregs.rdx; kctx->rsi = kregs.rsi; kctx->rdi = kregs.rdi;
@@ -379,6 +400,31 @@ static void wavevm_remote_exec(CPUState *cpu) {
         kctx->r14 = kregs.r14; kctx->r15 = kregs.r15;
         kctx->rip = kregs.rip; kctx->rflags = kregs.rflags;
         memcpy(kctx->sregs_data, &ksregs, sizeof(ksregs));
+
+        /* [FIX] 携带上一轮 IO/MMIO 处理结果：
+         * 若上次远程执行触发了 IO IN 或 MMIO READ，Master 已在本地
+         * wavevm_handle_io/mmio 中将设备读结果填入 run->io.data / mmio.data。
+         * Slave 需要这些数据在下次 KVM_RUN 时完成未决的 IO 指令。 */
+        struct kvm_run *run = cpu->kvm_run;
+        kctx->exit_reason = run->exit_reason;
+        if (run->exit_reason == KVM_EXIT_IO) {
+            kctx->io.direction = run->io.direction;
+            kctx->io.size      = run->io.size;
+            kctx->io.port      = run->io.port;
+            kctx->io.count     = run->io.count;
+            if (run->io.direction == KVM_EXIT_IO_IN) {
+                size_t io_bytes = (size_t)run->io.size * run->io.count;
+                if (io_bytes > sizeof(kctx->io.data)) io_bytes = sizeof(kctx->io.data);
+                memcpy(kctx->io.data, (uint8_t *)run + run->io.data_offset, io_bytes);
+            }
+        } else if (run->exit_reason == KVM_EXIT_MMIO) {
+            kctx->mmio.phys_addr = run->mmio.phys_addr;
+            kctx->mmio.len       = run->mmio.len;
+            kctx->mmio.is_write  = run->mmio.is_write;
+            if (!run->mmio.is_write) {
+                memcpy(kctx->mmio.data, run->mmio.data, 8);
+            }
+        }
     } else {
         req.mode_tcg = 1;
         wvm_tcg_get_state(cpu, &req.ctx.tcg);
@@ -416,7 +462,8 @@ static void wavevm_remote_exec(CPUState *cpu) {
         kregs.r14 = kctx->r14; kregs.r15 = kctx->r15;
         kregs.rip = kctx->rip; kregs.rflags = kctx->rflags;
         
-        memcpy(&ksregs, kctx->sregs_data, sizeof(ksregs));
+        ioctl(cpu->kvm_fd, KVM_GET_SREGS, &ksregs);
+        wavevm_apply_arch_sregs(&ksregs, (const struct kvm_sregs *)kctx->sregs_data);
         ioctl(cpu->kvm_fd, KVM_SET_SREGS, &ksregs);
         ioctl(cpu->kvm_fd, KVM_SET_REGS, &kregs);
         
@@ -481,12 +528,31 @@ static void *wavevm_cpu_thread_fn(void *arg) {
     
     if (kvm_enabled()) {
         qemu_mutex_lock_iothread();
+        kvm_init_vcpu(cpu, &error_fatal);
+        kvm_init_cpu_signals(cpu);
         cpu_synchronize_state(cpu);
         qemu_mutex_unlock_iothread();
     }
 
+    /*
+     * WaveVM user path may run with kvm_enabled()==false while x86 CPU only
+     * has a single address space entry initialized. Local cpu_exec() will hit
+     * SMM MMU index and crash very early. In this fallback, route vCPU to the
+     * remote executor path and avoid local TCG execution.
+     */
+    if (!kvm_enabled() && cpu->num_ases < 2 && g_wvm_local_split > 0) {
+        g_wvm_local_split = 0;
+    }
+
     while (1) {
         if (cpu->unplug || cpu->stop) break;
+
+        // Guard against early execution before CPU address spaces are initialized.
+        // Without this, TCG may dereference a NULL memory dispatch table at boot.
+        if (!cpu_get_address_space(cpu, 0)) {
+            g_usleep(1000);
+            continue;
+        }
 
         if (ops.schedule_policy(cpu->cpu_index) == 1) {
             wavevm_remote_exec(cpu);
@@ -495,9 +561,7 @@ static void *wavevm_cpu_thread_fn(void *arg) {
 
         if (cpu_can_run(cpu)) {
             if (kvm_enabled()) {
-                qemu_mutex_lock_iothread();
                 ret = kvm_vcpu_ioctl(cpu, KVM_RUN, 0);
-                qemu_mutex_unlock_iothread();
 
                 if (ret < 0) {
                     if (errno == EINTR || errno == EAGAIN) continue;
@@ -507,8 +571,16 @@ static void *wavevm_cpu_thread_fn(void *arg) {
                 
                 struct kvm_run *run = cpu->kvm_run;
                 switch (run->exit_reason) {
-                    case KVM_EXIT_IO: wavevm_handle_io(cpu); break;
-                    case KVM_EXIT_MMIO: wavevm_handle_mmio(cpu); break;
+                    case KVM_EXIT_IO:
+                        qemu_mutex_lock_iothread();
+                        wavevm_handle_io(cpu);
+                        qemu_mutex_unlock_iothread();
+                        break;
+                    case KVM_EXIT_MMIO:
+                        qemu_mutex_lock_iothread();
+                        wavevm_handle_mmio(cpu);
+                        qemu_mutex_unlock_iothread();
+                        break;
                     case KVM_EXIT_SHUTDOWN: 
                         qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
                         goto out;
@@ -530,6 +602,11 @@ static void *wavevm_cpu_thread_fn(void *arg) {
         }
     }
 out:
+    if (kvm_enabled() && cpu->kvm_fd >= 0) {
+        qemu_mutex_lock_iothread();
+        kvm_destroy_vcpu(cpu);
+        qemu_mutex_unlock_iothread();
+    }
     rcu_unregister_thread();
     return NULL;
 }

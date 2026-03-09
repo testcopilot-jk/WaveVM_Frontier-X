@@ -31,13 +31,50 @@
 // --- 全局状态 ---
 extern struct dsm_driver_ops u_ops;
 extern int user_backend_init(int my_node_id, int port);
-void *g_shm_ptr = NULL; 
+void *g_shm_ptr = NULL;
 size_t g_shm_size = 0;
 int g_dev_fd = -1;
 extern int g_my_node_id;
+uint8_t g_my_vm_id = 0;  // Multi-VM: 默认 0，向后兼容
 
 #define MAX_QEMU_CLIENTS 8
 #define NUM_BCAST_WORKERS 8
+
+/* [FIX-G2] 坚如磐石的循环读取，处理 Partial Read 和 EINTR */
+static ssize_t read_exact(int fd, void *buf, size_t len) {
+    size_t received = 0;
+    char *ptr = (char *)buf;
+    while (received < len) {
+        ssize_t ret = read(fd, ptr + received, len - received);
+        if (ret > 0) {
+            received += ret;
+        } else if (ret == 0) {
+            return -1; // EOF: 对端关闭
+        } else {
+            if (errno == EINTR) continue; // 信号中断，重试
+            return -1; // 真正的错误
+        }
+    }
+    return (ssize_t)received;
+}
+
+/* [FIX] 循环写，处理 partial write 和 EINTR，避免 IPC 流错位 */
+static ssize_t write_exact(int fd, const void *buf, size_t len) {
+    size_t sent = 0;
+    const char *ptr = (const char *)buf;
+    while (sent < len) {
+        ssize_t ret = write(fd, ptr + sent, len - sent);
+        if (ret > 0) {
+            sent += ret;
+        } else if (ret == 0) {
+            return -1;
+        } else {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+    }
+    return (ssize_t)sent;
+}
 
 // 初始种子节点
 #define MAX_SEEDS 8
@@ -85,13 +122,18 @@ void load_swarm_config(const char *filename) {
     while (fgets(line, sizeof(line), fp)) {
         // 跳过注释和空行
         if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
-        
+
         char keyword[16];
         int bid, port, cores, ram;
         char ip_str[64];
-        
-        // 1. 尝试读取关键字 "NODE"
+
+        // 1. 尝试读取关键字
         if (sscanf(line, "%15s", keyword) != 1) continue;
+
+        // [Multi-VM] 解析 VM 指令（仅记录，不影响 NODE 解析）
+        // 格式: VM <VmID> <StartVnode> <VnodeCount>
+        if (strcmp(keyword, "VM") == 0) continue; // VM 指令在此阶段跳过，仅用于文档
+
         if (strcmp(keyword, "NODE") != 0) continue;
 
         // 2. 解析: NODE <ID> <IP> <PORT> <CORES> <RAM>
@@ -108,10 +150,11 @@ void load_swarm_config(const char *filename) {
             int v_count = ram / WVM_RAM_UNIT_GB;
             if (v_count < 1) v_count = 1;
 
-            // 2. 注入 Gateway IP 表
+            // 2. 注入 Gateway IP 表 (使用 composite ID: vm_id | node_id)
             for (int v = 0; v < v_count; v++) {
                 int v_id = total_vnodes + v;
-                u_ops.set_gateway_ip(v_id, inet_addr(ip_str), htons(port));
+                uint32_t composite_id = WVM_ENCODE_ID(g_my_vm_id, v_id);
+                u_ops.set_gateway_ip(composite_id, inet_addr(ip_str), htons(port));
             }
 
             // 3. 记录物理节点信息
@@ -149,7 +192,8 @@ void load_swarm_config(const char *filename) {
     
     // 第二轮：填补剩余空位 (Round-Robin)
     int node_cursor = 0;
-    while (current_vcpu < 4096) {
+    // [FIX-H9] 防止 phys_node_count==0 时除零
+    while (phys_node_count > 0 && current_vcpu < 4096) {
         wvm_set_cpu_mapping(current_vcpu++, phys_nodes[node_cursor].vnode_start);
         node_cursor = (node_cursor + 1) % phys_node_count;
     }
@@ -165,19 +209,28 @@ void load_swarm_config(const char *filename) {
  */
 static void handle_ipc_fault(int qemu_fd, struct wvm_ipc_fault_req* req) {
     struct wvm_ipc_fault_ack ack; // 使用扩展后的 ACK 结构
+
+    // [FIX-H7] GPA 边界检查，防止越界访问共享内存
+    if (req->gpa + 4096 > g_shm_size) {
+        ack.status = -EFAULT;
+        ack.version = 0;
+        write_exact(qemu_fd, &ack, sizeof(ack));
+        return;
+    }
+
     void *target_page_addr = (uint8_t*)g_shm_ptr + req->gpa;
-    
+
     ack.status = wvm_handle_page_fault_logic(req->gpa, target_page_addr, &ack.version);
-    
-    write(qemu_fd, &ack, sizeof(ack));
+
+    write_exact(qemu_fd, &ack, sizeof(ack));
 }
 
 static void handle_ipc_cpu_run(int qemu_fd, struct wvm_ipc_cpu_run_req* req) {
     struct wvm_ipc_cpu_run_ack ack;
-    if (req->slave_id == WVM_NODE_AUTO_ROUTE) {
+    if (!WVM_IS_VALID_TARGET(req->slave_id)) {
         req->slave_id = wvm_get_compute_slave_id(req->vcpu_index);
     }
-    if (req->slave_id == WVM_NODE_AUTO_ROUTE) {
+    if (!WVM_IS_VALID_TARGET(req->slave_id)) {
         ack.status = -ENODEV;
     } else {
         ack.status = wvm_rpc_call(MSG_VCPU_RUN, &req->ctx,
@@ -185,7 +238,7 @@ static void handle_ipc_cpu_run(int qemu_fd, struct wvm_ipc_cpu_run_req* req) {
             req->slave_id, &ack.ctx, sizeof(ack.ctx));
     }
     ack.mode_tcg = req->mode_tcg;
-    write(qemu_fd, &ack, sizeof(ack));
+    write_exact(qemu_fd, &ack, sizeof(ack));
 }
 
 /* 
@@ -209,7 +262,7 @@ void broadcast_push_to_qemu(uint16_t msg_type, void* payload, int len) {
     
     pthread_mutex_lock(&g_client_lock);
     for (int i = 0; i < g_client_count; i++) {
-        write(g_qemu_clients[i], buffer, sizeof(ipc_hdr) + ipc_hdr.len);
+        write_exact(g_qemu_clients[i], buffer, sizeof(ipc_hdr) + ipc_hdr.len);
     }
     pthread_mutex_unlock(&g_client_lock);
     free(buffer);
@@ -222,7 +275,7 @@ void broadcast_irq_to_qemu(void) {
     
     pthread_mutex_lock(&g_client_lock);
     for (int i = 0; i < g_client_count; i++) {
-        write(g_qemu_clients[i], &ipc_hdr, sizeof(ipc_hdr));
+        write_exact(g_qemu_clients[i], &ipc_hdr, sizeof(ipc_hdr));
     }
     pthread_mutex_unlock(&g_client_lock);
 }
@@ -235,6 +288,7 @@ void broadcast_irq_to_qemu(void) {
 void* client_handler(void *socket_desc) {
     int qemu_fd = *(int*)socket_desc;
     free(socket_desc);
+    fprintf(stderr, "[IPC] client connected fd=%d\n", qemu_fd);
 
     pthread_mutex_lock(&g_client_lock);
     if (g_client_count < MAX_QEMU_CLIENTS) {
@@ -245,9 +299,18 @@ void* client_handler(void *socket_desc) {
     wvm_ipc_header_t ipc_hdr;
     uint8_t payload_buf[sizeof(struct wvm_ipc_cpu_run_req)]; // Use largest possible payload
 
-    while (read(qemu_fd, &ipc_hdr, sizeof(ipc_hdr)) == sizeof(ipc_hdr)) {
+    while (1) {
+        // [FIX-G2] 使用 read_exact 处理 partial read
+        ssize_t hdr_n = read_exact(qemu_fd, &ipc_hdr, sizeof(ipc_hdr));
+        if (hdr_n < 0) {
+            fprintf(stderr, "[IPC] header read failed fd=%d errno=%d\n",
+                    qemu_fd, errno);
+            break;
+        }
         if (ipc_hdr.len > sizeof(payload_buf)) {
-             // Payload too large, drain and ignore
+            fprintf(stderr, "[IPC] payload too large fd=%d type=%u len=%u max=%zu\n",
+                    qemu_fd, (unsigned)ipc_hdr.type, (unsigned)ipc_hdr.len, sizeof(payload_buf));
+            // Payload too large, drain and ignore
             char drain[1024];
             size_t remaining = ipc_hdr.len;
             while(remaining > 0) {
@@ -258,7 +321,13 @@ void* client_handler(void *socket_desc) {
             continue;
         }
         
-        if (read(qemu_fd, payload_buf, ipc_hdr.len) != ipc_hdr.len) break;
+        // [FIX-G2] 使用 read_exact 处理 partial read
+        ssize_t payload_n = read_exact(qemu_fd, payload_buf, ipc_hdr.len);
+        if (payload_n < 0) {
+            fprintf(stderr, "[IPC] payload read failed fd=%d type=%u need=%u errno=%d\n",
+                    qemu_fd, (unsigned)ipc_hdr.type, (unsigned)ipc_hdr.len, errno);
+            break;
+        }
 
         switch (ipc_hdr.type) {
             case WVM_IPC_TYPE_MEM_FAULT:
@@ -270,7 +339,7 @@ void* client_handler(void *socket_desc) {
             case WVM_IPC_TYPE_COMMIT_DIFF: {
                 // This is the new IPC type for V29
                 struct wvm_diff_log* log = (struct wvm_diff_log*)payload_buf;
-                uint32_t dir_node = wvm_get_directory_node_id(log->gpa);
+                uint32_t dir_node = wvm_get_directory_node_id(WVM_NTOHLL(log->gpa));
                 // Send MSG_COMMIT_DIFF to the correct directory node
                 u_ops.send_packet_async(MSG_COMMIT_DIFF, log, ipc_hdr.len, dir_node, 1);
                 break;
@@ -281,46 +350,90 @@ void* client_handler(void *socket_desc) {
                 break;
             }
             case WVM_IPC_TYPE_BLOCK_IO: {
-                // 解析自定义的 IPC Block 结构
+                // 结构体必须与 QEMU 端严格对齐 (Packed 13 Bytes)
                 struct wvm_ipc_block_req {
                     uint64_t lba;
                     uint32_t len;
                     uint8_t  is_write;
                     uint8_t  data[0];
-                } *req = (void*)payload_buf;
-                
-                // 1. 计算目标节点
+                } __attribute__((packed));
+                struct wvm_ipc_block_req *req = (void*)payload_buf;
                 uint32_t target = wvm_get_storage_node_id(req->lba);
                 
-                // 2. 构造网络包
-                size_t blk_size = sizeof(struct wvm_block_payload) + req->len;
+                size_t blk_size = sizeof(struct wvm_block_payload) + (req->is_write ? req->len : 0);
                 size_t pkt_len = sizeof(struct wvm_header) + blk_size;
                 
-                // 申请 Packet (使用 u_ops)
+                // [FIX] 1. 分配 RX Buffer 接收远端真实数据
+                size_t rx_buf_size = sizeof(struct wvm_block_payload) + req->len;
+                uint8_t *rx_buf = malloc(rx_buf_size);
+                uint64_t rid = u_ops.alloc_req_id(rx_buf, (uint32_t)rx_buf_size);
+                
                 uint8_t *pkt = u_ops.alloc_packet(pkt_len, 0);
-                if (pkt) {
+                if (pkt && rid != (uint64_t)-1) {
                     struct wvm_header *h = (struct wvm_header *)pkt;
                     h->magic = htonl(WVM_MAGIC);
                     h->msg_type = htons(req->is_write ? MSG_BLOCK_WRITE : MSG_BLOCK_READ);
                     h->payload_len = htons(blk_size);
-                    h->slave_id = htonl(g_my_node_id);
-                    h->qos_level = 1; // 存储 IO 优先级高
+                    h->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+                    h->req_id = WVM_HTONLL(rid); // [FIX] 必须赋予请求ID才能收到ACK
+                    h->qos_level = 1; 
                     
                     struct wvm_block_payload *p = (void*)(pkt + sizeof(*h));
                     p->lba = WVM_HTONLL(req->lba);
                     p->count = htonl(req->len / 512);
                     if (req->is_write) memcpy(p->data, req->data, req->len);
                     
-                    // 发送
+                    h->crc32 = 0;
+                    h->crc32 = htonl(calculate_crc32(pkt, pkt_len));
+                    
+                    // 2. 发送请求
                     u_ops.send_packet(pkt, pkt_len, target);
-                    u_ops.free_packet(pkt);
+                    
+                    // [FIX] 3. 阻塞等待远端存储节点回包
+                    uint64_t t_start = u_ops.get_time_us();
+                    int success = 0;
+                    while (u_ops.time_diff_us(t_start) < 5000000) { // 5秒超时
+                        if (u_ops.check_req_status(rid) == 1) {
+                            // --- 完美闭环：检查硬件级坏道/写入错误 ---
+                            struct wvm_header *rx_hdr = (struct wvm_header *)rx_buf;
+                            if (rx_hdr->flags & WVM_FLAG_ERROR) {
+                                fprintf(stderr, "[Storage] Remote Slave reported physical IO error on LBA!\n");
+                                success = 0; // 物理落盘失败，向 QEMU 报告错误
+                            } else {
+                                success = 1; // 真正意义上的安全落盘
+                            }
+                            break;
+                        }
+                        usleep(100);
+                    }
+                    
+                    // [FIX] 4. 向 QEMU 发送 ACK 唤醒 vCPU
+                    uint8_t ack_byte = success ? 1 : 0;
+                    write_exact(qemu_fd, &ack_byte, 1);
+                    
+                    // 如果是读操作，把远端拿回来的数据塞回给 QEMU
+                    if (success && !req->is_write) {
+                        struct wvm_block_payload *rx_p = (struct wvm_block_payload *)rx_buf;
+                        write_exact(qemu_fd, rx_p->data, req->len);
+                    }
+                } else {
+                    // 内存不足，直接回复失败，防止 QEMU 死锁
+                    uint8_t ack_byte = 0;
+                    write_exact(qemu_fd, &ack_byte, 1);
                 }
+                
+                if (pkt) u_ops.free_packet(pkt);
+                if (rid != (uint64_t)-1) u_ops.free_req_id(rid);
+                free(rx_buf);
                 break;
             }
             default:
+                fprintf(stderr, "[IPC] unknown type fd=%d type=%u len=%u\n",
+                        qemu_fd, (unsigned)ipc_hdr.type, (unsigned)ipc_hdr.len);
                 break;
         }
     }
+    fprintf(stderr, "[IPC] client disconnected fd=%d\n", qemu_fd);
     close(qemu_fd);
     
     // 移除客户端并压缩数组，防止 Slot 耗尽
@@ -360,9 +473,10 @@ void load_initial_seeds(const char *config_file) {
                 g_seeds[g_seed_count].sin_family = AF_INET;
                 g_seeds[g_seed_count].sin_addr.s_addr = inet_addr(ip);
                 g_seeds[g_seed_count].sin_port = htons(port);
-                
+
                 // 关键：将种子节点预埋入局部视图
                 // 初始状态设为 SHADOW，等待心跳激活
+                // [Multi-VM] 使用裸 node_id，topology view 内部用裸 ID
                 update_local_topology_view(id, 0, NODE_STATE_SHADOW, &g_seeds[g_seed_count], 0);
                 g_seed_count++;
             }
@@ -378,7 +492,7 @@ int main(int argc, char **argv) {
 
     // 参数检查
     if (argc < 7) {
-        fprintf(stderr, "Usage: %s <RAM_MB> <LOCAL_PORT> <SWARM_CONFIG> <MY_PHYS_ID> <CTRL_PORT> <SLAVE_PORT> [SYNC_BATCH]\n", argv[0]);
+        fprintf(stderr, "Usage: %s <RAM_MB> <LOCAL_PORT> <SWARM_CONFIG> <MY_PHYS_ID> <CTRL_PORT> <SLAVE_PORT> [SYNC_BATCH] [VM_ID]\n", argv[0]);
         return 1;
     }
 
@@ -404,8 +518,12 @@ int main(int argc, char **argv) {
         extern int g_sync_batch_size;
         g_sync_batch_size = atoi(argv[7]);
     }
+    // 可选参数：VM ID (Multi-VM 资源池化)
+    if (argc >= 9) {
+        g_my_vm_id = (uint8_t)atoi(argv[8]);
+    }
 
-    printf("[*] WaveVM Swarm V29.5 'Wavelet' Node Daemon (PhysID: %d)\n", my_phys_id);
+    printf("[*] WaveVM Swarm V30.0 'Wavelet' Node Daemon (PhysID: %d, VM: %u)\n", my_phys_id, (unsigned)g_my_vm_id);
 
     // 2. 初始化用户态后端 (User Backend)
     // 注意：此时我们暂时用 PhysID 初始化，后续 load_swarm_config 会填充完整的路由表
@@ -607,6 +725,20 @@ int main(int argc, char **argv) {
             perror("accept error");
             // 生产环境可能选择 sleep 并重试，而非退出
             sleep(1);
+            continue;
+        }
+
+        // [FIX-F1] 防御性检查：在 accept 后立即检查连接数上限，防止线程爆炸。
+        // 旧代码无条件 pthread_create，仅在 client_handler 内部检查 MAX_QEMU_CLIENTS，
+        // 但线程已经创建完毕。此处前置检查，超限直接拒绝连接。
+        pthread_mutex_lock(&g_client_lock);
+        int current_count = g_client_count;
+        pthread_mutex_unlock(&g_client_lock);
+
+        if (current_count >= MAX_QEMU_CLIENTS) {
+            fprintf(stderr, "[IPC] WARN: MAX_QEMU_CLIENTS(%d) reached, rejecting fd=%d\n",
+                    MAX_QEMU_CLIENTS, client_fd);
+            close(client_fd);
             continue;
         }
 

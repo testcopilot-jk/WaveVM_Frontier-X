@@ -18,6 +18,8 @@
 #endif
 
 extern int g_my_node_id;
+extern uint32_t g_curr_epoch;
+extern uint8_t g_my_node_state;
 
 // --- 初始化与配置 ---
 int wvm_core_init(struct dsm_driver_ops *ops, int total_nodes_hint);
