@@ -1712,7 +1712,6 @@ static void wvm_translate_kvm_to_tcg(struct kvm_regs *k, struct kvm_sregs *s, wv
 }
 
 #endif // WAVEVM_PROTOCOL_H
-
 ```
 
 **文件**: `common_include/wavevm_ioctl.h`
@@ -4113,6 +4112,9 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
             // 直接从本地目录内存拷贝
             memcpy(page_buffer, page->base_page_data, 4096);
             if (version_out) *version_out = page->version;
+            fprintf(stderr, "[Page Fault] local gpa=%#llx ver=%#llx\n",
+                    (unsigned long long)gpa,
+                    (unsigned long long)page->version);
             
             // [V29] 既然由于缺页进来了，说明本地之前可能被设为 Invalid
             // 我们需要把自己加入订阅者列表，确保未来收到 Push
@@ -4144,6 +4146,7 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
     hdr->msg_type = htons(MSG_MEM_READ);
     hdr->payload_len = htons(8);
     hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+    hdr->target_id = htonl(dir_node);
     hdr->req_id = WVM_HTONLL(rid);
     hdr->qos_level = 1; // 缺页必须走快车道
 
@@ -4157,12 +4160,19 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
     // 首次发送
     g_ops->send_packet(buffer, pkt_len, dir_node);
     last_send = start_total;
+    fprintf(stderr, "[Page Fault] remote gpa=%#llx dir=%u rid=%llu\n",
+            (unsigned long long)gpa,
+            dir_node,
+            (unsigned long long)rid);
 
     int success = 0;
     while (1) {
         // 检查是否完成
         if (g_ops->check_req_status(rid) == 1) {
             success = 1;
+            fprintf(stderr, "[Page Fault Ack] gpa=%#llx rid=%llu\n",
+                    (unsigned long long)gpa,
+                    (unsigned long long)rid);
             break;
         }
         
@@ -4192,6 +4202,12 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
         if (version_out) {
             *version_out = WVM_NTOHLL(ack_payload.version);
         }
+    }
+    if (!success) {
+        fprintf(stderr, "[Page Fault Timeout] gpa=%#llx dir=%u rid=%llu\n",
+                (unsigned long long)gpa,
+                dir_node,
+                (unsigned long long)rid);
     }
 
     g_ops->free_req_id(rid);
@@ -4540,6 +4556,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             ack->msg_type = htons(MSG_MEM_ACK);
             ack->payload_len = htons(pl_size);
             ack->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+            ack->target_id = hdr->slave_id;
             ack->req_id = hdr->req_id; // 必须回传请求ID
             ack->qos_level = 0; // 大包走慢车道
 
@@ -4767,6 +4784,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                     ack_hdr->msg_type = htons(MSG_MEM_ACK);
                     ack_hdr->payload_len = 0;
                     ack_hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+                    ack_hdr->target_id = hdr->slave_id;
                     ack_hdr->req_id = hdr->req_id; // 关键：回传请求 ID
                     ack_hdr->qos_level = 1;        // 控制信令走快车道
 
@@ -4830,6 +4848,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                 ack_hdr->msg_type = htons(MSG_MEM_ACK); // 回复类型
                 ack_hdr->payload_len = 0;
                 ack_hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+                ack_hdr->target_id = hdr->slave_id;
                 ack_hdr->req_id = hdr->req_id; // 关键：原样回传 SYNC_MAGIC
                 ack_hdr->qos_level = 1;        // 必须走快车道，否则 AIMD 会误判延迟
                 ack_hdr->epoch = htonl(g_curr_epoch);
@@ -4920,7 +4939,6 @@ void wvm_logic_broadcast_rpc(void *full_pkt_data, int full_pkt_len, uint16_t msg
     }
     pthread_rwlock_unlock(&g_view_lock);
 }
-
 ```
 
 ---
@@ -6523,6 +6541,7 @@ ccflags-y := -I$(src)/../common_include -std=gnu11
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <pthread.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -7432,8 +7451,13 @@ static void* rx_thread_loop(void *arg) {
                     }
 
                     // 分发逻辑
-                    if (rid != 0 && rid != (uint64_t)-1) {
-                        // 请求-响应模式 (ACK)
+                    bool is_response_msg =
+                        (msg_type == MSG_MEM_ACK ||
+                         msg_type == MSG_VCPU_EXIT ||
+                         msg_type == MSG_BLOCK_ACK);
+
+                    if (is_response_msg && rid != 0 && rid != (uint64_t)-1) {
+                        // 请求-响应模式 (ACK / EXIT / BLOCK_ACK)
                         uint32_t idx = rid % MAX_INFLIGHT_REQS;
                         if (msg_type == MSG_VCPU_EXIT) {
                             u_log("[RX VCPU_EXIT] src_port=%u rid=%llu idx=%u p_len=%u",
@@ -7635,7 +7659,6 @@ int user_backend_init(int my_node_id, int port) {
     
     return 0;
 }
-
 ```
 
 **文件**: `master_core/main_wrapper.c`
@@ -7852,6 +7875,9 @@ void load_swarm_config(const char *filename) {
  */
 static void handle_ipc_fault(int qemu_fd, struct wvm_ipc_fault_req* req) {
     struct wvm_ipc_fault_ack ack; // 使用扩展后的 ACK 结构
+    fprintf(stderr, "[IPC Fault] gpa=%#llx len=%u vcpu=%u\n",
+            (unsigned long long)req->gpa,
+            req->len, req->vcpu_id);
 
     // [FIX-H7] GPA 边界检查，防止越界访问共享内存
     if (req->gpa + 4096 > g_shm_size) {
@@ -7864,6 +7890,10 @@ static void handle_ipc_fault(int qemu_fd, struct wvm_ipc_fault_req* req) {
     void *target_page_addr = (uint8_t*)g_shm_ptr + req->gpa;
 
     ack.status = wvm_handle_page_fault_logic(req->gpa, target_page_addr, &ack.version);
+    fprintf(stderr, "[IPC Fault Ack] gpa=%#llx status=%d ver=%#llx\n",
+            (unsigned long long)req->gpa,
+            ack.status,
+            (unsigned long long)ack.version);
 
     write_exact(qemu_fd, &ack, sizeof(ack));
 }
@@ -7934,13 +7964,16 @@ void* client_handler(void *socket_desc) {
     fprintf(stderr, "[IPC] client connected fd=%d\n", qemu_fd);
 
     pthread_mutex_lock(&g_client_lock);
-    if (g_client_count < MAX_QEMU_CLIENTS) {
+    if (g_client_count == 0) {
         g_qemu_clients[g_client_count++] = qemu_fd;
+        fprintf(stderr, "[IPC] fd=%d registered as async push client\n", qemu_fd);
+    } else {
+        fprintf(stderr, "[IPC] fd=%d treated as sync RPC client only\n", qemu_fd);
     }
     pthread_mutex_unlock(&g_client_lock);
 
     wvm_ipc_header_t ipc_hdr;
-    uint8_t payload_buf[sizeof(struct wvm_ipc_cpu_run_req)]; // Use largest possible payload
+    uint8_t payload_buf[WVM_MAX_PACKET_SIZE];
 
     while (1) {
         // [FIX-G2] 使用 read_exact 处理 partial read
@@ -8405,7 +8438,6 @@ int main(int argc, char **argv) {
 
     return 0;
 }
-
 ```
 
 **文件**: `master_core/Makefile_User`
@@ -9767,6 +9799,19 @@ static struct sockaddr_in g_upstream_gateway = {0};
 static volatile int g_gateway_init_done = 0;
 static volatile int g_gateway_known = 0;
 
+static int is_local_tcg_endpoint_port(uint16_t port_net)
+{
+    uint16_t port = ntohs(port_net);
+    for (long i = 0; i < g_num_cores; i++) {
+        if (port == ntohs(tcg_endpoints[i].cmd_addr.sin_port) ||
+            port == ntohs(tcg_endpoints[i].req_addr.sin_port) ||
+            port == ntohs(tcg_endpoints[i].push_addr.sin_port)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* 
  * [物理意图] 在不支持 KVM 的环境下，通过多进程模拟实现“多核算力聚合”。
  * [关键逻辑] 为每个逻辑核心孵化一个独立的 QEMU-TCG 实例，并通过环境变量注入“三通道” Socket 句柄。
@@ -9774,6 +9819,10 @@ static volatile int g_gateway_known = 0;
  */
 void spawn_tcg_processes(int base_id) {
     printf("[Hybrid] Spawning %ld QEMU-TCG instances (Tri-Channel Isolation)...\n", g_num_cores);
+    const char *qemu_bin = getenv("WVM_TCG_QEMU_BIN");
+    if (!qemu_bin || !*qemu_bin) {
+        qemu_bin = "qemu-system-x86_64";
+    }
     
     tcg_endpoints = malloc(sizeof(slave_endpoint_t) * g_num_cores);
     if (!tcg_endpoints) { perror("malloc endpoints"); exit(1); }
@@ -9841,12 +9890,12 @@ void spawn_tcg_processes(int base_id) {
 
             cpu_set_t cpuset; CPU_ZERO(&cpuset); CPU_SET(i, &cpuset); sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
             
-            execlp("qemu-system-x86_64", "qemu-system-x86_64", 
-                   "-accel", "tcg,thread=single", 
+            execlp(qemu_bin, qemu_bin,
+                   "-accel", "wavevm",
                    "-m", ram_str, 
-                   "-nographic", "-S", "-nodefaults", 
-                   "-icount", "shift=5,sleep=off", NULL);
-            exit(1);
+                   "-nographic", "-S", "-nodefaults", NULL);
+            perror("[Hybrid] execlp qemu");
+            _exit(127);
         }
         // parent: sockets are only created in child branch
     }
@@ -9877,8 +9926,12 @@ void* tcg_proxy_thread(void *arg) {
             struct wvm_header *hdr = (struct wvm_header *)buffers[i];
             if (hdr->magic != htonl(WVM_MAGIC)) continue;
 
+            /* In single-host tests gateway packets can also come from 127.0.0.1.
+             * Only treat packets from known TCG endpoint ports as local upstream. */
+            int from_local_tcg = (src_addrs[i].sin_addr.s_addr == htonl(INADDR_LOOPBACK)) &&
+                                 is_local_tcg_endpoint_port(src_addrs[i].sin_port);
             // 1. Upstream (Local QEMU -> Gateway)
-            if (src_addrs[i].sin_addr.s_addr == htonl(INADDR_LOOPBACK)) {
+            if (from_local_tcg) {
                 // [VFIO Intercept] TCG 模式下的本地显卡拦截
                 uint16_t msg_type = ntohs(hdr->msg_type);
                 int actual_payload = msgs[i].msg_len - (int)sizeof(struct wvm_header);
@@ -10017,7 +10070,6 @@ int main(int argc, char **argv) {
     }
     return 0;
 }
-
 ```
 
 **文件**: `slave_daemon/slave_vfio.h`
@@ -13013,6 +13065,7 @@ static int g_fd_push = -1;
 static int g_ipc_diff_sock = -1; // [FIX-G1] Master TCG harvester 专用 IPC socket
 static void *g_ram_base = NULL;
 static size_t g_ram_size = 0;
+static void *g_shm_shadow = NULL;
 static uint32_t g_slave_id = 0;
 static bool g_fault_hook_enabled = false;
 static bool g_fault_hook_checked = false;
@@ -13025,6 +13078,9 @@ static uint64_t get_us_time(void);
 static uint64_t get_local_page_version(uint64_t gpa);
 static void set_local_page_version(uint64_t gpa, uint64_t version);
 static long wait_for_directory_ack_safe(void);
+static int internal_connect_master(void);
+static int ensure_local_shm_shadow(void);
+static void send_diff_via_ipc(void *buf, size_t len);
 
 // 脏区捕获链表
 typedef struct WritablePage {
@@ -13074,6 +13130,18 @@ void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa) {
     g_mem_blocks[g_block_count].gpa_start = gpa;
     g_mem_blocks[g_block_count].size      = size;
     g_block_count++;
+    {
+        char msg[224];
+        int n = snprintf(msg, sizeof(msg),
+                         "[WaveVM-User] ram_block hva=%p..%p gpa=%#llx size=%#llx blocks=%d\n",
+                         hva, (void *)((uintptr_t)hva + size),
+                         (unsigned long long)gpa,
+                         (unsigned long long)size,
+                         g_block_count);
+        if (n > 0) {
+            write(STDERR_FILENO, msg, (size_t)n);
+        }
+    }
 }
 
 // [替换] 查表法 HVA 转 GPA (用于 sigsegv)
@@ -13477,6 +13545,32 @@ static int internal_connect_master(void) {
     return sock;
 }
 
+static int ensure_local_shm_shadow(void)
+{
+    if (g_shm_shadow || g_is_slave || !g_ram_size) {
+        return g_shm_shadow ? 0 : -1;
+    }
+
+    const char *shm_path = getenv("WVM_SHM_FILE");
+    if (!shm_path) {
+        shm_path = "/wavevm_ram";
+    }
+
+    int shm_fd = shm_open(shm_path, O_RDWR, 0666);
+    if (shm_fd < 0) {
+        return -1;
+    }
+
+    void *ptr = mmap(NULL, g_ram_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    close(shm_fd);
+    if (ptr == MAP_FAILED) {
+        return -1;
+    }
+
+    g_shm_shadow = ptr;
+    return 0;
+}
+
 /* 
  * 以下函数仅为了兼容 QEMU 命令行参数解析。
  * V29 使用 Wavelet 主动推送模型，不再需要 TTL 和手工 Watch 区域。
@@ -13540,6 +13634,14 @@ static void kvm_proactive_page_fetch(uint64_t gpa) {
         }
 
         if (ack.status == 0) {
+            if (ensure_local_shm_shadow() == 0 && gpa + 4096 <= g_ram_size) {
+                void *fetch_hva = gpa_to_hva_safe(gpa);
+                if (fetch_hva) {
+                    mprotect(fetch_hva, 4096, PROT_READ | PROT_WRITE);
+                    memcpy(fetch_hva, (uint8_t *)g_shm_shadow + gpa, 4096);
+                    mprotect(fetch_hva, 4096, PROT_READ);
+                }
+            }
             set_local_page_version(gpa, ack.version);
         }
     } else {
@@ -13563,6 +13665,15 @@ static int request_page_sync(uintptr_t fault_addr, bool is_write) {
     if (gpa == (uint64_t)-1) return -1;
     gpa &= ~4095ULL;
     uintptr_t aligned_addr = fault_addr & ~4095ULL;
+    {
+        char msg[160];
+        int n = snprintf(msg, sizeof(msg),
+                         "[WaveVM-User] request_page_sync gpa=%#llx write=%d slave=%d\n",
+                         (unsigned long long)gpa, is_write ? 1 : 0, g_is_slave ? 1 : 0);
+        if (n > 0) {
+            write(STDERR_FILENO, msg, (size_t)n);
+        }
+    }
     
     // --- Master Mode (IPC) ---
     if (!g_is_slave) {
@@ -13583,6 +13694,11 @@ static int request_page_sync(uintptr_t fault_addr, bool is_write) {
         if (read_exact(t_com_sock, &ack, sizeof(ack)) < 0) return -1;
         
         if (ack.status == 0) {
+            if (ensure_local_shm_shadow() < 0 || gpa + 4096 > g_ram_size) {
+                return -1;
+            }
+            mprotect((void *)aligned_addr, 4096, PROT_READ | PROT_WRITE);
+            memcpy((void *)aligned_addr, (uint8_t *)g_shm_shadow + gpa, 4096);
             set_local_page_version(gpa, ack.version); // 同步版本
             return 0;
         }
@@ -13723,6 +13839,16 @@ static int request_page_sync(uintptr_t fault_addr, bool is_write) {
                     // [V29 新增] 更新本地版本号
                     uint64_t ver = WVM_NTOHLL(payload->version);
                     set_local_page_version(gpa, ver);
+                    {
+                        char msg[160];
+                        int n = snprintf(msg, sizeof(msg),
+                                         "[WaveVM-User] request_page_sync ack gpa=%#llx ver=%#llx\n",
+                                         (unsigned long long)gpa,
+                                         (unsigned long long)ver);
+                        if (n > 0) {
+                            write(STDERR_FILENO, msg, (size_t)n);
+                        }
+                    }
                     
                     return 0; // 成功
                 }
@@ -13755,10 +13881,28 @@ static inline void wait_on_latch(uint64_t gpa) {
  */
 static void sigsegv_handler(int sig, siginfo_t *si, void *ucontext) {
     uintptr_t addr = (uintptr_t)si->si_addr;
+    {
+        char msg[192];
+        int n = snprintf(msg, sizeof(msg),
+                         "[WaveVM-User] sigsegv addr=%p code=%d\n",
+                         si->si_addr, si->si_code);
+        if (n > 0) {
+            write(STDERR_FILENO, msg, (size_t)n);
+        }
+    }
     
     // 通过安全查表获取 GPA
     uint64_t gpa = hva_to_gpa_safe(addr);
     if (gpa == (uint64_t)-1) {
+        {
+            char msg[192];
+            int n = snprintf(msg, sizeof(msg),
+                             "[WaveVM-User] sigsegv passthrough addr=%p\n",
+                             si->si_addr);
+            if (n > 0) {
+                write(STDERR_FILENO, msg, (size_t)n);
+            }
+        }
         // 说明访问的不是 RAM 区域（可能是 MMIO 或非法地址），交回给标准处理程序
         signal(SIGSEGV, SIG_DFL); 
         raise(SIGSEGV); 
@@ -13771,13 +13915,25 @@ static void sigsegv_handler(int sig, siginfo_t *si, void *ucontext) {
 
     ucontext_t *ctx = (ucontext_t *)ucontext;
     bool is_write = (ctx->uc_mcontext.gregs[REG_ERR] & 0x2);
+    {
+        char msg[224];
+        int n = snprintf(msg, sizeof(msg),
+                         "[WaveVM-User] sigsegv hit gpa=%#llx write=%d page=%p\n",
+                         (unsigned long long)gpa, is_write ? 1 : 0, aligned_addr);
+        if (n > 0) {
+            write(STDERR_FILENO, msg, (size_t)n);
+        }
+    }
 
     if (is_write) {
         // 从预分配池中取，不要 malloc!
         int idx = atomic_fetch_add(&g_pool_idx, 1) % PAGE_POOL_SIZE;
         WritablePage *wp = &g_page_pool[idx];
         void *snapshot = g_image_pool[idx];
-        
+
+        /* The faulting store has not retired yet; once write access is
+         * restored, the current page bytes are still the pre-write image. */
+        mprotect(aligned_addr, 4096, PROT_READ | PROT_WRITE);
         memcpy(snapshot, aligned_addr, 4096);
         wp->gpa = gpa;
         wp->pre_image_snapshot = snapshot;
@@ -13787,7 +13943,6 @@ static void sigsegv_handler(int sig, siginfo_t *si, void *ucontext) {
             wp->next = __atomic_load_n(&g_writable_pages_list, __ATOMIC_ACQUIRE);
         } while (!__atomic_compare_exchange_n(&g_writable_pages_list, &wp->next, wp, true, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE));
         
-        mprotect(aligned_addr, 4096, PROT_READ | PROT_WRITE);
     } else {
         // 读缺页直接同步
         if (request_page_sync(addr, false) == 0) {
@@ -14346,6 +14501,9 @@ static void *mem_push_listener_thread(void *arg) {
 void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
     g_ram_base = ram_ptr;
     g_ram_size = ram_size;
+    if (!getenv("WVM_SOCK_REQ")) {
+        ensure_local_shm_shadow();
+    }
     bool enable_fault_hook = true;
     const char *hook_env = getenv("WVM_ENABLE_FAULT_HOOK");
     if (hook_env && atoi(hook_env) == 0) {
@@ -14408,7 +14566,6 @@ void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
         mprotect(g_ram_base, g_ram_size, PROT_NONE);
     }
 }
-
 ```
 
 **文件**: `wavevm-qemu/hw/wavevm/wavevm-mem.c`
@@ -14796,56 +14953,6 @@ index 000000000..1494f023f
 +softmmu_ss.add(files(
 +  'wavevm-block-hook.c',
 +))
-diff --git a/hw/wavevm/wavevm-block-hook.c b/hw/wavevm/wavevm-block-hook.c
-new file mode 100644
-index 000000000..b2af780be
---- /dev/null
-+++ b/hw/wavevm/wavevm-block-hook.c
-@@ -0,0 +1,44 @@
-+#include "qemu/osdep.h"
-+#include "qemu/iov.h"
-+
-+/*
-+ * virtio-blk hook entry point. Returns 0 when the request is handled by the
-+ * WaveVM IPC path. Returns -1 to let virtio-blk use its normal local path.
-+ */
-+int wavevm_blk_interceptor(uint64_t sector, QEMUIOVector *qiov, int is_write);
-+
-+extern int wvm_send_ipc_block_io(uint64_t lba, void *buf, uint32_t len, int is_write)
-+    __attribute__((weak));
-+
-+int wavevm_blk_interceptor(uint64_t sector, QEMUIOVector *qiov, int is_write)
-+{
-+    size_t total_len = qiov->size;
-+    uint8_t *linear_buf;
-+    int ret;
-+
-+    if (total_len == 0 || total_len > UINT32_MAX) {
-+        return -1;
-+    }
-+
-+    linear_buf = g_malloc(total_len);
-+    if (!linear_buf) {
-+        return -1;
-+    }
-+
-+    if (is_write) {
-+        qemu_iovec_to_buf(qiov, 0, linear_buf, total_len);
-+    }
-+
-+    if (!wvm_send_ipc_block_io) {
-+        g_free(linear_buf);
-+        return -1;
-+    }
-+
-+    ret = wvm_send_ipc_block_io(sector, linear_buf, (uint32_t)total_len, is_write);
-+    if (!is_write && ret == 0) {
-+        qemu_iovec_from_buf(qiov, 0, linear_buf, total_len);
-+    }
-+
-+    g_free(linear_buf);
-+    return ret;
-+}
 diff --git a/accel/meson.build b/accel/meson.build
 index b26cca227..f3f6252f0 100644
 --- a/accel/meson.build
@@ -14976,7 +15083,6 @@ index f099b5092..3da9023a8 100644
          }
          aml_append(cpus_dev, method);
  
-
 ```
 
 ### Step 9: 优化的网关 (Gateway)
@@ -15713,7 +15819,6 @@ int init_aggregator(int local_port, const char *upstream_ip, int upstream_port, 
     pthread_detach(ctrl_tid);
 
     return 0;}
-
 ```
 
 **文件**: `gateway_service/Makefile`
@@ -16747,7 +16852,7 @@ Gemini 对 V31 架构进行审计，指出三项"致命缺陷"：
 
 ### 修复：Gateway composite ID fallback
 
-**文件**：`gateway_service/aggregator.c` — `internal_push()` 函数
+**修改位置**：`gateway_service/aggregator.c` — `internal_push()` 函数
 
 **问题**：`routes.conf` 中写的是裸 `node_id`（如 `3`），但实际流量携带 composite ID（如 `0x01000003`，vm_id=1, node_id=3）。uthash 的 `HASH_FIND_INT` 精确匹配 32 位 key，查不到就丢包。
 
