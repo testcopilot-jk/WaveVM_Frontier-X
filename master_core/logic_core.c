@@ -1036,6 +1036,7 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
     hdr->msg_type = htons(MSG_MEM_READ);
     hdr->payload_len = htons(8);
     hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+    hdr->target_id = htonl(dir_node);
     hdr->req_id = WVM_HTONLL(rid);
     hdr->qos_level = 1; // 缺页必须走快车道
 
@@ -1445,6 +1446,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             ack->msg_type = htons(MSG_MEM_ACK);
             ack->payload_len = htons(pl_size);
             ack->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+            ack->target_id = hdr->slave_id;
             ack->req_id = hdr->req_id; // 必须回传请求ID
             ack->qos_level = 0; // 大包走慢车道
 
@@ -1672,6 +1674,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                     ack_hdr->msg_type = htons(MSG_MEM_ACK);
                     ack_hdr->payload_len = 0;
                     ack_hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+                    ack_hdr->target_id = hdr->slave_id;
                     ack_hdr->req_id = hdr->req_id; // 关键：回传请求 ID
                     ack_hdr->qos_level = 1;        // 控制信令走快车道
 
@@ -1735,6 +1738,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                 ack_hdr->msg_type = htons(MSG_MEM_ACK); // 回复类型
                 ack_hdr->payload_len = 0;
                 ack_hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
+                ack_hdr->target_id = hdr->slave_id;
                 ack_hdr->req_id = hdr->req_id; // 关键：原样回传 SYNC_MAGIC
                 ack_hdr->qos_level = 1;        // 必须走快车道，否则 AIMD 会误判延迟
                 ack_hdr->epoch = htonl(g_curr_epoch);

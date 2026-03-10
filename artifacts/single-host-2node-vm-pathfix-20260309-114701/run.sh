@@ -35,7 +35,7 @@ sleep 8
   -serial file:"$ART_DIR/vm-serial.log" -monitor none) >"$ART_DIR/vm.log" 2>&1 &
 Q=$!
 
-sleep 45
+sleep 180
 LISTEN=$(ss -ltnp | rg ':2226' || true)
 BANNER=$(timeout 6 bash -lc 'exec 3<>/dev/tcp/127.0.0.1/2226; head -c 120 <&3' || true)
 TIMEOUTS=$(rg -n "RPC Timeout\] Type: 5" "$ART_DIR/master0.log" | wc -l || true)

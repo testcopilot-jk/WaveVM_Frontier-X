@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <pthread.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -925,8 +926,13 @@ static void* rx_thread_loop(void *arg) {
                     }
 
                     // 分发逻辑
-                    if (rid != 0 && rid != (uint64_t)-1) {
-                        // 请求-响应模式 (ACK)
+                    bool is_response_msg =
+                        (msg_type == MSG_MEM_ACK ||
+                         msg_type == MSG_VCPU_EXIT ||
+                         msg_type == MSG_BLOCK_ACK);
+
+                    if (is_response_msg && rid != 0 && rid != (uint64_t)-1) {
+                        // 请求-响应模式 (ACK / EXIT / BLOCK_ACK)
                         uint32_t idx = rid % MAX_INFLIGHT_REQS;
                         if (msg_type == MSG_VCPU_EXIT) {
                             u_log("[RX VCPU_EXIT] src_port=%u rid=%llu idx=%u p_len=%u",

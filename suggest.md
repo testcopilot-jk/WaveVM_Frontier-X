@@ -1,17 +1,99 @@
-{
-  "name": "WaveVM-God-Mode",
-  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
-  "privileged": true, 
-  "capAdd":[
-    "NET_ADMIN",
-    "SYS_PTRACE",
-    "SYS_ADMIN"
-  ],
-  "securityOpt":[
-    "seccomp=unconfined",
-    "apparmor=unconfined"
-  ],
-  "runArgs":[
-    "--device=/dev/net/tun:/dev/net/tun"
-  ]
-}
+当前阶段的情况，已经和最早那版判断不一样了。下面是基于**当前代码**与**最近几轮单机双节点 TCG 实跑日志**的更新结论。
+
+## 现在已经可以确认的事实
+
+1. 早期 TCG 启动链路问题已经基本被修掉了。
+- Slave 侧 `cpu_exec()` 不再卡死在错误线程。
+- Master 侧 `SIGSEGV` fault hook 已经能稳定工作。
+- 本地 `request_page_sync()` 不再只是“更新版本号”，而是会把 SHM 中的页面内容实际拷回本地 QEMU RAM。
+
+2. 远端缺页链路已经明显推进。
+最近修掉了两类协议/分发问题：
+- `MSG_MEM_READ` 请求头没有显式写 `target_id`
+- `MSG_MEM_ACK` 回包没有显式写 `target_id`
+- `user_backend` 接收侧把“带 rid 的 `MSG_MEM_READ` 请求”误判成 ACK，导致远端页请求被吞掉
+
+修完后，`master0.log` 里已经能看到连续的：
+- `[Page Fault] remote gpa=... rid=...`
+- `[Page Fault Ack] gpa=... rid=...`
+- `[IPC Fault Ack] gpa=... status=0 ver=...`
+
+也就是说：
+**当前不是基础分布式页拉取链路不通了。**
+
+3. 当前 smoke 的状态已经推进到更后面。
+- `2226` 端口可以稳定监听
+- `VCPU_TIMEOUT_COUNT=0`
+- 长观察里 `2226` 可以持续存活数分钟
+- 但始终没有 `SSH_BANNER`
+- `vm-serial.log` 仍然为空
+
+## 这意味着什么
+
+这说明当前主问题已经不是：
+- slave 根本没跑起来
+- proxy/port 不通
+- `MSG_VCPU_RUN` 不通
+- `Page Fault` 完全超时
+- QEMU 一启动就崩
+
+而是更像：
+
+**guest 已经被推进到了启动后期，但没有真正进入 sshd 可对外说话的状态。**
+
+换句话说，现在不是“系统没跑起来”，而是“系统跑起来了，但没把 guest 推到最终可交互那一步”。
+
+## 我认为当前最可能的问题方向
+
+按优先级排序：
+
+1. 设备/中断/时钟语义还有缺口
+这是当前我认为最像的方向。
+原因是：
+- 端口监听能起来，说明 QEMU 外围不是完全没工作
+- 远端页 fault 也已经能大量正常闭环
+- 但 guest 用户态服务始终没有完成到 `SSH_BANNER`
+
+这种现象很像：
+- 网卡中断
+- 定时器/APIC/PIT/HPET
+- 某些设备初始化时序
+存在轻微语义偏差，导致 guest 没直接死，但会卡在系统启动后期。
+
+2. 高地址页的一致性语义仍可能有细微问题
+现在大 fault 已经能通，但不代表所有关键页在“读 fault / 写 fault / 版本推进 / 保护恢复”的时序上都完全正确。
+如果某些启动关键页内容被写回或恢复顺序搞错，guest 也可能表现为：
+- 不直接 crash
+- 但系统服务起不全
+- SSH 永远不 ready
+
+3. `vm-serial.log` 为空本身不能直接说明根因
+这更像是辅助现象，而不是主因。
+可能是：
+- guest 控制台本来就没绑到串口
+- 或者它没走到会打印串口的阶段
+所以不要把“串口没字”误判成“显示参数有问题”。
+
+## 现在最有价值的后续动作
+
+如果继续查，最值得做的不是再回头修控制面，而是：
+
+1. 盯 guest 启动后期
+确认它是卡在：
+- 网络设备初始化
+- 用户态服务启动
+- 还是更底层的中断/计时器语义
+
+2. 定点验证 e1000 / usernet / 中断路径
+因为现在 `2226` 长时间监听但没 banner，这非常像“QEMU 外围网络转发在，但 guest 内网卡/sshd 没真正 ready”。
+
+3. 如果需要，再考虑换一个更容易观测启动过程的 guest 镜像
+Cirros 很轻，但当前现象说明它并没有给出足够可观测性。
+如果要继续压缩问题，后面可以考虑更容易看启动日志的最小 guest。
+
+## 一句话总结
+
+**当前项目状态已经从“基础 TCG 分布式执行链路不通”推进到了“guest 启动后期功能性卡点”。**
+
+我现在的判断是：
+**最可能的问题已经不在页拉取主链路，而在 guest 后期设备/中断/网络语义。**

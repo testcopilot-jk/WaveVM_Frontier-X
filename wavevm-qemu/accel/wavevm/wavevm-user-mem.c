@@ -47,6 +47,7 @@ static int g_fd_push = -1;
 static int g_ipc_diff_sock = -1; // [FIX-G1] Master TCG harvester 专用 IPC socket
 static void *g_ram_base = NULL;
 static size_t g_ram_size = 0;
+static void *g_shm_shadow = NULL;
 static uint32_t g_slave_id = 0;
 static bool g_fault_hook_enabled = false;
 static bool g_fault_hook_checked = false;
@@ -60,6 +61,7 @@ static uint64_t get_local_page_version(uint64_t gpa);
 static void set_local_page_version(uint64_t gpa, uint64_t version);
 static long wait_for_directory_ack_safe(void);
 static int internal_connect_master(void);
+static int ensure_local_shm_shadow(void);
 static void send_diff_via_ipc(void *buf, size_t len);
 
 // 脏区捕获链表
@@ -525,6 +527,32 @@ static int internal_connect_master(void) {
     return sock;
 }
 
+static int ensure_local_shm_shadow(void)
+{
+    if (g_shm_shadow || g_is_slave || !g_ram_size) {
+        return g_shm_shadow ? 0 : -1;
+    }
+
+    const char *shm_path = getenv("WVM_SHM_FILE");
+    if (!shm_path) {
+        shm_path = "/wavevm_ram";
+    }
+
+    int shm_fd = shm_open(shm_path, O_RDWR, 0666);
+    if (shm_fd < 0) {
+        return -1;
+    }
+
+    void *ptr = mmap(NULL, g_ram_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    close(shm_fd);
+    if (ptr == MAP_FAILED) {
+        return -1;
+    }
+
+    g_shm_shadow = ptr;
+    return 0;
+}
+
 /* 
  * 以下函数仅为了兼容 QEMU 命令行参数解析。
  * V29 使用 Wavelet 主动推送模型，不再需要 TTL 和手工 Watch 区域。
@@ -588,6 +616,14 @@ static void kvm_proactive_page_fetch(uint64_t gpa) {
         }
 
         if (ack.status == 0) {
+            if (ensure_local_shm_shadow() == 0 && gpa + 4096 <= g_ram_size) {
+                void *fetch_hva = gpa_to_hva_safe(gpa);
+                if (fetch_hva) {
+                    mprotect(fetch_hva, 4096, PROT_READ | PROT_WRITE);
+                    memcpy(fetch_hva, (uint8_t *)g_shm_shadow + gpa, 4096);
+                    mprotect(fetch_hva, 4096, PROT_READ);
+                }
+            }
             set_local_page_version(gpa, ack.version);
         }
     } else {
@@ -640,6 +676,11 @@ static int request_page_sync(uintptr_t fault_addr, bool is_write) {
         if (read_exact(t_com_sock, &ack, sizeof(ack)) < 0) return -1;
         
         if (ack.status == 0) {
+            if (ensure_local_shm_shadow() < 0 || gpa + 4096 > g_ram_size) {
+                return -1;
+            }
+            mprotect((void *)aligned_addr, 4096, PROT_READ | PROT_WRITE);
+            memcpy((void *)aligned_addr, (uint8_t *)g_shm_shadow + gpa, 4096);
             set_local_page_version(gpa, ack.version); // 同步版本
             return 0;
         }
@@ -1442,6 +1483,9 @@ static void *mem_push_listener_thread(void *arg) {
 void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
     g_ram_base = ram_ptr;
     g_ram_size = ram_size;
+    if (!getenv("WVM_SOCK_REQ")) {
+        ensure_local_shm_shadow();
+    }
     bool enable_fault_hook = true;
     const char *hook_env = getenv("WVM_ENABLE_FAULT_HOOK");
     if (hook_env && atoi(hook_env) == 0) {
