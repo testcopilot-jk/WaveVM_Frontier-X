@@ -1,99 +1,34 @@
-当前阶段的情况，已经和最早那版判断不一样了。下面是基于**当前代码**与**最近几轮单机双节点 TCG 实跑日志**的更新结论。
+Codex 的 suggest.md 分析得基本准确，我补充几个从日志里看到的具体问题。
 
-## 现在已经可以确认的事实
+### 当前状态总结
 
-1. 早期 TCG 启动链路问题已经基本被修掉了。
-- Slave 侧 `cpu_exec()` 不再卡死在错误线程。
-- Master 侧 `SIGSEGV` fault hook 已经能稳定工作。
-- 本地 `request_page_sync()` 不再只是“更新版本号”，而是会把 SHM 中的页面内容实际拷回本地 QEMU RAM。
+**已经通了的**：
+- Slave `cpu_exec()` 卡死问题已修（vCPU service loop online）
+- SIGSEGV fault hook 在 Master QEMU 上稳定工作
+- 远端缺页 `request_page_sync` 链路闭环——3212 次远端页拉取成功（`IPC Fault Ack`）
+- Gossip 心跳双向互通，两节点都到了 `state=2`（WARMING → 正常状态）
+- GDB 那个 SIGSEGV 确认是调试干扰，不挂 GDB 裸跑后 QEMU 正常
 
-2. 远端缺页链路已经明显推进。
-最近修掉了两类协议/分发问题：
-- `MSG_MEM_READ` 请求头没有显式写 `target_id`
-- `MSG_MEM_ACK` 回包没有显式写 `target_id`
-- `user_backend` 接收侧把“带 rid 的 `MSG_MEM_READ` 请求”误判成 ACK，导致远端页请求被吞掉
+**没通的**：SSH banner 没出来，serial 为空，Guest 卡在启动后期。
 
-修完后，`master0.log` 里已经能看到连续的：
-- `[Page Fault] remote gpa=... rid=...`
-- `[Page Fault Ack] gpa=... rid=...`
-- `[IPC Fault Ack] gpa=... status=0 ver=...`
+### 从日志看到的关键线索
 
-也就是说：
-**当前不是基础分布式页拉取链路不通了。**
+**GPA `0xe000` 的写 fault 风暴**。vm.log 里 `gpa=0xe000 write=1` 出现了 **18896 次**。这个页面被反复写 fault，每次都只是标记 `write=1` 但没有触发 `request_page_sync`（说明页面已经在本地，是写保护 fault 而不是缺页）。
 
-3. 当前 smoke 的状态已经推进到更后面。
-- `2226` 端口可以稳定监听
-- `VCPU_TIMEOUT_COUNT=0`
-- 长观察里 `2226` 可以持续存活数分钟
-- 但始终没有 `SSH_BANNER`
-- `vm-serial.log` 仍然为空
+这意味着 `0xe000` 这个页面的 **写保护恢复逻辑有问题**。正常流程应该是：
+1. 写 fault → CBW 快照 → `mprotect(PROT_READ|PROT_WRITE)` → 返回
+2. 后续写不再 fault（直到 harvester 收割脏页重新设为 PROT_READ）
 
-## 这意味着什么
+但这里同一个 GPA 连续几十次写 fault，说明 `mprotect` 没有成功放开写权限，或者放开后又被立即收回。Guest 的 BIOS/firmware 可能在这个地址上做循环写操作（BDA 区域 `0xe000-0xf000` 是 BIOS 数据区），每次写都触发 fault → handler 处理 → 但保护没解除 → 再 fault，形成一个**空转热循环**。
 
-这说明当前主问题已经不是：
-- slave 根本没跑起来
-- proxy/port 不通
-- `MSG_VCPU_RUN` 不通
-- `Page Fault` 完全超时
-- QEMU 一启动就崩
+**GPA `0x33333000` 同理**，916 次写 fault 风暴。
 
-而是更像：
+这两个热页的空转会极大拖慢 Guest 启动速度——本该纳秒级完成的内存写操作，变成了每次都要走信号处理器的微秒级路径，相当于这两个页面上的性能衰退了 1000 倍。
 
-**guest 已经被推进到了启动后期，但没有真正进入 sshd 可对外说话的状态。**
+### 最可能的根因
 
-换句话说，现在不是“系统没跑起来”，而是“系统跑起来了，但没把 guest 推到最终可交互那一步”。
+`sigsegv_handler` 里写 fault 分支的 `mprotect` 调用可能没有正确覆盖到 TCG softmmu 的 TLB 缓存。TCG 用的是软件 TLB（`cputlb.c`），即使 host 侧 `mprotect` 放开了页面权限，TCG 的 TLB entry 里可能还是旧的 `PROT_READ` 标记，导致下次写操作仍然被 TCG TLB 拦截触发 SIGSEGV。需要在写 fault 处理后调用 `tlb_flush_page(cpu, gpa)` 或 `tlb_unprotect_code(addr)` 来刷新 TCG 的软件 TLB。
 
-## 我认为当前最可能的问题方向
+或者更简单的可能：写 fault handler 里做了 CBW 但**忘了调 `mprotect` 升级为 RW**，或者 `mprotect` 的地址/长度参数算错了。
 
-按优先级排序：
-
-1. 设备/中断/时钟语义还有缺口
-这是当前我认为最像的方向。
-原因是：
-- 端口监听能起来，说明 QEMU 外围不是完全没工作
-- 远端页 fault 也已经能大量正常闭环
-- 但 guest 用户态服务始终没有完成到 `SSH_BANNER`
-
-这种现象很像：
-- 网卡中断
-- 定时器/APIC/PIT/HPET
-- 某些设备初始化时序
-存在轻微语义偏差，导致 guest 没直接死，但会卡在系统启动后期。
-
-2. 高地址页的一致性语义仍可能有细微问题
-现在大 fault 已经能通，但不代表所有关键页在“读 fault / 写 fault / 版本推进 / 保护恢复”的时序上都完全正确。
-如果某些启动关键页内容被写回或恢复顺序搞错，guest 也可能表现为：
-- 不直接 crash
-- 但系统服务起不全
-- SSH 永远不 ready
-
-3. `vm-serial.log` 为空本身不能直接说明根因
-这更像是辅助现象，而不是主因。
-可能是：
-- guest 控制台本来就没绑到串口
-- 或者它没走到会打印串口的阶段
-所以不要把“串口没字”误判成“显示参数有问题”。
-
-## 现在最有价值的后续动作
-
-如果继续查，最值得做的不是再回头修控制面，而是：
-
-1. 盯 guest 启动后期
-确认它是卡在：
-- 网络设备初始化
-- 用户态服务启动
-- 还是更底层的中断/计时器语义
-
-2. 定点验证 e1000 / usernet / 中断路径
-因为现在 `2226` 长时间监听但没 banner，这非常像“QEMU 外围网络转发在，但 guest 内网卡/sshd 没真正 ready”。
-
-3. 如果需要，再考虑换一个更容易观测启动过程的 guest 镜像
-Cirros 很轻，但当前现象说明它并没有给出足够可观测性。
-如果要继续压缩问题，后面可以考虑更容易看启动日志的最小 guest。
-
-## 一句话总结
-
-**当前项目状态已经从“基础 TCG 分布式执行链路不通”推进到了“guest 启动后期功能性卡点”。**
-
-我现在的判断是：
-**最可能的问题已经不在页拉取主链路，而在 guest 后期设备/中断/网络语义。**
+建议 Codex 下一步：在 `sigsegv_handler` 的写 fault 分支加日志，确认 `mprotect(page, 4096, PROT_READ|PROT_WRITE)` 的返回值是否为 0，以及确认 `mprotect` 的 `page` 地址是否真的是 fault 地址对齐到页边界的结果。

@@ -520,16 +520,33 @@ static void wavevm_remote_exec(CPUState *cpu) {
  * [关键逻辑] 拦截标准的 KVM_RUN 循环，根据调度策略决定本轮指令是交给本地 KVM 还是进行远程上下文序列化。
  * [后果] 这是超级虚拟机的总节拍器。它保证了在异构算力环境下，vCPU 能够平滑地在本地与远程之间切换执行流。
  */
+/*
+ * WaveVM vCPU thread function -- aligned with standard QEMU MTTCG skeleton.
+ *
+ * Key difference from vanilla MTTCG: the scheduling branch that routes
+ * vCPUs to either local cpu_exec() or remote wavevm_remote_exec() based
+ * on g_wvm_local_split.  Everything else (iothread lock discipline,
+ * cpu_exec_start/end, exit_request, qemu_wait_io_event every iteration)
+ * follows the standard QEMU pattern so that vm_start()/resume_all_vcpus()
+ * and the full VM lifecycle management work correctly.
+ */
 static void *wavevm_cpu_thread_fn(void *arg) {
     CPUState *cpu = arg;
-    int ret;
     char *role = getenv("WVM_ROLE");
     bool is_slave = (role && strcmp(role, "SLAVE") == 0);
 
     rcu_register_thread();
-    if (!kvm_enabled()) {
+    /*
+     * Only register TCG context for vCPUs that will execute locally.
+     * Remote-only vCPUs (cpu_index >= g_wvm_local_split on Master) only
+     * do RPC forwarding and never call cpu_exec(), so they do not need
+     * a TCG region.  Without this guard, tcg_region_initial_alloc fails
+     * because non-MTTCG mode only provisions a single TCG region.
+     */
+    if (!kvm_enabled() && (is_slave || cpu->cpu_index < g_wvm_local_split)) {
         tcg_register_thread();
     }
+
     qemu_mutex_lock_iothread();
     qemu_thread_get_self(cpu->thread);
     cpu->thread_id = qemu_get_thread_id();
@@ -537,96 +554,108 @@ static void *wavevm_cpu_thread_fn(void *arg) {
     current_cpu = cpu;
     cpu_thread_signal_created(cpu);
     qemu_guest_random_seed_thread_part2(cpu->random_seed);
-    qemu_mutex_unlock_iothread();
 
-    cpu->halted = 0;
-
+    /* Slave: hand off to dedicated slave loop (holds its own lock discipline) */
     if (is_slave) {
+        qemu_mutex_unlock_iothread();
         wavevm_slave_vcpu_loop(cpu);
         goto out;
     }
-    
+
+    /* KVM bootstrap for this vCPU (if KVM is the underlying engine) */
     if (kvm_enabled()) {
-        qemu_mutex_lock_iothread();
         kvm_init_vcpu(cpu, &error_fatal);
         kvm_init_cpu_signals(cpu);
         cpu_synchronize_state(cpu);
-        qemu_mutex_unlock_iothread();
     }
 
     /*
-     * WaveVM user path may run with kvm_enabled()==false while x86 CPU only
-     * has a single address space entry initialized. Local cpu_exec() will hit
-     * SMM MMU index and crash very early. In this fallback, route vCPU to the
-     * remote executor path and avoid local TCG execution.
+     * Trigger an exit from the first cpu_exec() call so we cycle through
+     * qemu_wait_io_event() and properly synchronize with vm_start().
      */
-    if (!kvm_enabled() && cpu->num_ases < 2 && g_wvm_local_split > 0) {
-        g_wvm_local_split = 0;
-    }
+    cpu->exit_request = 1;
 
-    while (1) {
-        if (cpu->unplug || cpu->stop) break;
-
-        // Guard against early execution before CPU address spaces are initialized.
-        // Without this, TCG may dereference a NULL memory dispatch table at boot.
-        if (!cpu_get_address_space(cpu, 0)) {
-            g_usleep(1000);
-            continue;
-        }
-
-        if (ops.schedule_policy(cpu->cpu_index) == 1) {
-            wavevm_remote_exec(cpu);
-            continue;
-        }
-
+    /*
+     * Main vCPU loop -- mirrors tcg_cpu_thread_fn (MTTCG) structure.
+     * The iothread lock is held at the top of every iteration.
+     */
+    do {
         if (cpu_can_run(cpu)) {
-            if (kvm_enabled()) {
+            /* Remote vCPU: forward to Slave via RPC */
+            if (ops.schedule_policy(cpu->cpu_index) == 1) {
+                qemu_mutex_unlock_iothread();
+                wavevm_remote_exec(cpu);
+                qemu_mutex_lock_iothread();
+            }
+            /* Local vCPU: execute guest code */
+            else if (kvm_enabled()) {
+                int ret;
+                qemu_mutex_unlock_iothread();
                 ret = kvm_vcpu_ioctl(cpu, KVM_RUN, 0);
+                qemu_mutex_lock_iothread();
 
                 if (ret < 0) {
-                    if (errno == EINTR || errno == EAGAIN) continue;
-                    fprintf(stderr, "KVM_RUN failed: %s\n", strerror(errno));
-                    break;
-                }
-                
-                struct kvm_run *run = cpu->kvm_run;
-                switch (run->exit_reason) {
+                    if (errno != EINTR && errno != EAGAIN) {
+                        fprintf(stderr, "KVM_RUN failed: %s\n", strerror(errno));
+                        break;
+                    }
+                } else {
+                    struct kvm_run *run = cpu->kvm_run;
+                    switch (run->exit_reason) {
                     case KVM_EXIT_IO:
-                        qemu_mutex_lock_iothread();
                         wavevm_handle_io(cpu);
-                        qemu_mutex_unlock_iothread();
                         break;
                     case KVM_EXIT_MMIO:
-                        qemu_mutex_lock_iothread();
                         wavevm_handle_mmio(cpu);
-                        qemu_mutex_unlock_iothread();
                         break;
-                    case KVM_EXIT_SHUTDOWN: 
+                    case KVM_EXIT_SHUTDOWN:
                         qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
-                        goto out;
-                    case KVM_EXIT_HLT:
-                        qemu_mutex_lock_iothread();
-                        qemu_wait_io_event(cpu);
-                        qemu_mutex_unlock_iothread();
+                        cpu->stop = true;
                         break;
-                    default: break;
+                    case KVM_EXIT_HLT:
+                        /* will fall through to qemu_wait_io_event below */
+                        cpu->halted = 1;
+                        break;
+                    default:
+                        break;
+                    }
                 }
             } else {
-                // TCG 路径的 cpu_exec 内部会处理 iothread 锁，外层不能重复加锁。
-                cpu_exec(cpu);
+                /* TCG local execution */
+                int r;
+                qemu_mutex_unlock_iothread();
+                cpu_exec_start(cpu);
+                r = cpu_exec(cpu);
+                cpu_exec_end(cpu);
+                qemu_mutex_lock_iothread();
+
+                switch (r) {
+                case EXCP_DEBUG:
+                    cpu_handle_guest_debug(cpu);
+                    break;
+                case EXCP_HALTED:
+                    break;
+                case EXCP_ATOMIC:
+                    qemu_mutex_unlock_iothread();
+                    cpu_exec_step_atomic(cpu);
+                    qemu_mutex_lock_iothread();
+                    break;
+                default:
+                    break;
+                }
             }
-        } else {
-            qemu_mutex_lock_iothread();
-            qemu_wait_io_event(cpu);
-            qemu_mutex_unlock_iothread();
         }
-    }
-out:
+
+        qatomic_mb_set(&cpu->exit_request, 0);
+        qemu_wait_io_event(cpu);
+    } while (!cpu->unplug || cpu_can_run(cpu));
+
     if (kvm_enabled() && cpu->kvm_fd >= 0) {
-        qemu_mutex_lock_iothread();
         kvm_destroy_vcpu(cpu);
-        qemu_mutex_unlock_iothread();
     }
+    cpu_thread_signal_destroyed(cpu);
+    qemu_mutex_unlock_iothread();
+out:
     rcu_unregister_thread();
     return NULL;
 }

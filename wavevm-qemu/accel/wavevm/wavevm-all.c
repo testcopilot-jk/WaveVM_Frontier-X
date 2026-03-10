@@ -5,6 +5,7 @@
 #include "qapi/qapi-builtin-visit.h"
 #include "sysemu/accel.h"
 #include "sysemu/cpus.h"
+#include "sysemu/cpu-timers.h"
 #include "sysemu/sysemu.h"
 #include "qom/object.h"
 #include "hw/boards.h"
@@ -90,8 +91,47 @@ static void *wavevm_tcg_kick_thread(void *opaque)
     return NULL;
 }
 
+/*
+ * WaveVM CpusAccel callbacks -- aligned with standard TCG MTTCG ops.
+ * kick_vcpu_thread and handle_interrupt are essential for the VM
+ * lifecycle (vm_start, pause, resume) and interrupt delivery to work.
+ */
+static void wavevm_kick_vcpu_thread(CPUState *cpu)
+{
+    cpu_exit(cpu);
+}
+
+static void wavevm_handle_interrupt(CPUState *cpu, int mask)
+{
+    g_assert(qemu_mutex_iothread_locked());
+
+    cpu->interrupt_request |= mask;
+
+    /*
+     * If called from iothread context, wake the target cpu in
+     * case it is halted.
+     */
+    if (!qemu_cpu_is_self(cpu)) {
+        qemu_cpu_kick(cpu);
+    }
+}
+
+static int64_t wavevm_get_virtual_clock(void)
+{
+    return cpu_get_clock();
+}
+
+static int64_t wavevm_get_elapsed_ticks(void)
+{
+    return cpu_get_ticks();
+}
+
 static const CpusAccel wavevm_cpus = {
     .create_vcpu_thread = wavevm_start_vcpu_thread,
+    .kick_vcpu_thread   = wavevm_kick_vcpu_thread,
+    .handle_interrupt   = wavevm_handle_interrupt,
+    .get_virtual_clock  = wavevm_get_virtual_clock,
+    .get_elapsed_ticks  = wavevm_get_elapsed_ticks,
 };
 
 static void wavevm_slave_import_ctx(CPUState *cpu,
