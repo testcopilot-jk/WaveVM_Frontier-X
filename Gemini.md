@@ -7409,10 +7409,11 @@ static void* rx_thread_loop(void *arg) {
                         (msg_type == MSG_VCPU_EXIT || msg_type == MSG_BLOCK_ACK)) {
                         uint32_t return_target = ntohl(hdr->target_id);
                         uint32_t my_composite_id = WVM_ENCODE_ID(g_my_vm_id, g_my_node_id);
-                        if (return_target == my_composite_id) {
+                        // 新协议优先用 target_id；仅当 target_id 无效/自动路由时回退到旧字段。
+                        if (!WVM_IS_VALID_TARGET(return_target) ||
+                            return_target == WVM_NODE_AUTO_ROUTE) {
                             uint32_t legacy_target = ntohl(hdr->slave_id);
-                            if (WVM_IS_VALID_TARGET(legacy_target) &&
-                                legacy_target != my_composite_id) {
+                            if (WVM_IS_VALID_TARGET(legacy_target)) {
                                 return_target = legacy_target;
                             }
                         }
