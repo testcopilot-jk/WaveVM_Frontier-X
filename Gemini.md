@@ -14563,8 +14563,7 @@ void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
         sigemptyset(&sa.sa_mask);
         sigaction(SIGSEGV, &sa, NULL);
 
-        // Initial state: Invalid (PROT_NONE)
-        mprotect(g_ram_base, g_ram_size, PROT_NONE);
+        // Initial state is handled per RAM block in wavevm_register_ram_block().
     }
 }
 ```
@@ -16263,6 +16262,8 @@ make -j$(nproc) qemu-system-x86_64
 - Node1：`172.30.0.133/23`
 - Node2：`172.30.0.168/23`
 
+---
+
 ### 2. 代码基线与远端同步策略
 
 - 本地仓库基线：`origin/main` 对应 `2e45b13b8`。
@@ -17111,3 +17112,266 @@ Serial 为空是因为 TCG + DSM（SIGSEGV → mprotect → snapshot → diff）
 ### 结论
 
 WaveVM fork 对 QEMU 5.2.0 原版代码的侵入极小（4 个文件，共约 30 行修改）。核心逻辑完全封装在 `accel/wavevm/` 和 `hw/wavevm/` 新增目录中。`softmmu/cpus.c`、`softmmu/vl.c`、`accel/tcg/tcg-cpus.c` 等核心文件**未做任何修改**——WaveVM 通过标准 `CpusAccel` 接口注册自己的加速器实现。
+
+---
+
+## 🧪 2026-03-13 Codespace 双节点测试记录（扁平 / 分形，TCG 逻辑通）
+
+说明：
+- 执行环境：GitHub Codespaces 单机容器。
+- 目标口径：不启用分布式存储，验证分布式算力/内存链路**逻辑通**（链路不崩、进程稳定、端口监听存在），允许因 TCG 过慢导致 VM 交互未完成。
+- 禁用 KVM：通过临时移走 `/dev/kvm` 的方式强制走 TCG。
+- /dev/shm 扩容：为避免 `SIGBUS`，将 `/dev/shm` remount 至 8G。
+
+### 0. 本次新增依赖（显式安装）
+
+（均为 `apt-get install -y --no-install-recommends`）
+
+- `gdb`
+- `ninja-build`
+- `libglib2.0-dev`
+- `libpixman-1-dev`
+- `libslirp-dev`
+- `libfdt-dev`
+
+### 1. 环境准备关键动作
+
+```bash
+# 扩容 /dev/shm，避免 SHM 映射导致 SIGBUS
+mount -o remount,size=8G /dev/shm
+
+# 强制 TCG（禁用 /dev/kvm）
+mv /dev/kvm /dev/kvm.off
+# （测试结束后再 mv 回去）
+```
+
+---
+
+### 2. 扁平化架构（Flat）最后一次“逻辑通”记录
+
+**目录**：`artifacts/single-host-2node-vm-20260313-004345`
+
+**配置文件**：`flat_2node.conf`
+```txt
+NODE 0 127.0.0.1 19100 1 1
+NODE 1 127.0.0.1 19200 1 1
+```
+
+**启动命令（完整）**：`run.sh`
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT=/workspaces/WaveVM_Frontier-X
+ART_DIR="$(cd "$(dirname "$0")" && pwd)"
+CFG="$ART_DIR/flat_2node.conf"
+cat > "$CFG" <<'EOCFG'
+NODE 0 127.0.0.1 19100 1 1
+NODE 1 127.0.0.1 19200 1 1
+EOCFG
+
+pkill -f "wavevm_node_master 1024 19100" 2>/dev/null || true
+pkill -f "wavevm_node_master 1024 19200" 2>/dev/null || true
+pkill -f "wavevm_node_slave 19105" 2>/dev/null || true
+pkill -f "wavevm_node_slave 19205" 2>/dev/null || true
+pkill -f "qemu-system-x86_64.*hostfwd=tcp::2226-:22" 2>/dev/null || true
+pkill -f "wavevm_gateway 19120" 2>/dev/null || true
+pkill -f "wavevm_gateway 19220" 2>/dev/null || true
+rm -f /tmp/wvm_user_0.sock /tmp/wvm_user_1.sock 2>/dev/null || true
+
+QPATH="$ROOT/wavevm-qemu/build-native:$PATH"
+
+(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19120 127.0.0.1 19100 "$CFG" 19101) >"$ART_DIR/gw0.log" 2>&1 &
+G0=$!
+(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19220 127.0.0.1 19200 "$CFG" 19201) >"$ART_DIR/gw1.log" 2>&1 &
+G1=$!
+(env PATH="$QPATH" WVM_SHM_FILE=/wvm_flat_node0 stdbuf -oL -eL "$ROOT/slave_daemon/wavevm_node_slave" 19105 2 2048 0 19101) >"$ART_DIR/slave0.log" 2>&1 &
+S0=$!
+(env PATH="$QPATH" WVM_SHM_FILE=/wvm_flat_node1 stdbuf -oL -eL "$ROOT/slave_daemon/wavevm_node_slave" 19205 1 1024 1 19201) >"$ART_DIR/slave1.log" 2>&1 &
+S1=$!
+(env PATH="$QPATH" WVM_INSTANCE_ID=0 WVM_SHM_FILE=/wvm_flat_node0 stdbuf -oL -eL "$ROOT/master_core/wavevm_node_master" 2048 19100 "$CFG" 0 19101 19105 1) >"$ART_DIR/master0.log" 2>&1 &
+M0=$!
+(env PATH="$QPATH" WVM_INSTANCE_ID=1 WVM_SHM_FILE=/wvm_flat_node1 stdbuf -oL -eL "$ROOT/master_core/wavevm_node_master" 1024 19200 "$CFG" 1 19201 19205 1) >"$ART_DIR/master1.log" 2>&1 &
+M1=$!
+
+sleep 8
+(env PATH="$QPATH" WVM_INSTANCE_ID=0 stdbuf -oL -eL "$ROOT/wavevm-qemu/build-native/qemu-system-x86_64" \
+  -accel wavevm -machine q35 -m 3072 -smp 3 \
+  -object memory-backend-ram,id=ram0,size=2048M \
+  -object memory-backend-ram,id=ram1,size=1024M \
+  -numa node,memdev=ram0,cpus=0-1,nodeid=0 \
+  -numa node,memdev=ram1,cpus=2,nodeid=1 \
+  -drive file="$ROOT/artifacts/images/cirros-0.6.2-x86_64-disk.img",if=virtio,format=qcow2 \
+  -netdev user,id=ne,hostfwd=tcp::2226-:22 -device e1000,netdev=ne \
+  -display none -vga none \
+  -serial file:"$ART_DIR/vm-serial.log" -monitor none) >"$ART_DIR/vm.log" 2>&1 &
+Q=$!
+```
+
+**执行方式（强制 TCG）**：
+```bash
+cat > /tmp/run_no_kvm2.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT=/workspaces/WaveVM_Frontier-X
+ART=$ROOT/artifacts/single-host-2node-vm-20260313-004345
+mv /dev/kvm /dev/kvm.off
+trap 'mv /dev/kvm.off /dev/kvm' EXIT
+bash "$ART/run.sh"
+EOF
+chmod +x /tmp/run_no_kvm2.sh
+bash /tmp/run_no_kvm2.sh
+```
+
+**结果（逻辑通）**：
+- QEMU 正常启动，`2226` 端口监听存在。
+- `SSH_BANNER` 为空，推断为 TCG 过慢导致交互未完成。
+- 无崩溃记录。
+
+---
+
+### 3. 分形架构（Fract）最后一次“逻辑通”记录
+
+**目录**：`artifacts/fract-2node-20260313-020144`
+
+**配置文件**：
+
+`fract_2node.conf`
+```txt
+NODE 0 127.0.0.1 19120 1 1
+NODE 1 127.0.0.1 19220 1 1
+```
+
+`l2_routes.txt`（L1 根网关）
+```txt
+ROUTE 0 1 127.0.0.1 19320
+ROUTE 1 1 127.0.0.1 19420
+```
+
+`l1a_routes.txt`（L2A）
+```txt
+ROUTE 0 1 127.0.0.1 19120
+```
+
+`l1b_routes.txt`（L2B）
+```txt
+ROUTE 1 1 127.0.0.1 19220
+```
+
+`sidecar_a_routes.txt`（固定上游，防止学习覆盖）
+```txt
+ROUTE 0 2 127.0.0.1 19320
+```
+
+`sidecar_b_routes.txt`（固定上游，防止学习覆盖）
+```txt
+ROUTE 0 2 127.0.0.1 19420
+```
+
+**启动命令（完整）**：`run.sh`
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT=/workspaces/WaveVM_Frontier-X
+ART_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+CFG="$ART_DIR/fract_2node.conf"
+cat > "$CFG" <<'EOCFG'
+NODE 0 127.0.0.1 19120 1 1
+NODE 1 127.0.0.1 19220 1 1
+EOCFG
+
+L2_CFG="$ART_DIR/l2_routes.txt"
+cat > "$L2_CFG" <<'EOCFG'
+ROUTE 0 1 127.0.0.1 19320
+ROUTE 1 1 127.0.0.1 19420
+EOCFG
+
+L1A_CFG="$ART_DIR/l1a_routes.txt"
+cat > "$L1A_CFG" <<'EOCFG'
+ROUTE 0 1 127.0.0.1 19120
+EOCFG
+
+L1B_CFG="$ART_DIR/l1b_routes.txt"
+cat > "$L1B_CFG" <<'EOCFG'
+ROUTE 1 1 127.0.0.1 19220
+EOCFG
+
+SIDECAR_A_CFG="$ART_DIR/sidecar_a_routes.txt"
+cat > "$SIDECAR_A_CFG" <<'EOCFG'
+ROUTE 0 2 127.0.0.1 19320
+EOCFG
+
+SIDECAR_B_CFG="$ART_DIR/sidecar_b_routes.txt"
+cat > "$SIDECAR_B_CFG" <<'EOCFG'
+ROUTE 0 2 127.0.0.1 19420
+EOCFG
+
+pkill -f "wavevm_node_master 1024 19100" 2>/dev/null || true
+pkill -f "wavevm_node_master 1024 19200" 2>/dev/null || true
+pkill -f "wavevm_node_slave 19105" 2>/dev/null || true
+pkill -f "wavevm_node_slave 19205" 2>/dev/null || true
+pkill -f "qemu-system-x86_64.*hostfwd=tcp::2226-:22" 2>/dev/null || true
+pkill -f "wavevm_gateway 19120" 2>/dev/null || true
+pkill -f "wavevm_gateway 19220" 2>/dev/null || true
+pkill -f "wavevm_gateway 19320" 2>/dev/null || true
+pkill -f "wavevm_gateway 19420" 2>/dev/null || true
+pkill -f "wavevm_gateway 19520" 2>/dev/null || true
+rm -f /tmp/wvm_user_0.sock /tmp/wvm_user_1.sock 2>/dev/null || true
+
+QPATH="$ROOT/wavevm-qemu/build-native:$PATH"
+
+(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19520 127.0.0.1 19520 "$L2_CFG" 19521) >"$ART_DIR/gw_l2.log" 2>&1 &
+GL2=$!
+(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19320 127.0.0.1 19520 "$L1A_CFG" 19321) >"$ART_DIR/gw_l1a.log" 2>&1 &
+GL1A=$!
+(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19420 127.0.0.1 19520 "$L1B_CFG" 19421) >"$ART_DIR/gw_l1b.log" 2>&1 &
+GL1B=$!
+(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19120 127.0.0.1 19320 "$SIDECAR_A_CFG" 19121) >"$ART_DIR/gw_sidecar_a.log" 2>&1 &
+GSA=$!
+(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19220 127.0.0.1 19420 "$SIDECAR_B_CFG" 19221) >"$ART_DIR/gw_sidecar_b.log" 2>&1 &
+GSB=$!
+
+(env PATH="$QPATH" WVM_SHM_FILE=/wvm_fract_node0 stdbuf -oL -eL "$ROOT/slave_daemon/wavevm_node_slave" 19105 2 2048 0 19121) >"$ART_DIR/slave0.log" 2>&1 &
+S0=$!
+(env PATH="$QPATH" WVM_SHM_FILE=/wvm_fract_node1 stdbuf -oL -eL "$ROOT/slave_daemon/wavevm_node_slave" 19205 1 1024 1 19221) >"$ART_DIR/slave1.log" 2>&1 &
+S1=$!
+
+(env PATH="$QPATH" WVM_INSTANCE_ID=0 WVM_SHM_FILE=/wvm_fract_node0 stdbuf -oL -eL "$ROOT/master_core/wavevm_node_master" 2048 19100 "$CFG" 0 19121 19105 1) >"$ART_DIR/master0.log" 2>&1 &
+M0=$!
+(env PATH="$QPATH" WVM_INSTANCE_ID=1 WVM_SHM_FILE=/wvm_fract_node1 stdbuf -oL -eL "$ROOT/master_core/wavevm_node_master" 1024 19200 "$CFG" 1 19221 19205 1) >"$ART_DIR/master1.log" 2>&1 &
+M1=$!
+
+sleep 8
+(env PATH="$QPATH" WVM_INSTANCE_ID=0 stdbuf -oL -eL "$ROOT/wavevm-qemu/build-native/qemu-system-x86_64" \
+  -accel wavevm -machine q35 -m 3072 -smp 3 \
+  -object memory-backend-ram,id=ram0,size=2048M \
+  -object memory-backend-ram,id=ram1,size=1024M \
+  -numa node,memdev=ram0,cpus=0-1,nodeid=0 \
+  -numa node,memdev=ram1,cpus=2,nodeid=1 \
+  -drive file="$ROOT/artifacts/images/cirros-0.6.2-x86_64-disk.img",if=virtio,format=qcow2 \
+  -netdev user,id=ne,hostfwd=tcp::2226-:22 -device e1000,netdev=ne \
+  -display none -vga none \
+  -serial file:"$ART_DIR/vm-serial.log" -monitor none) >"$ART_DIR/vm.log" 2>&1 &
+Q=$!
+```
+
+**执行方式（强制 TCG + /dev/shm 扩容）**：
+```bash
+mount -o remount,size=8G /dev/shm
+
+cat > /tmp/run_fract_no_kvm.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+ART_DIR=/workspaces/WaveVM_Frontier-X/artifacts/fract-2node-20260313-020144
+mv /dev/kvm /dev/kvm.off
+trap 'mv /dev/kvm.off /dev/kvm' EXIT
+bash "$ART_DIR/run.sh"
+EOF
+chmod +x /tmp/run_fract_no_kvm.sh
+bash /tmp/run_fract_no_kvm.sh
+```
+
+**结果（逻辑通）**：
+- QEMU 正常启动，`2226` 端口监听存在。
+- `SSH_BANNER` 为空，推断为 TCG 过慢导致交互未完成。
+- 无 `Bus error` / `SIGSEGV` 崩溃。

@@ -1544,7 +1544,6 @@ void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
         sigemptyset(&sa.sa_mask);
         sigaction(SIGSEGV, &sa, NULL);
 
-        // Initial state: Invalid (PROT_NONE)
-        mprotect(g_ram_base, g_ram_size, PROT_NONE);
+        // Initial state is handled per RAM block in wavevm_register_ram_block().
     }
 }
