@@ -1,0 +1,31 @@
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19121
+[Gateway] Loaded 1 route groups.
+[Gateway] System has 4 cores. Scaling out RX workers...
+[Gateway] Worker bound fd=5 ip=0.0.0.0 port=19120
+[Gateway] Worker bound fd=6 ip=0.0.0.0 port=19120
+[Gateway] Control Plane Active on Port 19121 (Static)
+[Gateway] Worker bound fd=4 ip=0.0.0.0 port=19120
+[Gateway] Worker bound fd=8 ip=0.0.0.0 port=19120
+[Gateway] node probe route=0 exists=1 pinned=1 dst=127.0.0.1:19320
+[Gateway] route_id decided msg=40 route=0
+[Gateway] internal_push call msg=40 route=0
+[Gateway] node probe route=0 exists=1 pinned=1 dst=127.0.0.1:19320
+[Gateway] route_id decided msg=40 route=0
+[Gateway] internal_push call msg=40 route=0
+[Gateway] node probe route=0 exists=1 pinned=1 dst=127.0.0.1:19320
+[Gateway] route_id decided msg=40 route=0
+[Gateway] internal_push call msg=40 route=0
+[Gateway] node probe route=0 exists=1 pinned=1 dst=127.0.0.1:19320
+[Gateway] route_id decided msg=40 route=0
+[Gateway] internal_push call msg=40 route=0
+[Gateway] node probe route=0 exists=1 pinned=1 dst=127.0.0.1:19320
+[Gateway] route_id decided msg=40 route=0
+[Gateway] internal_push call msg=40 route=0
+[Gateway] node probe route=0 exists=1 pinned=1 dst=127.0.0.1:19320
+[Gateway] node probe route=0 exists=1 pinned=1 dst=127.0.0.1:19320
+[Gateway] node probe route=0 exists=1 pinned=1 dst=127.0.0.1:19320
+[Gateway] recv msg=5 src=127.0.0.1:19100 src_id=0 target_id=0 len=740
+[Gateway] routing msg=5 target_id=0 valid=1
+[Gateway] routing checkpoint msg=5
+[Gateway] vcpu pre-branch target_id=0
+[Gateway] vcpu branch=valid target_id=0

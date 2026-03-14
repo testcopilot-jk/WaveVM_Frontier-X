@@ -1,0 +1,27 @@
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.ubuntu.com>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+warning: Error disabling address space randomization: Operation not permitted
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+[Warning] Failed to open /dev/wavevm (Kernel Mode disabled?): No such file or directory
+[New Thread 0x792be29076c0 (LWP 6156)]
+[New Thread 0x792be21066c0 (LWP 6157)]
+[New Thread 0x792be15046c0 (LWP 6158)]
+[New Thread 0x792be09026c0 (LWP 6159)]
+[New Thread 0x792bdbfff6c0 (LWP 6160)]
+[New Thread 0x792bdb3fd6c0 (LWP 6161)]
+[New Thread 0x792bda7fb6c0 (LWP 6162)]
+[New Thread 0x792bd9ffa6c0 (LWP 6163)]
+[New Thread 0x792bd97f96c0 (LWP 6164)]
+[New Thread 0x792bd8ff86c0 (LWP 6165)]
+[New Thread 0x792bb5b7f6c0 (LWP 6166)]
+[New Thread 0x792bb537e6c0 (LWP 6167)]
+[New Thread 0x792bb4b7d6c0 (LWP 6168)]
+[Swarm] New neighbor discovered: 1
+[New Thread 0x792b6ffff6c0 (LWP 6169)]
+[Lifecycle] Transition to WARMING
+[Lifecycle] Transition to ACTIVE. Participating in Owner Set.

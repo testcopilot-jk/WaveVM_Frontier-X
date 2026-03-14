@@ -103,6 +103,19 @@ void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa) {
         g_fault_hook_enabled = (!hook_env || atoi(hook_env) != 0);
         g_fault_hook_checked = true;
     }
+    for (int i = 0; i < g_block_count; i++) {
+        if (g_mem_blocks[i].gpa_start == gpa &&
+            g_mem_blocks[i].hva_start == (uintptr_t)hva &&
+            g_mem_blocks[i].size == size) {
+            fprintf(stderr,
+                    "[WaveVM-User] dedup ram_block hva=%p gpa=%#llx size=%#llx blocks=%d\n",
+                    hva,
+                    (unsigned long long)gpa,
+                    (unsigned long long)size,
+                    g_block_count);
+            return;
+        }
+    }
     if (g_block_count >= MAX_RAM_BLOCKS) exit(1);
     if (!kvm_enabled()) {
         mprotect(hva, size, PROT_NONE);

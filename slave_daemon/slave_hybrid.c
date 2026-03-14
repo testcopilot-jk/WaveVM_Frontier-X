@@ -1274,6 +1274,8 @@ void* kvm_worker_thread(void *arg) {
             }
 
             if (type == MSG_VCPU_RUN) {
+                fprintf(stderr, "[Slave RX VCPU_RUN] src_port=%u len=%d mode_tcg=%u\n",
+                        (unsigned)ntohs(c[i].sin_port), msgs[i].msg_len, h->mode_tcg);
                 // [FIX] 必须重建 IPC 请求结构体，不能直接强转 payload
                 // 因为 payload 里只有 Context 数据，没有 IPC 头部的 slave_id 等字段
                 struct wvm_ipc_cpu_run_req local_req;

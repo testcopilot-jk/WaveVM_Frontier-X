@@ -4,15 +4,18 @@
   "remoteUser": "root",
   "containerUser": "root",
   "updateRemoteUserUID": false,
+  "privileged": true,
   "capAdd": [
     "NET_ADMIN",
     "NET_RAW"
   ],
+  "securityOpt": [
+    "no-new-privileges:false",
+    "seccomp=unconfined",
+    "apparmor=unconfined"
+  ],
   "runArgs": [
-    "--privileged",
-    "--device=/dev/net/tun:/dev/net/tun",
-    "--security-opt=no-new-privileges:false",
-    "--security-opt=seccomp=unconfined"
+    "--device=/dev/net/tun:/dev/net/tun"
   ],
   "postCreateCommand": "bash -lc 'if ! command -v tailscale >/dev/null 2>&1; then curl -fsSL https://tailscale.com/install.sh | sh; fi'"
 }

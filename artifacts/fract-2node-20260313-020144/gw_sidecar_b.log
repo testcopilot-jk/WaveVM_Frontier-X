@@ -1,0 +1,17 @@
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19221
+[Gateway] Loaded 1 route groups.
+[Gateway] System has 4 cores. Scaling out RX workers...
+[Gateway] Worker bound fd=4 ip=0.0.0.0 port=19220
+[Gateway] Worker bound fd=5 ip=0.0.0.0 port=19220
+[Gateway] Control Plane Active on Port 19221 (Static)
+[Gateway] Worker bound fd=6 ip=0.0.0.0 port=19220
+[Gateway] Worker bound fd=8 ip=0.0.0.0 port=19220
+[Gateway] node probe route=1 exists=1 pinned=1 dst=127.0.0.1:19420
+[Gateway] route_id decided msg=40 route=1
+[Gateway] internal_push call msg=40 route=1
+[Gateway] node probe route=1 exists=1 pinned=1 dst=127.0.0.1:19420
+[Gateway] route_id decided msg=40 route=1
+[Gateway] internal_push call msg=40 route=1
+[Gateway] node probe route=1 exists=1 pinned=1 dst=127.0.0.1:19420
+[Gateway] route_id decided msg=40 route=1
+[Gateway] internal_push call msg=40 route=1

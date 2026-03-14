@@ -1,0 +1,2 @@
+# Pin all IDs to L2A to avoid auto-learn overriding upstream.
+ROUTE 0 2 127.0.0.1 19320

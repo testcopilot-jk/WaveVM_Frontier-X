@@ -1,0 +1,8 @@
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19521
+[Gateway] Loaded 2 route groups.
+[Gateway] System has 4 cores. Scaling out RX workers...
+[Gateway] Control Plane Active on Port 19521 (Static)
+[Gateway] Worker bound fd=4 ip=0.0.0.0 port=19520
+[Gateway] Worker bound fd=5 ip=0.0.0.0 port=19520
+[Gateway] Worker bound fd=6 ip=0.0.0.0 port=19520
+[Gateway] Worker bound fd=8 ip=0.0.0.0 port=19520

@@ -1,0 +1,2 @@
+STATUS=FAIL
+REASON=environment_blocked_udp_socket_operations

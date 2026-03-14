@@ -1,0 +1,1 @@
+/workspaces/WaveVM_Frontier-X/wavevm-qemu/roms/seabios/Makefile

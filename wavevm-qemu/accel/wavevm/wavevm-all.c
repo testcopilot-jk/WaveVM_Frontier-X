@@ -918,16 +918,31 @@ static void wavevm_region_add(MemoryListener *listener, MemoryRegionSection *sec
 
     uint64_t start_gpa = section->offset_within_address_space;
     uint64_t size = int128_get64(section->size);
+    void *hva = memory_region_get_ram_ptr(section->mr) + section->offset_within_region;
     
     if (size < 4096) return;
 
     // 记录到本地表
     if (global_layout.count < 32) {
+        for (int i = 0; i < global_layout.count; i++) {
+            if (global_layout.slots[i].start == start_gpa &&
+                global_layout.slots[i].size == size) {
+                fprintf(stderr,
+                        "[WaveVM] dedup region_add gpa=%#llx size=%#llx count=%d\n",
+                        (unsigned long long)start_gpa,
+                        (unsigned long long)size,
+                        global_layout.count);
+                return;
+            }
+        }
         global_layout.slots[global_layout.count].start = start_gpa;
         global_layout.slots[global_layout.count].size = size;
         global_layout.count++;
-        
-        void *hva = memory_region_get_ram_ptr(section->mr) + section->offset_within_region;
+        fprintf(stderr,
+                "[WaveVM] region_add gpa=%#llx size=%#llx count=%d\n",
+                (unsigned long long)start_gpa,
+                (unsigned long long)size,
+                global_layout.count);
 
         /* User-mem fault hook is only valid in user mode. */
         if (wavevm_user_mode_enabled()) {

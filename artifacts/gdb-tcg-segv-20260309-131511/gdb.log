@@ -1,0 +1,344 @@
+warning: Error disabling address space randomization: Operation not permitted
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.ubuntu.com>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+warning: could not find '.gnu_debugaltlink' file for /lib/x86_64-linux-gnu/libglib-2.0.so.0
+warning: could not find '.gnu_debugaltlink' file for /lib/x86_64-linux-gnu/libgio-2.0.so.0
+warning: could not find '.gnu_debugaltlink' file for /lib/x86_64-linux-gnu/libgobject-2.0.so.0
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+warning: could not find '.gnu_debugaltlink' file for /lib/x86_64-linux-gnu/libgmodule-2.0.so.0
+warning: could not find '.gnu_debugaltlink' file for /lib/x86_64-linux-gnu/liblber.so.2
+warning: could not find '.gnu_debugaltlink' file for /lib/x86_64-linux-gnu/libbrotlidec.so.1
+warning: could not find '.gnu_debugaltlink' file for /lib/x86_64-linux-gnu/libbrotlicommon.so.1
+[New Thread 0x7dc2f67626c0 (LWP 2332)]
+[New Thread 0x7dc2f5d5f6c0 (LWP 2333)]
+[WaveVM] /dev/kvm not available (mode=user), stay on TCG path
+[New Thread 0x7dc2f54796c0 (LWP 2334)]
+qemu-system-x86_64: -accel wavevm: WaveVM: defer user mem init until first RAM block is registered
+[New Thread 0x7dc2f4ac46c0 (LWP 2337)]
+[WaveVM-User] V31 Master TCG Harvester Active (IPC Diff Path)
+[New Thread 0x7dc2672c76c0 (LWP 2338)]
+
+Thread 1 "qemu-system-x86" received signal SIGSEGV, Segmentation fault.
+__memcpy_avx_unaligned_erms () at ../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:660
+warning: 660	../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S: No such file or directory
+
+Thread 6 (Thread 0x7dc2672c76c0 (LWP 2338) "qemu-system-x86"):
+#0  0x00007dc2f79f1adf in __GI___clock_nanosleep (clock_id=clock_id@entry=0, flags=flags@entry=0, req=req@entry=0x7dc2672b64d0, rem=rem@entry=0x0) at ../sysdeps/unix/sysv/linux/clock_nanosleep.c:78
+        sc_cancel_oldtype = 0
+        sc_ret = <optimized out>
+        r = <optimized out>
+#1  0x00007dc2f79fea27 in __GI___nanosleep (req=req@entry=0x7dc2672b64d0, rem=rem@entry=0x0) at ../sysdeps/unix/sysv/linux/nanosleep.c:25
+        ret = <optimized out>
+#2  0x00007dc2f7a2e75c in usleep (useconds=<optimized out>) at ../sysdeps/posix/usleep.c:31
+        ts = {tv_sec = 0, tv_nsec = 1000000}
+#3  0x000061cb74a92cd4 in diff_harvester_thread_fn (arg=0x0) at ../accel/wavevm/wavevm-user-mem.c:1027
+        batch_head = 0x0
+        curr = 0x0
+        current_snapshot = 0x7dc258000b70
+        batch_counter = 0
+#4  0x00007dc2f79a1aa4 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+        ret = <optimized out>
+        pd = <optimized out>
+        out = <optimized out>
+        unwind_buf = {cancel_jmp_buf = {{jmp_buf = {138273908094656, -771028301170097723, 138273908094656, -67160, 0, 140726547398256, -771028301191069243, -770712868522704443}, mask_was_saved = 0}}, priv = {pad = {0x0, 0x0, 0x0, 0x0}, data = {prev = 0x0, cleanup = 0x0, canceltype = 0}}}
+        not_first_call = <optimized out>
+#5  0x00007dc2f7a2ea64 in clone () at ../sysdeps/unix/sysv/linux/x86_64/clone.S:100
+
+Thread 5 (Thread 0x7dc2f4ac46c0 (LWP 2337) "qemu-system-x86"):
+#0  0x00007dc2f799dd71 in __futex_abstimed_wait_common64 (private=0, cancel=true, abstime=0x0, op=393, expected=0, futex_word=0x61cbac698edc) at ./nptl/futex-internal.c:57
+        sc_cancel_oldtype = 0
+        sc_ret = <optimized out>
+        resultvar = <optimized out>
+        __arg6 = <optimized out>
+        __arg5 = <optimized out>
+        __arg4 = <optimized out>
+        __arg3 = <optimized out>
+        __arg2 = <optimized out>
+        __arg1 = <optimized out>
+        _a6 = <optimized out>
+        _a5 = <optimized out>
+        _a4 = <optimized out>
+        _a3 = <optimized out>
+        _a2 = <optimized out>
+        _a1 = <optimized out>
+#1  __futex_abstimed_wait_common (cancel=true, private=0, abstime=0x0, clockid=0, expected=0, futex_word=0x61cbac698edc) at ./nptl/futex-internal.c:87
+        err = <optimized out>
+        clockbit = 256
+        op = 393
+        err = <optimized out>
+        clockbit = <optimized out>
+        op = <optimized out>
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x61cbac698edc, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x0, private=private@entry=0) at ./nptl/futex-internal.c:139
+#3  0x00007dc2f79a07ed in __pthread_cond_wait_common (abstime=0x0, clockid=0, mutex=0x61cb7558a7e0 <qemu_global_mutex>, cond=0x61cbac698eb0) at ./nptl/pthread_cond_wait.c:503
+        spin = 0
+        buffer = {__routine = 0x7dc2f79a04b0 <__condvar_cleanup_waiting>, __arg = 0x7dc2f4ab33d0, __canceltype = -190034724, __prev = 0x0}
+        cbuffer = {wseq = 3, cond = 0x61cbac698eb0, mutex = 0x61cb7558a7e0 <qemu_global_mutex>, private = 0}
+        err = <optimized out>
+        g = 1
+        flags = <optimized out>
+        g1_start = <optimized out>
+        signals = <optimized out>
+        result = 0
+        wseq = 3
+        seq = 1
+        private = 0
+        maxspin = <optimized out>
+        err = <optimized out>
+        result = <optimized out>
+        wseq = <optimized out>
+        g = <optimized out>
+        seq = <optimized out>
+        flags = <optimized out>
+        private = <optimized out>
+        signals = <optimized out>
+        done = <optimized out>
+        g1_start = <optimized out>
+        spin = <optimized out>
+        buffer = {__routine = <optimized out>, __arg = <optimized out>, __canceltype = <optimized out>, __prev = <optimized out>}
+        cbuffer = {wseq = <optimized out>, cond = <optimized out>, mutex = <optimized out>, private = <optimized out>}
+        s = <optimized out>
+#4  ___pthread_cond_wait (cond=0x61cbac698eb0, mutex=0x61cb7558a7e0 <qemu_global_mutex>) at ./nptl/pthread_cond_wait.c:627
+#5  0x000061cb74da4ae8 in qemu_cond_wait_impl (cond=0x61cbac698eb0, mutex=0x61cb7558a7e0 <qemu_global_mutex>, file=0x61cb74eccede "../softmmu/cpus.c", line=411) at ../util/qemu-thread-posix.c:174
+        err = 25035
+        __PRETTY_FUNCTION__ = "qemu_cond_wait_impl"
+        __func__ = "qemu_cond_wait_impl"
+#6  0x000061cb74af9b0f in qemu_wait_io_event (cpu=0x61cbac668390) at ../softmmu/cpus.c:411
+        _f = 0x61cb74da4a70 <qemu_cond_wait_impl>
+        slept = true
+#7  0x000061cb74be2842 in wavevm_cpu_thread_fn (arg=0x61cbac668390) at ../accel/wavevm/wavevm-cpu.c:620
+        cpu = 0x61cbac668390
+        ret = 0
+        role = 0x0
+        is_slave = false
+#8  0x000061cb74da536d in qemu_thread_start (args=0x61cbac698ef0) at ../util/qemu-thread-posix.c:521
+        __cancel_buf = {__cancel_jmp_buf = {{__cancel_jmp_buf = {138276282059996, -770706141601873467, 138276282058432, -67160, 0, 140726547397872, -770706141629136443, -3648225510432194107}, __mask_was_saved = 0}}, __pad = {0x7dc2f4ab35e0, 0x0, 0x3f1abaad9f7bd400, 0x0}}
+        __cancel_routine = 0x61cb74da520f <qemu_thread_atexit_notify>
+        __cancel_arg = 0x0
+        __not_first_call = 0
+        qemu_thread_args = 0x61cbac698ef0
+        start_routine = 0x61cb74be2488 <wavevm_cpu_thread_fn>
+        arg = 0x61cbac668390
+        r = 0x3f1abaad9f7bd400
+#9  0x00007dc2f79a1aa4 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+        ret = <optimized out>
+        pd = <optimized out>
+        out = <optimized out>
+        unwind_buf = {cancel_jmp_buf = {{jmp_buf = {138276282058432, -770706141578804795, 138276282058432, -67160, 0, 140726547397872, -770706141599776315, -770712868522704443}, mask_was_saved = 0}}, priv = {pad = {0x0, 0x0, 0x0, 0x0}, data = {prev = 0x0, cleanup = 0x0, canceltype = 0}}}
+        not_first_call = <optimized out>
+#10 0x00007dc2f7a2ea64 in clone () at ../sysdeps/unix/sysv/linux/x86_64/clone.S:100
+
+Thread 4 (Thread 0x7dc2f54796c0 (LWP 2334) "qemu-system-x86"):
+#0  0x00007dc2f7a20aca in __GI___libc_read (nbytes=8, buf=0x7dc2f54674c0, fd=9) at ../sysdeps/unix/sysv/linux/read.c:26
+        sc_ret = -512
+        sc_cancel_oldtype = 0
+        sc_ret = <optimized out>
+        sc_ret = <optimized out>
+        __arg2 = <optimized out>
+        _a3 = <optimized out>
+        _a1 = <optimized out>
+        resultvar = <optimized out>
+        __arg3 = <optimized out>
+        __arg1 = <optimized out>
+        _a2 = <optimized out>
+#1  __GI___libc_read (fd=9, buf=0x7dc2f54674c0, nbytes=8) at ../sysdeps/unix/sysv/linux/read.c:24
+#2  0x000061cb74b13e51 in read_exact (fd=9, buf=0x7dc2f54674c0, len=8) at ../accel/wavevm/wavevm-all.c:397
+        ret = 4547152028651738112
+        received = 0
+        ptr = 0x7dc2f54674c0 ""
+#3  0x000061cb74b140ae in wavevm_master_ipc_thread (arg=0x61cbac454270) at ../accel/wavevm/wavevm-all.c:454
+        s = 0x61cbac454270
+        hdr = {type = 0, len = 0}
+        payload_buf = '\000' <repeats 2440 times>...
+#4  0x000061cb74da536d in qemu_thread_start (args=0x61cbac63aef0) at ../util/qemu-thread-posix.c:521
+        __cancel_buf = {__cancel_jmp_buf = {{__cancel_jmp_buf = {138276292238556, -770708157552148027, 138276292236992, -67160, 2, 140726547398640, -770708157579411003, -3648225510432194107}, __mask_was_saved = 0}}, __pad = {0x7dc2f54685e0, 0x0, 0x3f1abaad9f7bd400, 0x0}}
+        __cancel_routine = 0x61cb74da520f <qemu_thread_atexit_notify>
+        __cancel_arg = 0x0
+        __not_first_call = 0
+        qemu_thread_args = 0x61cbac63aef0
+        start_routine = 0x61cb74b14001 <wavevm_master_ipc_thread>
+        arg = 0x61cbac454270
+        r = 0x3f1abaad9f7bd400
+#5  0x00007dc2f79a1aa4 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+        ret = <optimized out>
+        pd = <optimized out>
+        out = <optimized out>
+        unwind_buf = {cancel_jmp_buf = {{jmp_buf = {138276292236992, -770708157529079355, 138276292236992, -67160, 2, 140726547398640, -770708157550050875, -770712868522704443}, mask_was_saved = 0}}, priv = {pad = {0x0, 0x0, 0x0, 0x0}, data = {prev = 0x0, cleanup = 0x0, canceltype = 0}}}
+        not_first_call = <optimized out>
+#6  0x00007dc2f7a2ea64 in clone () at ../sysdeps/unix/sysv/linux/x86_64/clone.S:100
+
+Thread 3 (Thread 0x7dc2f5d5f6c0 (LWP 2333) "qemu-system-x86"):
+#0  0x00007dc2f799dd71 in __futex_abstimed_wait_common64 (private=<optimized out>, cancel=true, abstime=0x7dc2f5d4e470, op=393, expected=0, futex_word=0x61cbac642e00) at ./nptl/futex-internal.c:57
+        sc_cancel_oldtype = 0
+        sc_ret = <optimized out>
+        resultvar = <optimized out>
+        __arg6 = <optimized out>
+        __arg5 = <optimized out>
+        __arg4 = <optimized out>
+        __arg3 = <optimized out>
+        __arg2 = <optimized out>
+        __arg1 = <optimized out>
+        _a6 = <optimized out>
+        _a5 = <optimized out>
+        _a4 = <optimized out>
+        _a3 = <optimized out>
+        _a2 = <optimized out>
+        _a1 = <optimized out>
+#1  __futex_abstimed_wait_common (cancel=true, private=<optimized out>, abstime=0x7dc2f5d4e470, clockid=0, expected=0, futex_word=0x61cbac642e00) at ./nptl/futex-internal.c:87
+        err = <optimized out>
+        clockbit = 256
+        op = 393
+        err = <optimized out>
+        clockbit = <optimized out>
+        op = <optimized out>
+#2  __GI___futex_abstimed_wait_cancelable64 (futex_word=futex_word@entry=0x61cbac642e00, expected=expected@entry=0, clockid=clockid@entry=0, abstime=abstime@entry=0x7dc2f5d4e470, private=<optimized out>) at ./nptl/futex-internal.c:139
+#3  0x00007dc2f79a9cf0 in do_futex_wait (sem=sem@entry=0x61cbac642e00, abstime=abstime@entry=0x7dc2f5d4e470, clockid=0) at ./nptl/sem_waitcommon.c:111
+        err = <optimized out>
+#4  0x00007dc2f79a9d93 in __new_sem_wait_slow64 (sem=0x61cbac642e00, abstime=0x7dc2f5d4e470, clockid=0) at ./nptl/sem_waitcommon.c:183
+        _buffer = {__routine = 0x7dc2f79a9cc0 <__sem_wait_cleanup>, __arg = 0x61cbac642e00, __canceltype = -170597312, __prev = 0x0}
+        err = <optimized out>
+        d = 0
+#5  0x000061cb74da4e11 in qemu_sem_timedwait (sem=0x61cbac642e00, ms=10000) at ../util/qemu-thread-posix.c:307
+        rc = 90
+        ts = {tv_sec = 1773062134, tv_nsec = 992428000}
+        __PRETTY_FUNCTION__ = "qemu_sem_timedwait"
+        __func__ = "qemu_sem_timedwait"
+#6  0x000061cb74daf9fe in worker_thread (opaque=0x61cbac642d80) at ../util/thread-pool.c:91
+        req = 0x61cbad003f80
+        ret = 0
+        pool = 0x61cbac642d80
+#7  0x000061cb74da536d in qemu_thread_start (args=0x61cbac64a650) at ../util/qemu-thread-posix.c:521
+        __cancel_buf = {__cancel_jmp_buf = {{__cancel_jmp_buf = {138276301569244, -770709103518694971, 138276301567680, -67160, 0, 140726547397040, -770709103545957947, -3648225510432194107}, __mask_was_saved = 0}}, __pad = {0x7dc2f5d4e5e0, 0x0, 0x3f1abaad9f7bd400, 0x0}}
+        __cancel_routine = 0x61cb74da520f <qemu_thread_atexit_notify>
+        __cancel_arg = 0x0
+        __not_first_call = 0
+        qemu_thread_args = 0x61cbac64a650
+        start_routine = 0x61cb74daf948 <worker_thread>
+        arg = 0x61cbac642d80
+        r = 0x3f1abaad9f7bd400
+#8  0x00007dc2f79a1aa4 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+        ret = <optimized out>
+        pd = <optimized out>
+        out = <optimized out>
+        unwind_buf = {cancel_jmp_buf = {{jmp_buf = {138276301567680, -770709103495626299, 138276301567680, -67160, 0, 140726547397040, -770709103516597819, -770712868522704443}, mask_was_saved = 0}}, priv = {pad = {0x0, 0x0, 0x0, 0x0}, data = {prev = 0x0, cleanup = 0x0, canceltype = 0}}}
+        not_first_call = <optimized out>
+#9  0x00007dc2f7a2ea64 in clone () at ../sysdeps/unix/sysv/linux/x86_64/clone.S:100
+
+Thread 2 (Thread 0x7dc2f67626c0 (LWP 2332) "qemu-system-x86"):
+#0  futex_wait (private=0, expected=2, futex_word=0x61cb7558a7e0 <qemu_global_mutex>) at ../sysdeps/nptl/futex-internal.h:146
+        __ret = -512
+        err = <optimized out>
+        err = <optimized out>
+        __ret = <optimized out>
+        resultvar = <optimized out>
+        __arg4 = <optimized out>
+        __arg3 = <optimized out>
+        __arg2 = <optimized out>
+        __arg1 = <optimized out>
+        _a4 = <optimized out>
+        _a3 = <optimized out>
+        _a2 = <optimized out>
+        _a1 = <optimized out>
+#1  __GI___lll_lock_wait (futex=futex@entry=0x61cb7558a7e0 <qemu_global_mutex>, private=0) at ./nptl/lowlevellock.c:49
+#2  0x00007dc2f79a5101 in lll_mutex_lock_optimized (mutex=0x61cb7558a7e0 <qemu_global_mutex>) at ./nptl/pthread_mutex_lock.c:48
+        __futex = 0x61cb7558a7e0 <qemu_global_mutex>
+        private = <optimized out>
+        private = <optimized out>
+        __futex = <optimized out>
+#3  ___pthread_mutex_lock (mutex=0x61cb7558a7e0 <qemu_global_mutex>) at ./nptl/pthread_mutex_lock.c:93
+        type = <optimized out>
+        __PRETTY_FUNCTION__ = "___pthread_mutex_lock"
+        id = <optimized out>
+#4  0x000061cb74da46d7 in qemu_mutex_lock_impl (mutex=0x61cb7558a7e0 <qemu_global_mutex>, file=0x61cb75185c50 "../util/rcu.c", line=266) at ../util/qemu-thread-posix.c:79
+        err = 25035
+        __PRETTY_FUNCTION__ = "qemu_mutex_lock_impl"
+        __func__ = "qemu_mutex_lock_impl"
+#5  0x000061cb74af9d97 in qemu_mutex_lock_iothread_impl (file=0x61cb75185c50 "../util/rcu.c", line=266) at ../softmmu/cpus.c:485
+        bql_lock = 0x61cb74da466a <qemu_mutex_lock_impl>
+        __func__ = "qemu_mutex_lock_iothread_impl"
+#6  0x000061cb74daea22 in call_rcu_thread (opaque=0x0) at ../util/rcu.c:266
+        tries = 2
+        n = 113
+        node = 0x7dc2f6762cdc
+#7  0x000061cb74da536d in qemu_thread_start (args=0x61cbac3cf990) at ../util/qemu-thread-posix.c:521
+        __cancel_buf = {__cancel_jmp_buf = {{__cancel_jmp_buf = {138276312067292, -770709939426704955, 138276312065728, -67160, 2, 140726547400032, -770709939453967931, -3648225510432194107}, __mask_was_saved = 0}}, __pad = {0x7dc2f67515e0, 0x0, 0x3f1abaad9f7bd400, 0x0}}
+        __cancel_routine = 0x61cb74da520f <qemu_thread_atexit_notify>
+        __cancel_arg = 0x0
+        __not_first_call = 0
+        qemu_thread_args = 0x61cbac3cf990
+        start_routine = 0x61cb74dae972 <call_rcu_thread>
+        arg = 0x0
+        r = 0x3f1abaad9f7bd400
+#8  0x00007dc2f79a1aa4 in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:447
+        ret = <optimized out>
+        pd = <optimized out>
+        out = <optimized out>
+        unwind_buf = {cancel_jmp_buf = {{jmp_buf = {138276312065728, -770709939403636283, 138276312065728, -67160, 2, 140726547400032, -770709939424607803, -770712868522704443}, mask_was_saved = 0}}, priv = {pad = {0x0, 0x0, 0x0, 0x0}, data = {prev = 0x0, cleanup = 0x0, canceltype = 0}}}
+        not_first_call = <optimized out>
+#9  0x00007dc2f7a2ea64 in clone () at ../sysdeps/unix/sysv/linux/x86_64/clone.S:100
+
+Thread 1 (Thread 0x7dc2f6774040 (LWP 2321) "qemu-system-x86"):
+#0  __memcpy_avx_unaligned_erms () at ../sysdeps/x86_64/multiarch/memmove-vec-unaligned-erms.S:660
+#1  0x000061cb74b83b65 in address_space_write_rom_internal (as=0x61cb7558ca40 <address_space_memory>, addr=4294705152, attrs=..., ptr=0x7dc266a86010, len=262144, type=WRITE_DATA) at ../softmmu/physmem.c:2945
+        l = 262144
+        ram_ptr = 0x7dc266a00000 ""
+        addr1 = 0
+        mr = 0x61cbac6e03a0
+        buf = 0x7dc266a86010 ""
+        _rcu_read_auto = 0x1
+#2  0x000061cb74b83c2c in address_space_write_rom (as=0x61cb7558ca40 <address_space_memory>, addr=4294705152, attrs=..., buf=0x7dc266a86010, len=262144) at ../softmmu/physmem.c:2965
+#3  0x000061cb749b7e48 in rom_reset (unused=0x0) at ../hw/core/loader.c:1149
+        rom = 0x61cbac6fbaf0
+#4  0x000061cb74cf7873 in qemu_devices_reset () at ../hw/core/reset.c:69
+        re = 0x61cbad20ca80
+        nre = 0x0
+#5  0x000061cb749f684c in pc_machine_reset (machine=0x61cbac626800) at ../hw/i386/pc.c:1615
+        cs = 0x0
+        cpu = 0x0
+#6  0x000061cb74b091ab in qemu_system_reset (reason=SHUTDOWN_CAUSE_NONE) at ../softmmu/vl.c:1405
+        mc = 0x61cbac4594c0
+#7  0x000061cb74b12176 in qemu_init (argc=23, argv=0x7ffd73de49a8, envp=0x7ffd73de4a68) at ../softmmu/vl.c:4472
+        i = 1
+        snapshot = 0
+        linux_boot = 0
+        initrd_filename = 0x0
+        kernel_filename = 0x0
+        kernel_cmdline = 0x61cb74ecf3ef ""
+        boot_order = 0x61cb74eb0de4 "cad"
+        boot_once = 0x0
+        ds = 0x61cbad003d40
+        opts = 0x0
+        machine_opts = 0x61cbac4527f0
+        icount_opts = 0x0
+        accel_opts = 0x61cbac452720
+        olist = 0x61cb754b0ee0 <qemu_machine_opts>
+        optind = 23
+        optarg = 0x7ffd73de5f4f "none"
+        loadvm = 0x0
+        machine_class = 0x61cbac4594c0
+        cpu_option = 0x0
+        vga_model = 0x7ffd73de5ee1 "none"
+        incoming = 0x0
+        userconfig = true
+        nographic = false
+        display_remote = 0
+        log_mask = 0x0
+        log_file = 0x0
+        maxram_size = 1073741824
+        ram_slots = 0
+        vmstate_dump_file = 0x0
+        main_loop_err = 0x0
+        err = 0x0
+        list_data_dirs = false
+        dirs = 0x61cbac630550
+        mem_path = 0x0
+        have_custom_ram_size = true
+        bdo_queue = {sqh_first = 0x0, sqh_last = 0x7ffd73de4810}
+        plugin_list = {tqh_first = 0x0, tqh_circ = {tql_next = 0x0, tql_prev = 0x7ffd73de4820}}
+        mem_prealloc = 0
+        __func__ = "qemu_init"
+#8  0x000061cb7473a475 in main (argc=23, argv=0x7ffd73de49a8, envp=0x7ffd73de4a68) at ../softmmu/main.c:49

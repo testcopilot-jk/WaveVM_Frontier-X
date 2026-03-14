@@ -1,0 +1,10 @@
+[Hybrid] Using Physical Cores: 4
+[Init] WaveVM Hybrid Slave V28.0 (Swarm Edition)
+[Init] Config: Port=19205, Cores=1, RAM=1024 MB, BaseID=1, VM=0
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 0.0.0.0:19205
+[Hybrid] Spawning 1 QEMU-TCG instances (Tri-Channel Isolation)...
+[WaveVM] /dev/kvm not available (mode=user), stay on TCG path
+qemu-system-x86_64: -accel wavevm: WaveVM: defer user mem init until first RAM block is registered
+[WaveVM] Starting Slave Net Thread on FD -1...
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: -1).
+recvmmsg: Operation not permitted

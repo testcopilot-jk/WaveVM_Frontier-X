@@ -72,8 +72,23 @@ __attribute__((weak)) int push_to_aggregator(uint32_t slave_id, void *data, int 
 
     struct sockaddr_in *target = &g_gateways[raw_id];
     if (target->sin_port == 0) {
+        struct wvm_header *hdr = (struct wvm_header *)data;
+        if (ntohs(hdr->msg_type) == MSG_VCPU_RUN) {
+            fprintf(stderr, "[TX VCPU_RUN] no gateway raw_id=%u slave_id=%u\n",
+                    raw_id, slave_id);
+        }
         errno = EHOSTUNREACH;
         return -EHOSTUNREACH;
+    }
+
+    {
+        struct wvm_header *hdr = (struct wvm_header *)data;
+        if (ntohs(hdr->msg_type) == MSG_VCPU_RUN) {
+            char ip[INET_ADDRSTRLEN] = {0};
+            inet_ntop(AF_INET, &target->sin_addr, ip, sizeof(ip));
+            fprintf(stderr, "[TX VCPU_RUN] sendto raw_id=%u ip=%s port=%u len=%d\n",
+                    raw_id, ip, (unsigned)ntohs(target->sin_port), len);
+        }
     }
 
     ssize_t sent = sendto(g_tx_socket, data, len, MSG_DONTWAIT,
@@ -82,6 +97,13 @@ __attribute__((weak)) int push_to_aggregator(uint32_t slave_id, void *data, int 
         return 0;
     }
     if (sent < 0) {
+        struct wvm_header *hdr = (struct wvm_header *)data;
+        if (ntohs(hdr->msg_type) == MSG_VCPU_RUN) {
+            char ip[INET_ADDRSTRLEN] = {0};
+            inet_ntop(AF_INET, &target->sin_addr, ip, sizeof(ip));
+            fprintf(stderr, "[TX VCPU_RUN] sendto fail raw_id=%u ip=%s port=%u err=%d\n",
+                    raw_id, ip, (unsigned)ntohs(target->sin_port), errno);
+        }
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             return -EAGAIN;
         }
@@ -529,6 +551,14 @@ static int u_send_packet(void *data, int len, uint32_t target_id) {
     node->target_id = target_id;
     node->len = len;
     memcpy(node->data, data, len);
+
+    if (ntohs(hdr->msg_type) == MSG_VCPU_RUN) {
+        u_log("[TX VCPU_RUN] target=%u len=%d rid=%llu src_id=%u target_id=%u",
+              (unsigned)target_id, len,
+              (unsigned long long)WVM_NTOHLL(hdr->req_id),
+              (unsigned)ntohl(hdr->slave_id),
+              (unsigned)ntohl(hdr->target_id));
+    }
 
     // 入队操作
     // 因为 is_atomic=0，这里会执行 pthread_spin_lock (死等直到获取锁)

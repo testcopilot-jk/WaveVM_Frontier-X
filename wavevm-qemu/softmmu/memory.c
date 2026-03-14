@@ -2648,6 +2648,7 @@ void memory_global_dirty_log_start(void)
         vmstate_change = NULL;
     }
 
+    fprintf(stderr, "[MEM] global_dirty_log_start\n");
     global_dirty_log = true;
 
     MEMORY_LISTENER_CALL_GLOBAL(log_global_start, Forward);
@@ -2758,6 +2759,16 @@ static void listener_del_address_space(MemoryListener *listener,
 void memory_listener_register(MemoryListener *listener, AddressSpace *as)
 {
     MemoryListener *other = NULL;
+
+    if (listener->address_space) {
+        fprintf(stderr,
+                "[MEM] listener_register dup listener=%p old_as=%p new_as=%p priority=%d\n",
+                listener, listener->address_space, as, listener->priority);
+    } else {
+        fprintf(stderr,
+                "[MEM] listener_register listener=%p as=%p priority=%d\n",
+                listener, as, listener->priority);
+    }
 
     listener->address_space = as;
     if (QTAILQ_EMPTY(&memory_listeners)

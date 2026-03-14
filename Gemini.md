@@ -11825,16 +11825,31 @@ static void wavevm_region_add(MemoryListener *listener, MemoryRegionSection *sec
 
     uint64_t start_gpa = section->offset_within_address_space;
     uint64_t size = int128_get64(section->size);
+    void *hva = memory_region_get_ram_ptr(section->mr) + section->offset_within_region;
     
     if (size < 4096) return;
 
     // 记录到本地表
     if (global_layout.count < 32) {
+        for (int i = 0; i < global_layout.count; i++) {
+            if (global_layout.slots[i].start == start_gpa &&
+                global_layout.slots[i].size == size) {
+                fprintf(stderr,
+                        "[WaveVM] dedup region_add gpa=%#llx size=%#llx count=%d\n",
+                        (unsigned long long)start_gpa,
+                        (unsigned long long)size,
+                        global_layout.count);
+                return;
+            }
+        }
         global_layout.slots[global_layout.count].start = start_gpa;
         global_layout.slots[global_layout.count].size = size;
         global_layout.count++;
-        
-        void *hva = memory_region_get_ram_ptr(section->mr) + section->offset_within_region;
+        fprintf(stderr,
+                "[WaveVM] region_add gpa=%#llx size=%#llx count=%d\n",
+                (unsigned long long)start_gpa,
+                (unsigned long long)size,
+                global_layout.count);
 
         /* User-mem fault hook is only valid in user mode. */
         if (wavevm_user_mode_enabled()) {
@@ -13122,6 +13137,19 @@ void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa) {
         const char *hook_env = getenv("WVM_ENABLE_FAULT_HOOK");
         g_fault_hook_enabled = (!hook_env || atoi(hook_env) != 0);
         g_fault_hook_checked = true;
+    }
+    for (int i = 0; i < g_block_count; i++) {
+        if (g_mem_blocks[i].gpa_start == gpa &&
+            g_mem_blocks[i].hva_start == (uintptr_t)hva &&
+            g_mem_blocks[i].size == size) {
+            fprintf(stderr,
+                    "[WaveVM-User] dedup ram_block hva=%p gpa=%#llx size=%#llx blocks=%d\n",
+                    hva,
+                    (unsigned long long)gpa,
+                    (unsigned long long)size,
+                    g_block_count);
+            return;
+        }
     }
     if (g_block_count >= MAX_RAM_BLOCKS) exit(1);
     if (!kvm_enabled()) {
@@ -15082,9 +15110,129 @@ index f099b5092..3da9023a8 100644
              aml_append(method, while_ctx2);
              aml_append(method, aml_release(ctrl_lock));
 +#endif
-         }
-         aml_append(cpus_dev, method);
+        }
+        aml_append(cpus_dev, method);
  
+diff --git a/accel/kvm/kvm-all.c b/accel/kvm/kvm-all.c
+index baaa54249..5a2b045be 100644
+--- a/accel/kvm/kvm-all.c
++++ b/accel/kvm/kvm-all.c
+@@ -356,6 +356,13 @@ static int kvm_set_user_memory_region(KVMMemoryListener *kml, KVMSlot *slot, boo
+     mem.guest_phys_addr = slot->start_addr;
+     mem.userspace_addr = (unsigned long)slot->ram;
+     mem.flags = slot->flags;
++    fprintf(stderr,
++            "[KVM-MEM] set_user_memory slot=%d as_id=%d new=%d gpa=%#" PRIx64
++            " size=%#" PRIx64 " hva=%p flags=%#x old_flags=%#x\n",
++            mem.slot, kml->as_id, new,
++            (uint64_t)mem.guest_phys_addr,
++            (uint64_t)slot->memory_size,
++            slot->ram, mem.flags, slot->old_flags);
+ 
+     if (slot->memory_size && !new && (mem.flags ^ slot->old_flags) & KVM_MEM_READONLY) {
+         /* Set the slot size to 0 before setting the slot to the desired
+@@ -564,6 +571,13 @@ static void kvm_log_start(MemoryListener *listener,
+     KVMMemoryListener *kml = container_of(listener, KVMMemoryListener, listener);
+     int r;
+ 
++    fprintf(stderr,
++            "[KVM-MEM] log_start mr=%s gpa=%#" PRIx64 " size=%#" PRIx64
++            " old=%#x new=%#x\n",
++            section->mr && section->mr->name ? section->mr->name : "(null)",
++            (uint64_t)section->offset_within_address_space,
++            (uint64_t)int128_get64(section->size),
++            old, new);
+     if (old != 0) {
+         return;
+     }
+@@ -581,6 +595,13 @@ static void kvm_log_stop(MemoryListener *listener,
+     KVMMemoryListener *kml = container_of(listener, KVMMemoryListener, listener);
+     int r;
+ 
++    fprintf(stderr,
++            "[KVM-MEM] log_stop mr=%s gpa=%#" PRIx64 " size=%#" PRIx64
++            " old=%#x new=%#x\n",
++            section->mr && section->mr->name ? section->mr->name : "(null)",
++            (uint64_t)section->offset_within_address_space,
++            (uint64_t)int128_get64(section->size),
++            old, new);
+     if (new != 0) {
+         return;
+     }
+@@ -1151,6 +1172,17 @@ static void kvm_set_phys_mem(KVMMemoryListener *kml,
+         return;
+     }
+ 
++    if (add) {
++        fprintf(stderr,
++                "[KVM-MEM] region_add mr=%s gpa=%#" PRIx64 " size=%#" PRIx64
++                " offset_as=%#" PRIx64 " offset_mr=%#" PRIx64 "\n",
++                mr->name ? mr->name : "(null)",
++                (uint64_t)start_addr,
++                (uint64_t)size,
++                (uint64_t)section->offset_within_address_space,
++                (uint64_t)section->offset_within_region);
++    }
++
+     /* use aligned delta to align the ram address */
+     ram = memory_region_get_ram_ptr(mr) + section->offset_within_region +
+           (start_addr - section->offset_within_address_space);
+@@ -1188,6 +1220,20 @@ static void kvm_set_phys_mem(KVMMemoryListener *kml,
+     /* register the new slot */
+     do {
+         slot_size = MIN(kvm_max_slot_size, size);
++        mem = kvm_lookup_matching_slot(kml, start_addr, slot_size);
++        if (mem && mem->memory_size && mem->ram == ram) {
++            mem->flags = kvm_mem_flags(mr);
++            err = kvm_slot_update_flags(kml, mem, section->mr);
++            if (err) {
++                fprintf(stderr, "%s: error updating slot flags: %s\n",
++                        __func__, strerror(-err));
++                abort();
++            }
++            start_addr += slot_size;
++            ram += slot_size;
++            size -= slot_size;
++            continue;
++        }
+         mem = kvm_alloc_slot(kml);
+         mem->memory_size = slot_size;
+         mem->start_addr = start_addr;
+@@ -1221,6 +1267,11 @@ static void kvm_region_add(MemoryListener *listener,
+ {
+     KVMMemoryListener *kml = container_of(listener, KVMMemoryListener, listener);
+ 
++    fprintf(stderr,
++            "[KVM-MEM] region_add cb mr=%s gpa=%#" PRIx64 " size=%#" PRIx64 "\n",
++            section->mr && section->mr->name ? section->mr->name : "(null)",
++            (uint64_t)section->offset_within_address_space,
++            (uint64_t)int128_get64(section->size));
+     memory_region_ref(section->mr);
+     kvm_set_phys_mem(kml, section, true);
+ }
+@@ -1230,6 +1281,11 @@ static void kvm_region_del(MemoryListener *listener,
+ {
+     KVMMemoryListener *kml = container_of(listener, KVMMemoryListener, listener);
+ 
++    fprintf(stderr,
++            "[KVM-MEM] region_del cb mr=%s gpa=%#" PRIx64 " size=%#" PRIx64 "\n",
++            section->mr && section->mr->name ? section->mr->name : "(null)",
++            (uint64_t)section->offset_within_address_space,
++            (uint64_t)int128_get64(section->size));
+     kvm_set_phys_mem(kml, section, false);
+     memory_region_unref(section->mr);
+ }
+@@ -1342,6 +1398,9 @@ void kvm_memory_listener_register(KVMState *s, KVMMemoryListener *kml,
+ {
+     int i;
+ 
++    fprintf(stderr,
++            "[KVM-MEM] listener_register kml=%p as=%p as_id=%d nr_slots=%d\n",
++            kml, as, as_id, s->nr_slots);
+     qemu_mutex_init(&kml->slots_lock);
+    kml->slots = g_malloc0(s->nr_slots * sizeof(KVMSlot));
+    kml->as_id = as_id;
+
 ```
 
 ### Step 9: 优化的网关 (Gateway)
@@ -15951,6 +16099,7 @@ clean:
 
 - **最小化修改**：只改必须改的，不做预防性重构、不顺手优化无关代码。改着改着发现越改越多时必须停下来重新评估，严禁一条路走到黑。
 - **改代码必须同步 Gemini.md**：在本文件对应代码块内做出修改，修改时不得破坏原有格式，包括空行换行。
+- **同步规则**：若 `Gemini.md` 已存在对应文件的代码块，必须同步进该代码块；若不存在对应代码块，则同步进 `qemu-wavevm.diff` 代码块。
 - 本人额度有限，思考时请注意力度，不要过度消耗额度。
 
 ### 测试禁令
