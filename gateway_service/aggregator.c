@@ -412,19 +412,6 @@ static void* gateway_worker(void *arg) {
         close(local_fd);
         return NULL;
     }
-    {
-        struct sockaddr_in bound_addr = {0};
-        socklen_t bound_len = sizeof(bound_addr);
-        if (getsockname(local_fd, (struct sockaddr*)&bound_addr, &bound_len) == 0) {
-            char bind_ip[INET_ADDRSTRLEN] = {0};
-            inet_ntop(AF_INET, &bound_addr.sin_addr, bind_ip, sizeof(bind_ip));
-            fprintf(stderr, "[Gateway] Worker bound fd=%d ip=%s port=%u\n",
-                    local_fd, bind_ip[0] ? bind_ip : "0.0.0.0",
-                    (unsigned)ntohs(bound_addr.sin_port));
-        } else {
-            perror("[Gateway] Worker getsockname failed");
-        }
-    }
 
     if (core_id == 0) {
         g_primary_socket = local_fd;
@@ -449,24 +436,10 @@ static void* gateway_worker(void *arg) {
         msgs[i].msg_hdr.msg_namelen = sizeof(struct sockaddr_in);
     }
 
-    int recv_log_budget = 8;
-    int bad_magic_budget = 8;
-    int invalid_target_budget = 8;
-    int route_log_budget = 8;
-    int node_log_budget = 8;
-    static int route_seen = 0;
-    static int push_seen = 0;
-    static int vcpu_route_seen = 0;
-    static int vcpu_push_seen = 0;
-    static int vcpu_probe_seen = 0;
-    int recv_err_budget = 8;
     while (1) {
         int n = recvmmsg(local_fd, msgs, BATCH_SIZE, 0, NULL);
         if (n <= 0) {
             if (errno == EINTR) continue;
-            if (recv_err_budget-- > 0) {
-                fprintf(stderr, "[Gateway] recvmmsg n=%d errno=%d\n", n, errno);
-            }
             continue; 
         }
 
@@ -477,36 +450,11 @@ static void* gateway_worker(void *arg) {
 
             if (pkt_len < sizeof(struct wvm_header)) continue;
             struct wvm_header *hdr = (struct wvm_header *)ptr;
+            if (ntohl(hdr->magic) != WVM_MAGIC) continue;
             uint16_t msg_type = ntohs(hdr->msg_type);
-            uint32_t magic = ntohl(hdr->magic);
-            if (magic != WVM_MAGIC) {
-                if (bad_magic_budget-- > 0) {
-                    char src_ip[INET_ADDRSTRLEN] = {0};
-                    inet_ntop(AF_INET, &src->sin_addr, src_ip, sizeof(src_ip));
-                    fprintf(stderr, "[Gateway] recv bad magic=0x%08x msg=%u src=%s:%u len=%d\n",
-                            magic, (unsigned)msg_type,
-                            src_ip, (unsigned)ntohs(src->sin_port), pkt_len);
-                }
-                continue;
-            }
 
             uint32_t source_id = ntohl(hdr->slave_id); // 发送者 ID
             uint32_t target_id = ntohl(hdr->target_id); // 目标 ID（兼容旧逻辑时可能为 AUTO_ROUTE）
-
-            if ((msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT) && recv_log_budget-- > 0) {
-                char src_ip[INET_ADDRSTRLEN] = {0};
-                inet_ntop(AF_INET, &src->sin_addr, src_ip, sizeof(src_ip));
-                fprintf(stderr, "[Gateway] recv msg=%u src=%s:%u src_id=%u target_id=%u len=%d\n",
-                        (unsigned)msg_type,
-                        src_ip, (unsigned)ntohs(src->sin_port),
-                        source_id, target_id, pkt_len);
-            }
-
-            if ((msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT) && route_log_budget-- > 0) {
-                fprintf(stderr, "[Gateway] routing msg=%u target_id=%u valid=%d\n",
-                        (unsigned)msg_type, target_id, WVM_IS_VALID_TARGET(target_id));
-                fprintf(stderr, "[Gateway] routing checkpoint msg=%u\n", (unsigned)msg_type);
-            }
             
             // [关键]：只要收到合法的 WVM 包，就学习源路由
             // 排除掉 Upstream (Master/Core) 的 ID，只学习 Downstream (Leaf) 节点
@@ -523,25 +471,9 @@ static void* gateway_worker(void *arg) {
             // [FIX-M7] 当 target_id 无效时不再 fallback 到 source_id，
             // 防止 AUTO_ROUTE 包被回送给发送者形成环路
             uint32_t route_id;
-            if ((msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT) && vcpu_route_seen < 5) {
-                fprintf(stderr, "[Gateway] vcpu pre-branch target_id=%u\n", target_id);
-            }
             if (WVM_IS_VALID_TARGET(target_id)) {
-                if ((msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT) && vcpu_route_seen < 5) {
-                    fprintf(stderr, "[Gateway] vcpu branch=valid target_id=%u\n", target_id);
-                }
                 route_id = target_id;
             } else {
-                if ((msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT) && vcpu_route_seen < 5) {
-                    fprintf(stderr, "[Gateway] vcpu branch=invalid target_id=%u\n", target_id);
-                }
-                if (invalid_target_budget-- > 0) {
-                    char src_ip[INET_ADDRSTRLEN] = {0};
-                    inet_ntop(AF_INET, &src->sin_addr, src_ip, sizeof(src_ip));
-                    fprintf(stderr, "[Gateway] invalid target_id=%u msg=%u src=%s:%u len=%d\n",
-                            target_id, (unsigned)msg_type,
-                            src_ip, (unsigned)ntohs(src->sin_port), pkt_len);
-                }
                 // 无有效目标，直接交给 upstream 处理
                 int tx_fd = (g_upstream_tx_socket >= 0) ? g_upstream_tx_socket : local_fd;
                 sendto(tx_fd, ptr, pkt_len, MSG_DONTWAIT,
@@ -549,65 +481,7 @@ static void* gateway_worker(void *arg) {
                 continue;
             }
 
-            if (node_log_budget-- > 0) {
-                gateway_node_t *probe = find_node(route_id);
-                char dst_ip[INET_ADDRSTRLEN] = {0};
-                unsigned dst_port = 0;
-                int pinned = 0;
-                if (probe) {
-                    pthread_mutex_lock(&probe->lock);
-                    inet_ntop(AF_INET, &probe->addr.sin_addr, dst_ip, sizeof(dst_ip));
-                    dst_port = (unsigned)ntohs(probe->addr.sin_port);
-                    pinned = probe->static_pinned;
-                    pthread_mutex_unlock(&probe->lock);
-                }
-                fprintf(stderr, "[Gateway] node probe route=%u exists=%d pinned=%d dst=%s:%u\n",
-                        route_id, probe ? 1 : 0, pinned,
-                        dst_ip[0] ? dst_ip : "0.0.0.0", dst_port);
-            }
-            if ((msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT) && vcpu_probe_seen++ < 5) {
-                gateway_node_t *probe = find_node(route_id);
-                char dst_ip[INET_ADDRSTRLEN] = {0};
-                unsigned dst_port = 0;
-                int pinned = 0;
-                if (probe) {
-                    pthread_mutex_lock(&probe->lock);
-                    inet_ntop(AF_INET, &probe->addr.sin_addr, dst_ip, sizeof(dst_ip));
-                    dst_port = (unsigned)ntohs(probe->addr.sin_port);
-                    pinned = probe->static_pinned;
-                    pthread_mutex_unlock(&probe->lock);
-                }
-                fprintf(stderr, "[Gateway] vcpu probe route=%u exists=%d pinned=%d dst=%s:%u\n",
-                        route_id, probe ? 1 : 0, pinned,
-                        dst_ip[0] ? dst_ip : "0.0.0.0", dst_port);
-            }
-
-            if (__sync_fetch_and_add(&route_seen, 1) < 5) {
-                fprintf(stderr, "[Gateway] route_id decided msg=%u route=%u\n",
-                        (unsigned)msg_type, route_id);
-            }
-            if ((msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT) && vcpu_route_seen++ < 5) {
-                fprintf(stderr, "[Gateway] vcpu route_id decided msg=%u route=%u\n",
-                        (unsigned)msg_type, route_id);
-            }
-
-            if ((msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT) && route_log_budget-- > 0) {
-                fprintf(stderr, "[Gateway] internal_push start msg=%u route=%u\n",
-                        (unsigned)msg_type, route_id);
-            }
-            if (__sync_fetch_and_add(&push_seen, 1) < 5) {
-                fprintf(stderr, "[Gateway] internal_push call msg=%u route=%u\n",
-                        (unsigned)msg_type, route_id);
-            }
-            if ((msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT) && vcpu_push_seen++ < 5) {
-                fprintf(stderr, "[Gateway] vcpu internal_push call msg=%u route=%u\n",
-                        (unsigned)msg_type, route_id);
-            }
             int r = internal_push(local_fd, route_id, ptr, pkt_len);
-            if ((msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT) && route_log_budget-- > 0) {
-                fprintf(stderr, "[Gateway] internal_push ret=%d msg=%u route=%u\n",
-                        r, (unsigned)msg_type, route_id);
-            }
             if (r < 0) {
                 int tx_fd = (g_upstream_tx_socket >= 0) ? g_upstream_tx_socket : local_fd;
                 ssize_t sret = sendto(tx_fd, ptr, pkt_len, MSG_DONTWAIT,
@@ -760,3 +634,4 @@ int init_aggregator(int local_port, const char *upstream_ip, int upstream_port, 
     pthread_detach(ctrl_tid);
 
     return 0;}
+
