@@ -9,3 +9,4 @@ $(TARGET): main.c
 
 clean:
 	rm -f $(TARGET)
+

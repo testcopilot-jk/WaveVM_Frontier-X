@@ -34,3 +34,4 @@ struct dsm_driver_ops {
 
 extern struct dsm_driver_ops *g_ops;
 #endif
+

@@ -335,3 +335,4 @@ static void wvm_translate_kvm_to_tcg(struct kvm_regs *k, struct kvm_sregs *s, wv
 }
 
 #endif // WAVEVM_PROTOCOL_H
+

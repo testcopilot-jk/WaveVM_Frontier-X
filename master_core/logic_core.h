@@ -61,3 +61,4 @@ void wvm_set_mem_mapping(int slot, uint32_t value);
 void wvm_set_cpu_mapping(int vcpu_index, uint32_t slave_id);
 
 #endif // LOGIC_CORE_H
+

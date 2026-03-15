@@ -45,3 +45,4 @@ int push_to_aggregator(uint32_t slave_id, void *data, int len);
 void flush_all_buffers(void);
 
 #endif // AGGREGATOR_H
+

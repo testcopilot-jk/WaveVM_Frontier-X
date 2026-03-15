@@ -1560,3 +1560,4 @@ void wavevm_user_mem_init(void *ram_ptr, size_t ram_size) {
         // Initial state is handled per RAM block in wavevm_register_ram_block().
     }
 }
+

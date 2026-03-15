@@ -46,3 +46,4 @@ int wvm_vfio_intercept_mmio(uint64_t gpa, void *data, int len, int is_write);
 void wvm_vfio_poll_irqs(int master_sock, struct sockaddr_in *master_addr);
 
 #endif
+

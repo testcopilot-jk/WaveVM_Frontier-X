@@ -249,3 +249,4 @@ static void wvm_gpu_stub_register_types(void) {
     type_register_static(&wvm_gpu_stub_info);
 }
 type_init(wvm_gpu_stub_register_types)
+

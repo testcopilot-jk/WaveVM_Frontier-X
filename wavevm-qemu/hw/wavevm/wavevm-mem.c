@@ -19,3 +19,4 @@ void wavevm_setup_memory_region(MemoryRegion *mr, uint64_t size, int fd) {
     (void)size;
     (void)fd;
 }
+

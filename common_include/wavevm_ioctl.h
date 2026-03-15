@@ -47,3 +47,4 @@ struct wvm_ioctl_mem_layout {
 #define IOCTL_UPDATE_EPOCH _IOW('G', 20, uint32_t)
 
 #endif // WAVEVM_IOCTL_H
+

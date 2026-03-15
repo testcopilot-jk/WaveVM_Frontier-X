@@ -42,3 +42,4 @@ int wavevm_blk_interceptor(uint64_t sector, QEMUIOVector *qiov, int is_write)
     g_free(linear_buf);
     return ret;
 }
+

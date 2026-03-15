@@ -394,3 +394,4 @@ void wvm_vfio_poll_irqs(int master_sock, struct sockaddr_in *master_addr) {
     }
     close(epfd);
 }
+

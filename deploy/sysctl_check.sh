@@ -29,3 +29,4 @@ sysctl -w net.core.netdev_max_backlog=10000 > /dev/null
 
 echo "[+] Network device backlog queue increased."
 echo "[SUCCESS] Kernel parameters are tuned for V29 'Wavelet' deployment."
+
