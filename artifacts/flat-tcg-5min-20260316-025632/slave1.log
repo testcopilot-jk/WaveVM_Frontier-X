@@ -1938,3 +1938,1923 @@ qemu-system-x86_64: -accel wavevm: WaveVM: defer user mem init until first RAM b
 [WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
 [WaveVM-Slave] cpu_exec enter cpu=0
 [WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1
+[WaveVM-Slave] vCPU got req mode_tcg=1 cpu=0
+[WaveVM-Slave] cpu_exec enter cpu=0
+[WaveVM-Slave] cpu_exec leave cpu=0 ex=-1

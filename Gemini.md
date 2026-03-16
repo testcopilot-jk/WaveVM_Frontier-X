@@ -3154,6 +3154,7 @@ void wvm_set_cpu_mapping(int vcpu_index, uint32_t slave_id);
 #else
     #include <pthread.h>
     #include <string.h>
+    #include <sys/mman.h>
 #endif
 
 #ifdef __KERNEL__
@@ -3232,13 +3233,14 @@ void handle_rpc_batch_execution(void *payload, uint32_t len);
 
 // --- 目录表定义 ---
 #ifdef __KERNEL__
-#define DIR_TABLE_SIZE (1024 * 4) // Keep kernel smoke-test footprint bounded
+#define DIR_TABLE_INIT_SIZE (1024 * 4)   // Kernel: fixed, no dynamic growth
+#define DIR_TABLE_SIZE      DIR_TABLE_INIT_SIZE
 #else
-#define DIR_TABLE_SIZE (1024 * 64) // User-mode smoke test friendly size
+#define DIR_TABLE_INIT_SIZE (1024 * 64)  // User-mode: initial size, grows on demand
 #endif
 #define DIR_MAX_PROBE 128
 #define LOCK_SHARDS 65536
-#define SMALL_UPDATE_THRESHOLD 1024 
+#define SMALL_UPDATE_THRESHOLD 1024
 
 #define WVM_CPU_ROUTE_TABLE_SIZE MAX_VCPUS 
 
@@ -3275,9 +3277,15 @@ typedef struct {
 static page_meta_t *g_dir_table = NULL;
 static pthread_mutex_t g_dir_table_locks[LOCK_SHARDS];
 
+#ifndef __KERNEL__
+static uint32_t g_dir_capacity = DIR_TABLE_INIT_SIZE;
+static size_t   g_dir_alloc_size = 0; /* mmap size for munmap on grow */
+static pthread_mutex_t g_grow_lock = PTHREAD_MUTEX_INITIALIZER;
+#endif
+
 // --- 辅助函数 ---
 /* 
- * [物理意图] 将 64 位 GPA 空间均匀“粉碎”并映射到 32 位哈希空间。
+ * [物理意图] 将 64 位 GPA 空间均匀"粉碎"并映射到 32 位哈希空间。
  * [关键逻辑] 采用非线性散列算法，确保 Guest OS 连续分配的内存页在 DHT 环上能够物理离散分布。
  * [后果] 若此函数失效，内存元数据将产生严重的负载倾斜（Skew），导致个别节点成为全网瓶颈。
  */
@@ -3288,7 +3296,7 @@ static inline uint32_t murmur3_32(uint64_t k) {
 }
 
 /* 
- * [物理意图] 确定 GPA 对应的分段锁索引，实现万级并发下的“零争用”访问。
+ * [物理意图] 确定 GPA 对应的分段锁索引，实现万级并发下的"零争用"访问。
  * [关键逻辑] 对页号进行哈希取模，将 500PB 内存映射到 LOCK_SHARDS (65536) 个独立的互斥域中。
  * [后果] 这一步实现了管理平面的并行化，若分段数不足，高频写操作会导致 CPU 产生不必要的 L3 缓存行竞争。
  */
@@ -3297,9 +3305,9 @@ static inline uint32_t get_lock_idx(uint64_t gpa) {
 }
 
 /* 
- * [物理意图] 在页面的订阅者名单（Copy-set）中标记一个远程节点的“利害关系”。
+ * [物理意图] 在页面的订阅者名单（Copy-set）中标记一个远程节点的"利害关系"。
  * [关键逻辑] 操作 64 位对齐的位图，记录哪些节点持有该页面的只读缓存，以便在发生写入时发起精准推送。
- * [后果] 这是 Wavelet 协议的核心，它取代了 V28 的盲目广播，将网络流量精确控制在“有需求的节点”之间。
+ * [后果] 这是 Wavelet 协议的核心，它取代了 V28 的盲目广播，将网络流量精确控制在"有需求的节点"之间。
  */
 static void copyset_set(copyset_t *cs, uint32_t node_id) {
     if (node_id >= WVM_MAX_SLAVES) return;
@@ -3344,8 +3352,13 @@ uint64_t wvm_logic_get_page_version(uint64_t gpa) {
     // 我们只需要读取版本，不需要创建 meta，如果不存在说明是初始版本 0
     uint64_t page_idx = gpa >> WVM_PAGE_SHIFT;
     uint32_t hash = murmur3_32(page_idx);
+#ifdef __KERNEL__
+    uint32_t _vcap = DIR_TABLE_SIZE;
+#else
+    uint32_t _vcap = g_dir_capacity;
+#endif
     for (int i = 0; i < DIR_MAX_PROBE; i++) {
-        uint32_t cur = (hash + i) % DIR_TABLE_SIZE;
+        uint32_t cur = (hash + i) % _vcap;
         if (g_dir_table[cur].is_valid && g_dir_table[cur].gpa == gpa) {
             ver = g_dir_table[cur].version;
             break;
@@ -3356,46 +3369,164 @@ uint64_t wvm_logic_get_page_version(uint64_t gpa) {
     return ver;
 }
 
-/* 
- * [物理意图] 在 Directory 管理表中定位或初始化页面的“户口信息”。
- * [关键逻辑] 使用带线性探测的固定哈希表，存储页面的版本、订阅位图以及主备份数据。
- * [后果] 这是逻辑核心最重负载的查找点，固定数组设计保证了在 500PB 空间中的极致内存访问局部性，调用者需持锁。
+/*
+ * [物理意图] 在 Directory 管理表中定位或初始化页面的"户口信息"。
+ * [关键逻辑] 使用带线性探测的哈希表，存储页面的版本、订阅位图以及主备份数据。
+ * [后果] 这是逻辑核心最重负载的查找点，调用者需持锁。
  */
 static page_meta_t* find_or_create_page_meta(uint64_t gpa) {
-    uint64_t page_idx = gpa >> WVM_PAGE_SHIFT; 
+    uint64_t page_idx = gpa >> WVM_PAGE_SHIFT;
     uint32_t hash = murmur3_32(page_idx);
-    
+#ifdef __KERNEL__
+    uint32_t cap = DIR_TABLE_SIZE;
+#else
+    uint32_t cap = g_dir_capacity;
+#endif
+
     for (int i = 0; i < DIR_MAX_PROBE; i++) {
-        uint32_t cur = (hash + i) % DIR_TABLE_SIZE;
-        
+        uint32_t cur = (hash + i) % cap;
+
         // 找到存在的
         if (g_dir_table[cur].is_valid && g_dir_table[cur].gpa == gpa) {
             return &g_dir_table[cur];
         }
-        
+
         // 找到空位，新建
         if (!g_dir_table[cur].is_valid) {
             // 清零整个结构体，包括数据页
             memset(&g_dir_table[cur], 0, sizeof(page_meta_t));
-            
+
             g_dir_table[cur].is_valid = 1;
             g_dir_table[cur].gpa = gpa;
-            g_dir_table[cur].version = MAKE_VERSION(g_curr_epoch, 1); 
-            
+            g_dir_table[cur].version = MAKE_VERSION(g_curr_epoch, 1);
+
             // 锁必须初始化，即使是在持锁状态下分配
             pthread_mutex_init(&g_dir_table[cur].lock, NULL);
-            
+
             return &g_dir_table[cur];
         }
     }
-    
-    // 哈希冲突导致表满，生产环境应有驱逐逻辑或更大的表
-    // 这里打印错误并返回NULL
+
+    // 探测链耗尽，需要扩容（user-mode）或报错（kernel）
     if (g_ops && g_ops->log) {
-        g_ops->log("[CRITICAL] Directory hash table full/collision for GPA %llx!", (unsigned long long)gpa);
+        g_ops->log("[WARN] Directory hash table probe exhausted for GPA %llx (cap=%u)!",
+                   (unsigned long long)gpa, cap);
     }
-    return NULL; 
+    return NULL;
 }
+
+#ifndef __KERNEL__
+/*
+ * 动态扩容目录哈希表。获取所有分片锁后 rehash 到 2 倍容量。
+ * 调用前：调用者已释放自己持有的分片锁。
+ */
+static void dir_table_grow(void) {
+    pthread_mutex_lock(&g_grow_lock);
+
+    uint32_t old_cap = g_dir_capacity;
+    uint32_t new_cap = old_cap * 2;
+
+    /* 另一个线程可能已经完成扩容 */
+    if (g_dir_capacity != old_cap) {
+        pthread_mutex_unlock(&g_grow_lock);
+        return;
+    }
+
+    /* 获取全部分片锁，阻止任何并发查找 */
+    for (int i = 0; i < LOCK_SHARDS; i++)
+        pthread_mutex_lock(&g_dir_table_locks[i]);
+
+    /* 分配新表 */
+    page_meta_t *new_table = (page_meta_t *)g_ops->alloc_large_table(
+        sizeof(page_meta_t) * new_cap);
+    if (!new_table) {
+        if (g_ops && g_ops->log)
+            g_ops->log("[CRITICAL] dir_table_grow: alloc failed for %u entries!", new_cap);
+        for (int i = LOCK_SHARDS - 1; i >= 0; i--)
+            pthread_mutex_unlock(&g_dir_table_locks[i]);
+        pthread_mutex_unlock(&g_grow_lock);
+        return;
+    }
+    memset(new_table, 0, sizeof(page_meta_t) * new_cap);
+
+    /* Rehash 所有有效条目 */
+    uint32_t migrated = 0;
+    for (uint32_t j = 0; j < old_cap; j++) {
+        if (!g_dir_table[j].is_valid) continue;
+
+        uint64_t page_idx = g_dir_table[j].gpa >> WVM_PAGE_SHIFT;
+        uint32_t hash = murmur3_32(page_idx);
+        int placed = 0;
+
+        for (int i = 0; i < DIR_MAX_PROBE * 4; i++) {
+            uint32_t cur = (hash + i) % new_cap;
+            if (!new_table[cur].is_valid) {
+                memcpy(&new_table[cur], &g_dir_table[j], sizeof(page_meta_t));
+                /* pthread_mutex_t 不可 memcpy，必须重新初始化 */
+                pthread_mutex_init(&new_table[cur].lock, NULL);
+                placed = 1;
+                migrated++;
+                break;
+            }
+        }
+
+        if (!placed && g_ops && g_ops->log) {
+            g_ops->log("[CRITICAL] dir_table_grow: rehash failed for GPA %llx!",
+                       (unsigned long long)g_dir_table[j].gpa);
+        }
+    }
+
+    /* 原子切换 */
+    page_meta_t *old_table = g_dir_table;
+    size_t old_alloc = g_dir_alloc_size;
+    g_dir_table = new_table;
+    g_dir_capacity = new_cap;
+    g_dir_alloc_size = sizeof(page_meta_t) * new_cap;
+
+    /* 释放所有分片锁（逆序） */
+    for (int i = LOCK_SHARDS - 1; i >= 0; i--)
+        pthread_mutex_unlock(&g_dir_table_locks[i]);
+
+    /* 释放旧表（alloc_large_table 使用 mmap，必须用 munmap） */
+    if (old_alloc > 0)
+        munmap(old_table, old_alloc);
+
+    if (g_ops && g_ops->log)
+        g_ops->log("[DIR] Grew directory table: %u -> %u entries (%u migrated)",
+                   old_cap, new_cap, migrated);
+
+    pthread_mutex_unlock(&g_grow_lock);
+}
+
+/*
+ * 安全版 find_or_create：探测失败时自动扩容并重试。
+ * 调用者必须持有 g_dir_table_locks[lock_idx]。
+ * 函数会在扩容时临时释放并重新获取该锁。
+ */
+static page_meta_t* find_or_create_page_meta_safe(uint64_t gpa, uint32_t lock_idx) {
+    page_meta_t *meta = find_or_create_page_meta(gpa);
+    if (meta) return meta;
+
+    /* 探测失败，需要扩容 */
+    pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
+    dir_table_grow();
+    pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
+
+    meta = find_or_create_page_meta(gpa);
+    if (!meta && g_ops && g_ops->log) {
+        g_ops->log("[CRITICAL] Directory still full after growth for GPA %llx!",
+                   (unsigned long long)gpa);
+    }
+    return meta;
+}
+#endif /* !__KERNEL__ */
+
+/* 跨平台宏：user-mode 用 _safe 版本（支持扩容），kernel 用原始版本 */
+#ifdef __KERNEL__
+#define DIR_FIND_OR_CREATE(gpa, lock_idx) find_or_create_page_meta(gpa)
+#else
+#define DIR_FIND_OR_CREATE(gpa, lock_idx) find_or_create_page_meta_safe(gpa, lock_idx)
+#endif
 
 // --- 核心接口实现 ---
 
@@ -3471,7 +3602,7 @@ static void rebuild_hash_ring_cache(void) {
 }
 
 /* 
- * [物理意图] 在 P2P 哈希环上执行 O(1) 级的“真理定位”。
+ * [物理意图] 在 P2P 哈希环上执行 O(1) 级的"真理定位"。
  * [关键逻辑] 输入 GPA，通过 4096 槽位的预计算哈希环（Consistent Hashing），瞬间找到该内存页的 Directory 节点。
  * [后果] 整个分布式内存的亚微秒级访问完全依赖此函数的计算效率，它规避了昂贵的网络寻址开销。
  */
@@ -3518,8 +3649,8 @@ extern void wvm_notify_kernel_epoch(uint32_t epoch);
 
 /* 
  * [物理意图] 接收 Gossip 消息，更新本地对 P2P 邻居的存活状态与纪元（Epoch）认知。
- * [关键逻辑] 实现分布式共识的“观测者模式”，当超过半数邻居进入新纪元时，本地自动推进 Epoch。
- * [后果] 解决了大规模集群中“时钟漂移”问题，确保所有节点的 DHT 路由决策在逻辑时间线上达成最终一致。
+ * [关键逻辑] 实现分布式共识的"观测者模式"，当超过半数邻居进入新纪元时，本地自动推进 Epoch。
+ * [后果] 解决了大规模集群中"时钟漂移"问题，确保所有节点的 DHT 路由决策在逻辑时间线上达成最终一致。
  */
 void update_local_topology_view(uint32_t src_id, uint32_t src_epoch, uint8_t src_state, struct sockaddr_in *src_addr, uint16_t src_ctrl_port) {
     pthread_rwlock_wrlock(&g_view_lock);
@@ -3588,9 +3719,9 @@ static uint64_t g_state_start_us = 0;
 /* --- 核心函数：自治节点状态推进 --- */
 
 /* 
- * [物理意图] 驱动节点的生命周期状态机，实现“优雅上线”与“平滑预热”。
+ * [物理意图] 驱动节点的生命周期状态机，实现"优雅上线"与"平滑预热"。
  * [关键逻辑] 节点通过 SHADOW -> WARMING -> ACTIVE 转换，在正式接管内存权属前先同步元数据缓存。
- * [后果] 彻底杜绝了新节点加入时由于“缓存冷启动”导致的瞬间全网性能塌陷（Thundering Herd）。
+ * [后果] 彻底杜绝了新节点加入时由于"缓存冷启动"导致的瞬间全网性能塌陷（Thundering Herd）。
  */
 static void advance_node_lifecycle(void) {
     uint64_t now = g_ops->get_time_us();
@@ -3653,7 +3784,7 @@ static void monitor_peer_liveness(void) {
 /* --- 后台自治线程：驱动心跳与扩散 --- */
 
 /* 
- * [物理意图] 驱动整个 P2P 节点的“自主意识”后台线程。
+ * [物理意图] 驱动整个 P2P 节点的"自主意识"后台线程。
  * [关键逻辑] 周期性执行：状态机推进、故障探测、以及随机向邻居扩散本地视图（Gossip Fan-out）。
  * [后果] 这是 WaveVM 自治性的动力源，保证了在没有任何中心管理节点的情况下，全网拓扑能自行收敛。
  */
@@ -3776,7 +3907,13 @@ int wvm_core_init(struct dsm_driver_ops *ops, int total_nodes_hint) {
     if (!ops) return -1;
     g_ops = ops;
     
-    g_dir_table = (page_meta_t *)g_ops->alloc_large_table(sizeof(page_meta_t) * DIR_TABLE_SIZE);
+    g_dir_table = (page_meta_t *)g_ops->alloc_large_table(
+#ifdef __KERNEL__
+        sizeof(page_meta_t) * DIR_TABLE_SIZE);
+#else
+        sizeof(page_meta_t) * g_dir_capacity);
+    g_dir_alloc_size = sizeof(page_meta_t) * g_dir_capacity;
+#endif
     if (!g_dir_table) return -ENOMEM;
     
     for (int i = 0; i < LOCK_SHARDS; i++) {
@@ -3823,7 +3960,7 @@ int wvm_handle_local_fault_fastpath(uint64_t gpa, void* page_buffer, uint64_t *v
     // 必须加锁，因为可能有远程写操作正在更新这个页面
     pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
     
-    page_meta_t *page = find_or_create_page_meta(gpa);
+    page_meta_t *page = DIR_FIND_OR_CREATE(gpa, lock_idx);
     if (page) {
         // 直接内存拷贝
         memcpy(page_buffer, page->base_page_data, 4096);
@@ -3925,9 +4062,9 @@ void* broadcast_worker_thread(void* arg) {
 }
 
 /* 
- * [物理意图] 针对特定页面的变动，向全网所有利益相关方精准发射“小波（Wavelet）”更新。
+ * [物理意图] 针对特定页面的变动，向全网所有利益相关方精准发射"小波（Wavelet）"更新。
  * [关键逻辑] 遍历二级订阅位图，利用多线程分片队列并行发送 Diff 或 Full-Page 包。
- * [后果] 它实现了“读操作本地化”，通过网络带宽换取读时延的消除，是 V30 性能突破的关键。
+ * [后果] 它实现了"读操作本地化"，通过网络带宽换取读时延的消除，是 V30 性能突破的关键。
  */
 static void broadcast_to_subscribers(page_meta_t *page, uint16_t msg_type, void *payload, int len, uint8_t flags) {
     // 遍历订阅者的
@@ -4004,9 +4141,9 @@ static atomic_long g_force_sync_last_sec = ATOMIC_VAR_INIT(0);
 #define MAX_FORCE_SYNC_PER_SEC 1024 
 
 /* 
- * [物理意图] 当发生严重的版本冲突或逻辑断层时，强制向节点投喂“最终真理”。
+ * [物理意图] 当发生严重的版本冲突或逻辑断层时，强制向节点投喂"最终真理"。
  * [关键逻辑] 绕过所有增量优化，直接发送 4KB 全量页面数据并强制更新其版本号。
- * [后果] 这是系统的“最终一致性保险丝”，在网络混沌或极端竞态下保证内存状态不崩溃。
+ * [后果] 这是系统的"最终一致性保险丝"，在网络混沌或极端竞态下保证内存状态不崩溃。
  */
 static void force_sync_client(uint64_t gpa, page_meta_t* page, uint32_t client_id) {
     // [FIX] page 可能为 NULL（如 stale-epoch 拒绝路径尚未查表）
@@ -4014,7 +4151,7 @@ static void force_sync_client(uint64_t gpa, page_meta_t* page, uint32_t client_i
         // 尝试从目录表中查找
         uint32_t lock_idx = get_lock_idx(gpa);
         pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
-        page = find_or_create_page_meta(gpa);
+        page = DIR_FIND_OR_CREATE(gpa, lock_idx);
         if (!page) {
             pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
             return; // 页面不存在，无法同步
@@ -4068,7 +4205,7 @@ static void force_sync_client(uint64_t gpa, page_meta_t* page, uint32_t client_i
 
     if (atomic_fetch_add(&g_force_sync_counter, 1) >= MAX_FORCE_SYNC_PER_SEC) {
         // 超出带宽配额，直接丢弃。
-        // 客户端因收不到回复，会保持旧版本，下次 COMMIT 依然会失败，实现“天然重试”
+        // 客户端因收不到回复，会保持旧版本，下次 COMMIT 依然会失败，实现"天然重试"
         return; 
     }
 
@@ -4106,7 +4243,7 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
         uint32_t lock_idx = get_lock_idx(gpa);
         pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
         
-        page_meta_t *page = find_or_create_page_meta(gpa);
+        page_meta_t *page = DIR_FIND_OR_CREATE(gpa, lock_idx);
         int ret = -1;
         
         if (page) {
@@ -4225,7 +4362,7 @@ static void handle_prophet_metadata_update(uint64_t gpa_start, uint64_t len) {
         uint32_t lock_idx = get_lock_idx(cur_gpa);
         
         pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
-        page_meta_t *page = find_or_create_page_meta(cur_gpa);
+        page_meta_t *page = DIR_FIND_OR_CREATE(cur_gpa, lock_idx);
         if (page) {
             // [严格遵守宏操作]：版本号必须单调连续递增
             uint32_t next_cnt = GET_COUNTER(page->version) + 1;
@@ -4291,7 +4428,7 @@ void wvm_prophet_abi_scanner(wvm_kvm_context_t *ctx) {
             g_ops->invalidate_local(inv_gpa);
         }
 
-        // 计算残余寄存器状态，防止“字节丢失”
+        // 计算残余寄存器状态，防止"字节丢失"
         uint64_t rem_bytes = raw_len - head_gap - acc_len;
         ctx->rdi = aligned_start + acc_len;
         
@@ -4488,7 +4625,7 @@ static void flush_gossip_aggregator() {
 /* 
  * [物理意图] 分布式内存事务的终极处理器。
  * [关键逻辑] 拦截所有入站消息，根据 MESI 状态机执行：READ(拉取)、DECLARE(订阅)、COMMIT(增量写) 及 Prophet(指令透传)。
- * [后果] 这是系统的“物理法则”执行点，任何逻辑错误都会直接破坏内存强一致性。
+ * [后果] 这是系统的"物理法则"执行点，任何逻辑错误都会直接破坏内存强一致性。
  */
 void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t source_node_id) {
     uint16_t type = ntohs(hdr->msg_type);
@@ -4566,7 +4703,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             uint32_t lock_idx = get_lock_idx(gpa);
             pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
             
-            page_meta_t *page = find_or_create_page_meta(gpa);
+            page_meta_t *page = DIR_FIND_OR_CREATE(gpa, lock_idx);
             if (page) {
                 ack_pl->gpa = WVM_HTONLL(gpa);
                 // 关键：填入当前版本号
@@ -4594,7 +4731,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             uint32_t lock_idx = get_lock_idx(gpa);
             pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
             
-            page_meta_t *page = find_or_create_page_meta(gpa);
+            page_meta_t *page = DIR_FIND_OR_CREATE(gpa, lock_idx);
             if (page) {
                 // 记录订阅者 (使用裸 node_id 索引位图，不能用 composite ID)
                 copyset_set(&page->subscribers, src_id);
@@ -4631,7 +4768,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             if (sz == 0) {
                 pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
                 // [V29.5] Zero Page Commit
-                page_meta_t *page = find_or_create_page_meta(gpa);
+                page_meta_t *page = DIR_FIND_OR_CREATE(gpa, lock_idx);
                 if (page) {
                     // 本地清零
                     memset(page->base_page_data, 0, 4096);
@@ -4653,7 +4790,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
 
                 pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
 
-                page_meta_t *page = find_or_create_page_meta(gpa);
+                page_meta_t *page = DIR_FIND_OR_CREATE(gpa, lock_idx);
 
                 if (!page) {
                     if (g_ops->log) g_ops->log("[Logic] Fatal: Hash Table Full for GPA %llx", gpa);
@@ -4742,7 +4879,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             uint32_t lock_idx = get_lock_idx(gpa);
             pthread_mutex_lock(&g_dir_table_locks[lock_idx]);
             
-            page_meta_t *page = find_or_create_page_meta(gpa);
+            page_meta_t *page = DIR_FIND_OR_CREATE(gpa, lock_idx);
             int write_success = 0;
 
             if (page) {
@@ -4751,7 +4888,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                 
                 // 3. [State] 更新状态：版本号递增
                 page->version = MAKE_VERSION(g_curr_epoch, GET_COUNTER(page->version) + 1);
-                write_success = 1; // 标记为“已提交”
+                write_success = 1; // 标记为"已提交"
                 
                 // 4. [Broadcast] 广播给其他订阅者
                 // 注意：这里是在持锁状态下分配内存，使用 wvm_malloc (kmalloc/malloc)
@@ -4773,7 +4910,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             
             pthread_mutex_unlock(&g_dir_table_locks[lock_idx]);
 
-            // 5. [ACK] 只有在“解锁”且“提交成功”后，才发送 ACK
+            // 5. [ACK] 只有在"解锁"且"提交成功"后，才发送 ACK
             // 这保证了当客户端收到 ACK 时，数据一定已经在 Directory 的内存里了
             if (write_success) {
                 size_t ack_len = sizeof(struct wvm_header); // ACK 包仅含头部
@@ -4878,7 +5015,7 @@ void wvm_logic_update_local_version(uint64_t gpa) {
     
     // 仅更新已存在的元数据。若页面未被追踪，说明无 Diff 历史，无需版本号。
 
-    page_meta_t *page = find_or_create_page_meta(gpa);
+    page_meta_t *page = DIR_FIND_OR_CREATE(gpa, lock_idx);
     if (page) {
         // [FIX] Epoch-Aware 版本更新
         uint32_t local_counter = GET_COUNTER(page->version);

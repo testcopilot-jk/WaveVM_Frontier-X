@@ -87,8 +87,8 @@ echo "=== Starting QEMU (TCG mode, no KVM) ==="
   -serial file:"$ART_DIR/vm-serial.log" -monitor none) >"$ART_DIR/vm.log" 2>&1 &
 Q=$!
 
-echo "=== Waiting 300s (5 min) for QEMU TCG boot ==="
-for i in 1 2 3 4 5; do
+echo "=== Waiting 1200s (20 min) for QEMU TCG boot ==="
+for i in $(seq 1 20); do
   sleep 60
   echo "  ${i}m elapsed — Q alive: $(kill -0 $Q 2>/dev/null && echo yes || echo NO)"
 done

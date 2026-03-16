@@ -1,6 +1,0 @@
-[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19421
-[Gateway] Loaded 1 route groups.
-[Gateway] L1 worker override: num_cores=1 for port 19420
-[Gateway] System has 1 cores. Scaling out RX workers...
-[Gateway] Control Plane Active on Port 19421 (Static)
-[Gateway] Worker bound fd=4 ip=0.0.0.0 port=19420
