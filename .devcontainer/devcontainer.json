@@ -5,6 +5,11 @@
   "containerUser": "root",
   "updateRemoteUserUID": false,
   "privileged": true,
+  "features": {
+    "ghcr.io/devcontainers/features/sshd:1": {
+      "version": "latest"
+    }
+  },
   "capAdd": [
     "NET_ADMIN",
     "NET_RAW"
