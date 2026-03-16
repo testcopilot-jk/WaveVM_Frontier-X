@@ -1,4 +1,0 @@
-[Gateway] upstream tx socket create failed: Operation not permitted
-[-] Init failed.
-[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19141
-[Gateway] Loaded 2 route groups.

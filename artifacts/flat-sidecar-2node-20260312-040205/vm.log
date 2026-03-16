@@ -1,2 +1,0 @@
-[WaveVM] /dev/kvm not available (mode=user), stay on TCG path
-WaveVM: Failed to open SHM file '/wvm_flat_node0': Permission denied

@@ -1,4 +1,0 @@
-[WaveVM] /dev/kvm not available (mode=user), stay on TCG path
-qemu-system-x86_64: -accel wavevm: WaveVM: defer user mem init until first RAM block is registered
-[WVM-DBG] cpu=0 kvm_enabled=0 vcpu_sock=13 split=0
-[WaveVM-User] V31 Master TCG Harvester Active (IPC Diff Path)

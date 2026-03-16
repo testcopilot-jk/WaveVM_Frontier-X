@@ -1,3 +1,0 @@
-make: Entering directory '/usr/src/linux-headers-5.15.0-161-generic'
-  CLEAN   /root/wvmtest/master_core/Module.symvers
-make: Leaving directory '/usr/src/linux-headers-5.15.0-161-generic'

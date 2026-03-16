@@ -1,4 +1,0 @@
-warning: Error disabling address space randomization: Operation not permitted
-warning: Could not trace the inferior process.
-warning: ptrace: Operation not permitted
-During startup program exited with code 127.

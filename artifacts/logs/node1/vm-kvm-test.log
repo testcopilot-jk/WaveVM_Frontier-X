@@ -1,8 +1,0 @@
-c[?7l[2J[0mSeaBIOS (version rel-1.14.0-0-g155821a1990b-prebuilt.qemu.org)
-
-
-iPXE (http://ipxe.org) 00:02.0 CA00 PCI2.10 PnP PMM+3FF8EFA0+3FEEEFA0 CA00
-Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
-
-
-Booting from Hard Disk..../accel/wavevm/wavevm-all.c:936:wvm_send_ipc_block_io: Object 0x55d2f94e0030 is not an instance of type wavevm-accel

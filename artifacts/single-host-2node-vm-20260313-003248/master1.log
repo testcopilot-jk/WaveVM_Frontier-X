@@ -1,7 +1,0 @@
-[Warning] Failed to open /dev/wavevm (Kernel Mode disabled?): No such file or directory
-[*] WaveVM Swarm V30.0 'Wavelet' Node Daemon (PhysID: 1, VM: 0)
-[Backend] V29.5 Logic Core Sharded Pool Ready: 100032 items.
-RX socket create failed: Operation not permitted
-RX socket create failed: Operation not permitted
-RX socket create failed: Operation not permitted
-RX socket create failed: Operation not permitted
