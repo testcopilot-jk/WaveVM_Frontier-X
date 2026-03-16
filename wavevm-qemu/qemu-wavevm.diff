@@ -173,8 +173,8 @@ index f099b5092..3da9023a8 100644
              aml_append(method, while_ctx2);
              aml_append(method, aml_release(ctrl_lock));
 +#endif
-        }
-        aml_append(cpus_dev, method);
+         }
+         aml_append(cpus_dev, method);
  
 diff --git a/accel/kvm/kvm-all.c b/accel/kvm/kvm-all.c
 index baaa54249..5a2b045be 100644
