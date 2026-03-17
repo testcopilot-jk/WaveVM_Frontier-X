@@ -15380,8 +15380,8 @@ index baaa54249..5a2b045be 100644
 +            "[KVM-MEM] listener_register kml=%p as=%p as_id=%d nr_slots=%d\n",
 +            kml, as, as_id, s->nr_slots);
      qemu_mutex_init(&kml->slots_lock);
-    kml->slots = g_malloc0(s->nr_slots * sizeof(KVMSlot));
-    kml->as_id = as_id;
+     kml->slots = g_malloc0(s->nr_slots * sizeof(KVMSlot));
+     kml->as_id = as_id;
 
 ```
 
