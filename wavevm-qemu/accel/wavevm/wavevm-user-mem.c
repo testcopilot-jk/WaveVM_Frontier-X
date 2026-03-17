@@ -634,7 +634,8 @@ static void kvm_proactive_page_fetch(uint64_t gpa) {
                 if (fetch_hva) {
                     mprotect(fetch_hva, 4096, PROT_READ | PROT_WRITE);
                     memcpy(fetch_hva, (uint8_t *)g_shm_shadow + gpa, 4096);
-                    mprotect(fetch_hva, 4096, PROT_READ);
+                    /* KVM 模式下不降权：脏页由 dirty log 跟踪，
+                     * mprotect(PROT_READ) 会导致 EPT 违例 → exit=17 */
                 }
             }
             set_local_page_version(gpa, ack.version);

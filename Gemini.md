@@ -9660,7 +9660,11 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
         }
     }
     else if (type == MSG_INVALIDATE) {
-        madvise(hva, 4096, MADV_DONTNEED);
+        if (g_kvm_available) {
+            memset(hva, 0, 4096); /* KVM: 不能 MADV_DONTNEED，会破坏 memslot 物理页 */
+        } else {
+            madvise(hva, 4096, MADV_DONTNEED);
+        }
     }
     else if (type == MSG_DOWNGRADE) {
         if (hdr->payload_len < 16) return;
@@ -9691,7 +9695,11 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
 
         if (robust_sendto(sockfd, tx, sizeof(tx), client) == 0) {
             // 只有确保网络层已经接纳了这个包，才敢擦除本地物理内存
-            madvise(hva, 4096, MADV_DONTNEED);
+            if (g_kvm_available) {
+                memset(hva, 0, 4096);
+            } else {
+                madvise(hva, 4096, MADV_DONTNEED);
+            }
         } else {
             // 如果发不出去，宁可让 Master 稍后重试，也不要擦除数据
             //fprintf(stderr, "[WVM-Slave] Critical: Failed to send back data for GPA %lx, aborting unmap\n", gpa);
@@ -9731,7 +9739,11 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
 
             if (robust_sendto(sockfd, tx, sizeof(tx), client) == 0) {
                 // 同上
-                madvise(hva, 4096, MADV_DONTNEED);
+                if (g_kvm_available) {
+                    memset(hva, 0, 4096);
+                } else {
+                    madvise(hva, 4096, MADV_DONTNEED);
+                }
             }
         }
     }
@@ -13806,7 +13818,8 @@ static void kvm_proactive_page_fetch(uint64_t gpa) {
                 if (fetch_hva) {
                     mprotect(fetch_hva, 4096, PROT_READ | PROT_WRITE);
                     memcpy(fetch_hva, (uint8_t *)g_shm_shadow + gpa, 4096);
-                    mprotect(fetch_hva, 4096, PROT_READ);
+                    /* KVM 模式下不降权：脏页由 dirty log 跟踪，
+                     * mprotect(PROT_READ) 会导致 EPT 违例 → exit=17 */
                 }
             }
             set_local_page_version(gpa, ack.version);

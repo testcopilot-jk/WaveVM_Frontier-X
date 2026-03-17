@@ -1054,7 +1054,11 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
         }
     }
     else if (type == MSG_INVALIDATE) {
-        madvise(hva, 4096, MADV_DONTNEED);
+        if (g_kvm_available) {
+            memset(hva, 0, 4096); /* KVM: 不能 MADV_DONTNEED，会破坏 memslot 物理页 */
+        } else {
+            madvise(hva, 4096, MADV_DONTNEED);
+        }
     }
     else if (type == MSG_DOWNGRADE) {
         if (hdr->payload_len < 16) return;
@@ -1085,7 +1089,11 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
 
         if (robust_sendto(sockfd, tx, sizeof(tx), client) == 0) {
             // 只有确保网络层已经接纳了这个包，才敢擦除本地物理内存
-            madvise(hva, 4096, MADV_DONTNEED);
+            if (g_kvm_available) {
+                memset(hva, 0, 4096);
+            } else {
+                madvise(hva, 4096, MADV_DONTNEED);
+            }
         } else {
             // 如果发不出去，宁可让 Master 稍后重试，也不要擦除数据
             //fprintf(stderr, "[WVM-Slave] Critical: Failed to send back data for GPA %lx, aborting unmap\n", gpa);
@@ -1125,7 +1133,11 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
 
             if (robust_sendto(sockfd, tx, sizeof(tx), client) == 0) {
                 // 同上
-                madvise(hva, 4096, MADV_DONTNEED);
+                if (g_kvm_available) {
+                    memset(hva, 0, 4096);
+                } else {
+                    madvise(hva, 4096, MADV_DONTNEED);
+                }
             }
         }
     }
