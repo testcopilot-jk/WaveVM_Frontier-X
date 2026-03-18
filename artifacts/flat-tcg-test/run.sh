@@ -10,6 +10,8 @@ CFG="$ART_DIR/flat_2node.conf"
 cat > "$CFG" <<'EOCFG'
 NODE 0 127.0.0.1 19120 1 1
 NODE 1 127.0.0.1 19220 1 1
+ROUTE 0 1 127.0.0.1 19120
+ROUTE 1 1 127.0.0.1 19220
 EOCFG
 
 pkill -f "wavevm_node_master" 2>/dev/null || true
