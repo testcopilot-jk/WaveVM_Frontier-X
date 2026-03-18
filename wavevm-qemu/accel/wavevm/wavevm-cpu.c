@@ -587,38 +587,16 @@ static void *wavevm_cpu_thread_fn(void *arg) {
                 wavevm_remote_exec(cpu);
                 qemu_mutex_lock_iothread();
             }
-            /* Local vCPU: execute guest code */
+            /* Local vCPU: 复用 QEMU 原生 kvm_cpu_exec()
+             * 包含完整的 kvm_arch_pre_run (中断注入/APIC 同步)、
+             * kvm_arch_post_run (状态回收)、kvm_arch_put_registers
+             * (脏寄存器推送) 以及全部 exit reason 处理。
+             * 替代之前自己写的裸 KVM_RUN ioctl + 4 种 exit 的简化循环。
+             */
             else if (kvm_enabled()) {
-                int ret;
-                qemu_mutex_unlock_iothread();
-                ret = kvm_vcpu_ioctl(cpu, KVM_RUN, 0);
-                qemu_mutex_lock_iothread();
-
-                if (ret < 0) {
-                    if (errno != EINTR && errno != EAGAIN) {
-                        fprintf(stderr, "KVM_RUN failed: %s\n", strerror(errno));
-                        break;
-                    }
-                } else {
-                    struct kvm_run *run = cpu->kvm_run;
-                    switch (run->exit_reason) {
-                    case KVM_EXIT_IO:
-                        wavevm_handle_io(cpu);
-                        break;
-                    case KVM_EXIT_MMIO:
-                        wavevm_handle_mmio(cpu);
-                        break;
-                    case KVM_EXIT_SHUTDOWN:
-                        qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
-                        cpu->stop = true;
-                        break;
-                    case KVM_EXIT_HLT:
-                        /* will fall through to qemu_wait_io_event below */
-                        cpu->halted = 1;
-                        break;
-                    default:
-                        break;
-                    }
+                int r = kvm_cpu_exec(cpu);
+                if (r == EXCP_DEBUG) {
+                    cpu_handle_guest_debug(cpu);
                 }
             } else {
                 /* TCG local execution */

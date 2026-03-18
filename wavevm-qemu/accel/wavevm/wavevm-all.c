@@ -338,20 +338,33 @@ void wavevm_slave_vcpu_loop(CPUState *cpu)
             qemu_mutex_lock_iothread();
             cpu_exec_end(cpu);
         } else {
+            /* KVM Slave 执行：复用 QEMU 原生 pre_run/post_run 钩子
+             * 保证中断注入、APIC 同步、寄存器推送等不被遗漏。
+             * 但不用 kvm_cpu_exec，因为 IO/MMIO 需要转发回 Master。
+             */
             int ret;
+            struct kvm_run *run = cpu->kvm_run;
+            cpu_exec_start(cpu);
             qemu_mutex_unlock_iothread();
             do {
+                if (cpu->vcpu_dirty) {
+                    kvm_arch_put_registers(cpu, KVM_PUT_RUNTIME_STATE);
+                    cpu->vcpu_dirty = false;
+                }
+                kvm_arch_pre_run(cpu, run);
                 ret = kvm_vcpu_ioctl(cpu, KVM_RUN, 0);
+                kvm_arch_post_run(cpu, run);
                 if (ret == 0) {
-                    int reason = cpu->kvm_run->exit_reason;
+                    int reason = run->exit_reason;
                     if (reason == KVM_EXIT_IO || reason == KVM_EXIT_MMIO ||
                         reason == KVM_EXIT_HLT || reason == KVM_EXIT_SHUTDOWN ||
                         reason == KVM_EXIT_FAIL_ENTRY) {
                         break;
                     }
                 }
-            } while (ret > 0 || ret == -EINTR);
+            } while (ret >= 0 || ret == -EINTR);
             qemu_mutex_lock_iothread();
+            cpu_exec_end(cpu);
         }
 
         memset(&ack, 0, sizeof(ack));
