@@ -591,7 +591,6 @@ static void *wavevm_cpu_thread_fn(void *arg) {
              * 包含完整的 kvm_arch_pre_run (中断注入/APIC 同步)、
              * kvm_arch_post_run (状态回收)、kvm_arch_put_registers
              * (脏寄存器推送) 以及全部 exit reason 处理。
-             * 替代之前自己写的裸 KVM_RUN ioctl + 4 种 exit 的简化循环。
              */
             else if (kvm_enabled()) {
                 int r = kvm_cpu_exec(cpu);

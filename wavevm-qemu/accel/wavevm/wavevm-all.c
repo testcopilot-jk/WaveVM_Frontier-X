@@ -21,6 +21,7 @@
 #include "sysemu/tcg.h"
 #include "sysemu/kvm.h" 
 #include "sysemu/kvm_int.h"
+#include "../kvm/kvm-cpus.h"
 #include "tcg/tcg.h"
 #include "linux/kvm.h"
 #include "exec/cpu-common.h"
@@ -126,12 +127,46 @@ static int64_t wavevm_get_elapsed_ticks(void)
     return cpu_get_ticks();
 }
 
+
+/* TCG-safe wrappers: only call KVM sync functions when KVM is active */
+static void wavevm_synchronize_post_reset(CPUState *cpu)
+{
+    if (kvm_enabled()) {
+        kvm_cpu_synchronize_post_reset(cpu);
+    }
+}
+
+static void wavevm_synchronize_post_init(CPUState *cpu)
+{
+    if (kvm_enabled()) {
+        kvm_cpu_synchronize_post_init(cpu);
+    }
+}
+
+static void wavevm_synchronize_state(CPUState *cpu)
+{
+    if (kvm_enabled()) {
+        kvm_cpu_synchronize_state(cpu);
+    }
+}
+
+static void wavevm_synchronize_pre_loadvm(CPUState *cpu)
+{
+    if (kvm_enabled()) {
+        kvm_cpu_synchronize_pre_loadvm(cpu);
+    }
+}
+
 static const CpusAccel wavevm_cpus = {
     .create_vcpu_thread = wavevm_start_vcpu_thread,
     .kick_vcpu_thread   = wavevm_kick_vcpu_thread,
     .handle_interrupt   = wavevm_handle_interrupt,
     .get_virtual_clock  = wavevm_get_virtual_clock,
-    .get_elapsed_ticks  = wavevm_get_elapsed_ticks,
+    .get_elapsed_ticks        = wavevm_get_elapsed_ticks,
+    .synchronize_post_reset   = wavevm_synchronize_post_reset,
+    .synchronize_post_init    = wavevm_synchronize_post_init,
+    .synchronize_state        = wavevm_synchronize_state,
+    .synchronize_pre_loadvm   = wavevm_synchronize_pre_loadvm,
 };
 
 static void wavevm_slave_import_ctx(CPUState *cpu,
