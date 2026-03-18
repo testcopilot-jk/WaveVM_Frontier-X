@@ -615,9 +615,10 @@ int init_aggregator(int local_port, const char *upstream_ip, int upstream_port, 
     }
 
     long num_cores = get_nprocs();
-    printf("[Gateway] System has %ld cores. Scaling out RX workers...\n", num_cores);
+    long num_workers = num_cores > 1 ? num_cores - 1 : 1;
+    printf("[Gateway] System has %ld cores. Scaling %ld RX workers...\n", num_cores, num_workers);
 
-    for (long i = 0; i < num_cores; i++) {
+    for (long i = 0; i < num_workers; i++) {
         pthread_t thread;
         if (pthread_create(&thread, NULL, gateway_worker, (void*)i) != 0) {
             perror("[Gateway] Failed to create worker thread");
