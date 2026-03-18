@@ -344,10 +344,11 @@ static void learn_route(uint32_t slave_id, struct sockaddr_in *addr) {
     pthread_rwlock_rdlock(&g_map_lock);
     HASH_FIND_INT(g_node_map, &slave_id, node);
     if (node) {
-        if (node->static_pinned) {
-            pthread_rwlock_unlock(&g_map_lock);
-            return; // 静态路由不允许被自学习覆盖
-        }
+        // [FIX] static_pinned no longer blocks learn_route.
+        // Sidecar gateways seed static routes pointing upstream (L1A),
+        // but local masters announce themselves at runtime.  Without this
+        // override the sidecar never learns the real local path and packets
+        // loop between sidecar ↔ L1 forever, causing RPC Type-5 timeouts.
         if (node->addr.sin_addr.s_addr == addr->sin_addr.s_addr &&
             node->addr.sin_port == addr->sin_port) {
             pthread_rwlock_unlock(&g_map_lock);
@@ -369,8 +370,8 @@ static void learn_route(uint32_t slave_id, struct sockaddr_in *addr) {
             printf("[Gateway-Auto] Learned New Node: %u\n", slave_id);
         }
     }
-    
-    if (node && !node->static_pinned) {
+
+    if (node) {
         // [FIX-M8] 同时持有 node->lock 保护 addr 写入，与读端保持一致
         pthread_mutex_lock(&node->lock);
         node->addr = *addr;
@@ -615,8 +616,12 @@ int init_aggregator(int local_port, const char *upstream_ip, int upstream_port, 
     }
 
     long num_cores = get_nprocs();
-    long num_workers = num_cores > 1 ? num_cores - 1 : 1;
-    printf("[Gateway] System has %ld cores. Scaling %ld RX workers...\n", num_cores, num_workers);
+    // [FIX] Reserve 1 core for main thread (flush_all_buffers loop + control plane).
+    // Without this, the last worker's CPU affinity collides with main, causing futex
+    // deadlock in internal_push → its SO_REUSEPORT socket accumulates unread packets
+    // and ~25% of traffic silently drops.
+    long num_workers = (num_cores > 1) ? num_cores - 1 : 1;
+    printf("[Gateway] System has %ld cores. Scaling out %ld RX workers...\n", num_cores, num_workers);
 
     for (long i = 0; i < num_workers; i++) {
         pthread_t thread;

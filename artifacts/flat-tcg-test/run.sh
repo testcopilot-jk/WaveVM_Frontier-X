@@ -8,8 +8,8 @@ mount -o remount,size=8G /dev/shm
 
 CFG="$ART_DIR/flat_2node.conf"
 cat > "$CFG" <<'EOCFG'
-NODE 0 127.0.0.1 19100 1 1
-NODE 1 127.0.0.1 19200 1 1
+NODE 0 127.0.0.1 19120 1 1
+NODE 1 127.0.0.1 19220 1 1
 EOCFG
 
 pkill -f "wavevm_node_master" 2>/dev/null || true
