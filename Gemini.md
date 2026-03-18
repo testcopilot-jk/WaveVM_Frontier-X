@@ -11077,6 +11077,7 @@ void wvm_tcg_set_state(CPUState *cpu, wvm_tcg_context_t *ctx) {
 #include "sysemu/tcg.h"
 #include "sysemu/kvm.h" 
 #include "sysemu/kvm_int.h"
+#include "../kvm/kvm-cpus.h"
 #include "tcg/tcg.h"
 #include "linux/kvm.h"
 #include "exec/cpu-common.h"
@@ -11182,12 +11183,46 @@ static int64_t wavevm_get_elapsed_ticks(void)
     return cpu_get_ticks();
 }
 
+
+/* TCG-safe wrappers: only call KVM sync functions when KVM is active */
+static void wavevm_synchronize_post_reset(CPUState *cpu)
+{
+    if (kvm_enabled()) {
+        kvm_cpu_synchronize_post_reset(cpu);
+    }
+}
+
+static void wavevm_synchronize_post_init(CPUState *cpu)
+{
+    if (kvm_enabled()) {
+        kvm_cpu_synchronize_post_init(cpu);
+    }
+}
+
+static void wavevm_synchronize_state(CPUState *cpu)
+{
+    if (kvm_enabled()) {
+        kvm_cpu_synchronize_state(cpu);
+    }
+}
+
+static void wavevm_synchronize_pre_loadvm(CPUState *cpu)
+{
+    if (kvm_enabled()) {
+        kvm_cpu_synchronize_pre_loadvm(cpu);
+    }
+}
+
 static const CpusAccel wavevm_cpus = {
     .create_vcpu_thread = wavevm_start_vcpu_thread,
     .kick_vcpu_thread   = wavevm_kick_vcpu_thread,
     .handle_interrupt   = wavevm_handle_interrupt,
     .get_virtual_clock  = wavevm_get_virtual_clock,
-    .get_elapsed_ticks  = wavevm_get_elapsed_ticks,
+    .get_elapsed_ticks        = wavevm_get_elapsed_ticks,
+    .synchronize_post_reset   = wavevm_synchronize_post_reset,
+    .synchronize_post_init    = wavevm_synchronize_post_init,
+    .synchronize_state        = wavevm_synchronize_state,
+    .synchronize_pre_loadvm   = wavevm_synchronize_pre_loadvm,
 };
 
 static void wavevm_slave_import_ctx(CPUState *cpu,
@@ -11394,20 +11429,33 @@ void wavevm_slave_vcpu_loop(CPUState *cpu)
             qemu_mutex_lock_iothread();
             cpu_exec_end(cpu);
         } else {
+            /* KVM Slave 执行：复用 QEMU 原生 pre_run/post_run 钩子
+             * 保证中断注入、APIC 同步、寄存器推送等不被遗漏。
+             * 但不用 kvm_cpu_exec，因为 IO/MMIO 需要转发回 Master。
+             */
             int ret;
+            struct kvm_run *run = cpu->kvm_run;
+            cpu_exec_start(cpu);
             qemu_mutex_unlock_iothread();
             do {
+                if (cpu->vcpu_dirty) {
+                    kvm_arch_put_registers(cpu, KVM_PUT_RUNTIME_STATE);
+                    cpu->vcpu_dirty = false;
+                }
+                kvm_arch_pre_run(cpu, run);
                 ret = kvm_vcpu_ioctl(cpu, KVM_RUN, 0);
+                kvm_arch_post_run(cpu, run);
                 if (ret == 0) {
-                    int reason = cpu->kvm_run->exit_reason;
+                    int reason = run->exit_reason;
                     if (reason == KVM_EXIT_IO || reason == KVM_EXIT_MMIO ||
                         reason == KVM_EXIT_HLT || reason == KVM_EXIT_SHUTDOWN ||
                         reason == KVM_EXIT_FAIL_ENTRY) {
                         break;
                     }
                 }
-            } while (ret > 0 || ret == -EINTR);
+            } while (ret >= 0 || ret == -EINTR);
             qemu_mutex_lock_iothread();
+            cpu_exec_end(cpu);
         }
 
         memset(&ack, 0, sizeof(ack));
@@ -13050,38 +13098,15 @@ static void *wavevm_cpu_thread_fn(void *arg) {
                 wavevm_remote_exec(cpu);
                 qemu_mutex_lock_iothread();
             }
-            /* Local vCPU: execute guest code */
+            /* Local vCPU: 复用 QEMU 原生 kvm_cpu_exec()
+             * 包含完整的 kvm_arch_pre_run (中断注入/APIC 同步)、
+             * kvm_arch_post_run (状态回收)、kvm_arch_put_registers
+             * (脏寄存器推送) 以及全部 exit reason 处理。
+             */
             else if (kvm_enabled()) {
-                int ret;
-                qemu_mutex_unlock_iothread();
-                ret = kvm_vcpu_ioctl(cpu, KVM_RUN, 0);
-                qemu_mutex_lock_iothread();
-
-                if (ret < 0) {
-                    if (errno != EINTR && errno != EAGAIN) {
-                        fprintf(stderr, "KVM_RUN failed: %s\n", strerror(errno));
-                        break;
-                    }
-                } else {
-                    struct kvm_run *run = cpu->kvm_run;
-                    switch (run->exit_reason) {
-                    case KVM_EXIT_IO:
-                        wavevm_handle_io(cpu);
-                        break;
-                    case KVM_EXIT_MMIO:
-                        wavevm_handle_mmio(cpu);
-                        break;
-                    case KVM_EXIT_SHUTDOWN:
-                        qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
-                        cpu->stop = true;
-                        break;
-                    case KVM_EXIT_HLT:
-                        /* will fall through to qemu_wait_io_event below */
-                        cpu->halted = 1;
-                        break;
-                    default:
-                        break;
-                    }
+                int r = kvm_cpu_exec(cpu);
+                if (r == EXCP_DEBUG) {
+                    cpu_handle_guest_debug(cpu);
                 }
             } else {
                 /* TCG local execution */
@@ -15829,10 +15854,11 @@ static void learn_route(uint32_t slave_id, struct sockaddr_in *addr) {
     pthread_rwlock_rdlock(&g_map_lock);
     HASH_FIND_INT(g_node_map, &slave_id, node);
     if (node) {
-        if (node->static_pinned) {
-            pthread_rwlock_unlock(&g_map_lock);
-            return; // 静态路由不允许被自学习覆盖
-        }
+        // [FIX] static_pinned no longer blocks learn_route.
+        // Sidecar gateways seed static routes pointing upstream (L1A),
+        // but local masters announce themselves at runtime.  Without this
+        // override the sidecar never learns the real local path and packets
+        // loop between sidecar ↔ L1 forever, causing RPC Type-5 timeouts.
         if (node->addr.sin_addr.s_addr == addr->sin_addr.s_addr &&
             node->addr.sin_port == addr->sin_port) {
             pthread_rwlock_unlock(&g_map_lock);
@@ -15854,8 +15880,8 @@ static void learn_route(uint32_t slave_id, struct sockaddr_in *addr) {
             printf("[Gateway-Auto] Learned New Node: %u\n", slave_id);
         }
     }
-    
-    if (node && !node->static_pinned) {
+
+    if (node) {
         // [FIX-M8] 同时持有 node->lock 保护 addr 写入，与读端保持一致
         pthread_mutex_lock(&node->lock);
         node->addr = *addr;
@@ -16100,9 +16126,14 @@ int init_aggregator(int local_port, const char *upstream_ip, int upstream_port, 
     }
 
     long num_cores = get_nprocs();
-    printf("[Gateway] System has %ld cores. Scaling out RX workers...\n", num_cores);
+    // [FIX] Reserve 1 core for main thread (flush_all_buffers loop + control plane).
+    // Without this, the last worker's CPU affinity collides with main, causing futex
+    // deadlock in internal_push → its SO_REUSEPORT socket accumulates unread packets
+    // and ~25% of traffic silently drops.
+    long num_workers = (num_cores > 1) ? num_cores - 1 : 1;
+    printf("[Gateway] System has %ld cores. Scaling out %ld RX workers...\n", num_cores, num_workers);
 
-    for (long i = 0; i < num_cores; i++) {
+    for (long i = 0; i < num_workers; i++) {
         pthread_t thread;
         if (pthread_create(&thread, NULL, gateway_worker, (void*)i) != 0) {
             perror("[Gateway] Failed to create worker thread");
