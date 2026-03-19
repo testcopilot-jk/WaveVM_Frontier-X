@@ -62,9 +62,144 @@ int g_ctrl_port = 0; // 供应给 wavevm_gateway
 static int g_is_single_core = 0;
 static volatile uint64_t g_rx_small_count = 0;
 static volatile uint64_t g_rx_big_count = 0;
+static int g_allowed_cpus = 0;
+static int g_force_single_rx = 0;
+static int g_disable_reuseport = 0;
+static int g_use_recvfrom = 0;
+
+static inline gateway_node_t* find_node(uint32_t slave_id);
+static void learn_route(uint32_t slave_id, struct sockaddr_in *addr);
+static int internal_push(int fd, uint32_t slave_id, void *data, int len);
+
+static int count_allowed_cpus(void) {
+    cpu_set_t mask;
+    CPU_ZERO(&mask);
+    if (sched_getaffinity(0, sizeof(mask), &mask) != 0) {
+        return get_nprocs();
+    }
+    int count = 0;
+    for (int i = 0; i < CPU_SETSIZE; i++) {
+        if (CPU_ISSET(i, &mask)) count++;
+    }
+    return (count > 0) ? count : get_nprocs();
+}
+
+static int pick_allowed_cpu_index(long worker_idx) {
+    cpu_set_t mask;
+    CPU_ZERO(&mask);
+    if (sched_getaffinity(0, sizeof(mask), &mask) != 0) {
+        return (int)worker_idx;
+    }
+    int target = (g_allowed_cpus > 0) ? (int)(worker_idx % g_allowed_cpus) : (int)worker_idx;
+    int seen = 0;
+    for (int i = 0; i < CPU_SETSIZE; i++) {
+        if (!CPU_ISSET(i, &mask)) continue;
+        if (seen == target) return i;
+        seen++;
+    }
+    return (int)worker_idx;
+}
 
 void detect_cpu_env() {
     if (get_nprocs() <= 1) g_is_single_core = 1;
+}
+
+static inline void gateway_process_packet(int local_fd,
+                                          uint8_t *ptr,
+                                          int pkt_len,
+                                          struct sockaddr_in *src) {
+    if (pkt_len < (int)sizeof(struct wvm_header)) return;
+    struct wvm_header *hdr = (struct wvm_header *)ptr;
+    if (pkt_len >= 200) {
+        __sync_fetch_and_add(&g_rx_big_count, 1);
+    } else {
+        __sync_fetch_and_add(&g_rx_small_count, 1);
+    }
+    { static int __rx=0;
+      if (__rx < 20) {
+          fprintf(stderr, "[Gateway] rx len=%u magic=0x%08x\n",
+                  (unsigned)pkt_len, (unsigned)ntohl(hdr->magic));
+          __rx++;
+      }
+    }
+    { static int __rx_big=0;
+      if (__rx_big < 20 && pkt_len >= 200) {
+          fprintf(stderr, "[Gateway] rx-big len=%u magic=0x%08x\n",
+                  (unsigned)pkt_len, (unsigned)ntohl(hdr->magic));
+          __rx_big++;
+      }
+    }
+    if (ntohl(hdr->magic) != WVM_MAGIC) return;
+    uint16_t msg_type = ntohs(hdr->msg_type);
+
+    uint32_t source_id = ntohl(hdr->slave_id); // 发送者 ID
+    uint32_t target_id = ntohl(hdr->target_id); // 目标 ID（兼容旧逻辑时可能为 AUTO_ROUTE）
+    
+    // [关键]：只要收到合法的 WVM 包，就学习源路由
+    // 排除掉 Upstream (Master/Core) 的 ID，只学习 Downstream (Leaf) 节点
+    // 这里可以通过 ID 范围判断，或者简单地全部学习（Upstream 路由更新也无妨）
+    if (source_id != WVM_NODE_AUTO_ROUTE) {
+        learn_route(source_id, src);
+    }
+
+    /*
+     * Route by logical destination first. This avoids source-IP based
+     * misclassification loops in multi-hop or same-host multi-instance
+     * deployments. Fallback to upstream only when no local route exists.
+     */
+    // [FIX-M7] 当 target_id 无效时不再 fallback 到 source_id，
+    // 防止 AUTO_ROUTE 包被回送给发送者形成环路
+    uint32_t route_id;
+    if (WVM_IS_VALID_TARGET(target_id)) {
+        route_id = target_id;
+    } else {
+        // 无有效目标，直接交给 upstream 处理
+        int tx_fd = (g_upstream_tx_socket >= 0) ? g_upstream_tx_socket : local_fd;
+        sendto(tx_fd, ptr, pkt_len, MSG_DONTWAIT,
+               (struct sockaddr*)&g_upstream_addr, sizeof(g_upstream_addr));
+        return;
+    }
+
+    int r = internal_push(local_fd, route_id, ptr, pkt_len);
+    if (msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT) {
+        static int __gw_dbg = 0;
+        if (__gw_dbg < 20) {
+            char src_ip[INET_ADDRSTRLEN] = {0};
+            inet_ntop(AF_INET, &src->sin_addr, src_ip, sizeof(src_ip));
+            fprintf(stderr, "[Gateway] route msg=%u target=%u route=%u r=%d src=%s:%u\n",
+                    (unsigned)msg_type, (unsigned)target_id, (unsigned)route_id, r,
+                    src_ip, (unsigned)ntohs(src->sin_port));
+            __gw_dbg++;
+        }
+    }
+    if (r < 0) {
+        int tx_fd = (g_upstream_tx_socket >= 0) ? g_upstream_tx_socket : local_fd;
+        ssize_t sret = sendto(tx_fd, ptr, pkt_len, MSG_DONTWAIT,
+                              (struct sockaddr*)&g_upstream_addr, sizeof(g_upstream_addr));
+        if (msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT || sret < 0) {
+            char src_ip[INET_ADDRSTRLEN] = {0};
+            char up_ip[INET_ADDRSTRLEN] = {0};
+            inet_ntop(AF_INET, &src->sin_addr, src_ip, sizeof(src_ip));
+            inet_ntop(AF_INET, &g_upstream_addr.sin_addr, up_ip, sizeof(up_ip));
+            fprintf(stderr, "[Gateway] route->upstream msg=%u src=%s:%u up=%s:%u ret=%zd errno=%d\n",
+                    (unsigned)msg_type,
+                    src_ip, (unsigned)ntohs(src->sin_port),
+                    up_ip, (unsigned)ntohs(g_upstream_addr.sin_port),
+                    sret, (sret < 0) ? errno : 0);
+        }
+    } else if (msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT) {
+        gateway_node_t *dst = find_node(route_id);
+        char dst_ip[INET_ADDRSTRLEN] = {0};
+        unsigned dst_port = 0;
+        if (dst) {
+            inet_ntop(AF_INET, &dst->addr.sin_addr, dst_ip, sizeof(dst_ip));
+            dst_port = (unsigned)ntohs(dst->addr.sin_port);
+        }
+        fprintf(stderr, "[Gateway] route->local msg=%u route=%u src=%s:%u dst=%s:%u\n",
+                (unsigned)msg_type, route_id,
+                inet_ntoa(src->sin_addr), (unsigned)ntohs(src->sin_port),
+                dst_ip[0] ? dst_ip : "0.0.0.0", dst_port);
+    }
 }
 
 
@@ -321,16 +456,18 @@ void flush_all_buffers(void) {
     static uint64_t last_big = 0;
     static uint64_t last_small = 0;
     static uint64_t tick = 0;
+    static int printed = 0;
 
     // Low-noise RX visibility (once per ~1s) to verify big packets reach the gateway.
     if ((++tick % 1000) == 0) {
         uint64_t big = g_rx_big_count;
         uint64_t small = g_rx_small_count;
-        if (big != last_big || small != last_small) {
+        if (big != last_big || small != last_small || printed < 3) {
             fprintf(stderr, "[Gateway] rx-stats big=%llu small=%llu\n",
                     (unsigned long long)big, (unsigned long long)small);
             last_big = big;
             last_small = small;
+            if (printed < 3) printed++;
         }
     }
 
@@ -411,9 +548,10 @@ static void* gateway_worker(void *arg) {
 
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
-    CPU_SET(core_id, &cpuset);
+    int cpu = pick_allowed_cpu_index(core_id);
+    CPU_SET(cpu, &cpuset);
     if (pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset) != 0) {
-        fprintf(stderr, "[Gateway] Warning: Could not set CPU affinity for worker %ld\n", core_id);
+        fprintf(stderr, "[Gateway] Warning: Could not set CPU affinity for worker %ld (cpu=%d)\n", core_id, cpu);
     }
 
     local_fd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -421,10 +559,19 @@ static void* gateway_worker(void *arg) {
         perror("[Gateway] Worker socket create failed");
         return NULL;
     }
+    {
+        int rp = 0;
+        socklen_t rpl = sizeof(rp);
+        if (getsockopt(local_fd, SOL_SOCKET, SO_REUSEPORT, &rp, &rpl) == 0) {
+            fprintf(stderr, "[Gateway] sockfd=%d reuseport=%d\n", local_fd, rp);
+        }
+    }
 
     int opt = 1;
     setsockopt(local_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    setsockopt(local_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+    if (!g_disable_reuseport) {
+        setsockopt(local_fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+    }
     
     struct sockaddr_in bind_addr = { .sin_family = AF_INET, .sin_addr.s_addr = INADDR_ANY, .sin_port = htons(g_local_port) };
     if (bind(local_fd, (struct sockaddr*)&bind_addr, sizeof(bind_addr)) < 0) {
@@ -433,7 +580,18 @@ static void* gateway_worker(void *arg) {
         close(local_fd);
         return NULL;
     } else if (core_id == 0) {
-        fprintf(stderr, "[Gateway] bind ok port=%u\n", (unsigned)g_local_port);
+        struct sockaddr_in laddr;
+        socklen_t laddr_len = sizeof(laddr);
+        if (getsockname(local_fd, (struct sockaddr*)&laddr, &laddr_len) == 0) {
+            fprintf(stderr, "[Gateway] bind ok port=%u fd=%d local=%s:%u\n",
+                    (unsigned)g_local_port,
+                    local_fd,
+                    inet_ntoa(laddr.sin_addr),
+                    (unsigned)ntohs(laddr.sin_port));
+        } else {
+            fprintf(stderr, "[Gateway] bind ok port=%u fd=%d\n",
+                    (unsigned)g_local_port, local_fd);
+        }
     }
 
     if (core_id == 0) {
@@ -460,6 +618,18 @@ static void* gateway_worker(void *arg) {
     }
 
     while (1) {
+        if (g_use_recvfrom) {
+            socklen_t slen = sizeof(struct sockaddr_in);
+            int pkt_len = recvfrom(local_fd, buffer_pool, WVM_MAX_PACKET_SIZE, 0,
+                                   (struct sockaddr *)&src_addrs[0], &slen);
+            if (pkt_len <= 0) {
+                if (errno == EINTR) continue;
+                continue;
+            }
+            gateway_process_packet(local_fd, buffer_pool, pkt_len, &src_addrs[0]);
+            continue;
+        }
+
         int n = recvmmsg(local_fd, msgs, BATCH_SIZE, 0, NULL);
         if (n <= 0) {
             if (errno == EINTR) continue;
@@ -470,99 +640,7 @@ static void* gateway_worker(void *arg) {
             uint8_t *ptr = (uint8_t *)iovecs[i].iov_base;
             int pkt_len = msgs[i].msg_len;
             struct sockaddr_in *src = &src_addrs[i];
-
-            if (pkt_len < sizeof(struct wvm_header)) continue;
-            struct wvm_header *hdr = (struct wvm_header *)ptr;
-            if (pkt_len >= 200) {
-                __sync_fetch_and_add(&g_rx_big_count, 1);
-            } else {
-                __sync_fetch_and_add(&g_rx_small_count, 1);
-            }
-            { static int __rx=0;
-              if (__rx < 20) {
-                  fprintf(stderr, "[Gateway] rx len=%u magic=0x%08x\n",
-                          (unsigned)pkt_len, (unsigned)ntohl(hdr->magic));
-                  __rx++;
-              }
-            }
-            { static int __rx_big=0;
-              if (__rx_big < 20 && pkt_len >= 200) {
-                  fprintf(stderr, "[Gateway] rx-big len=%u magic=0x%08x\n",
-                          (unsigned)pkt_len, (unsigned)ntohl(hdr->magic));
-                  __rx_big++;
-              }
-            }
-            if (ntohl(hdr->magic) != WVM_MAGIC) continue;
-            uint16_t msg_type = ntohs(hdr->msg_type);
-
-            uint32_t source_id = ntohl(hdr->slave_id); // 发送者 ID
-            uint32_t target_id = ntohl(hdr->target_id); // 目标 ID（兼容旧逻辑时可能为 AUTO_ROUTE）
-            
-            // [关键]：只要收到合法的 WVM 包，就学习源路由
-            // 排除掉 Upstream (Master/Core) 的 ID，只学习 Downstream (Leaf) 节点
-            // 这里可以通过 ID 范围判断，或者简单地全部学习（Upstream 路由更新也无妨）
-            if (source_id != WVM_NODE_AUTO_ROUTE) {
-                learn_route(source_id, &src_addrs[i]);
-            }
-
-            /*
-             * Route by logical destination first. This avoids source-IP based
-             * misclassification loops in multi-hop or same-host multi-instance
-             * deployments. Fallback to upstream only when no local route exists.
-             */
-            // [FIX-M7] 当 target_id 无效时不再 fallback 到 source_id，
-            // 防止 AUTO_ROUTE 包被回送给发送者形成环路
-            uint32_t route_id;
-            if (WVM_IS_VALID_TARGET(target_id)) {
-                route_id = target_id;
-            } else {
-                // 无有效目标，直接交给 upstream 处理
-                int tx_fd = (g_upstream_tx_socket >= 0) ? g_upstream_tx_socket : local_fd;
-                sendto(tx_fd, ptr, pkt_len, MSG_DONTWAIT,
-                       (struct sockaddr*)&g_upstream_addr, sizeof(g_upstream_addr));
-                continue;
-            }
-
-            int r = internal_push(local_fd, route_id, ptr, pkt_len);
-            if (msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT) {
-                static int __gw_dbg = 0;
-                if (__gw_dbg < 20) {
-                    char src_ip[INET_ADDRSTRLEN] = {0};
-                    inet_ntop(AF_INET, &src->sin_addr, src_ip, sizeof(src_ip));
-                    fprintf(stderr, "[Gateway] route msg=%u target=%u route=%u r=%d src=%s:%u\n",
-                            (unsigned)msg_type, (unsigned)target_id, (unsigned)route_id, r,
-                            src_ip, (unsigned)ntohs(src->sin_port));
-                    __gw_dbg++;
-                }
-            }
-            if (r < 0) {
-                int tx_fd = (g_upstream_tx_socket >= 0) ? g_upstream_tx_socket : local_fd;
-                ssize_t sret = sendto(tx_fd, ptr, pkt_len, MSG_DONTWAIT,
-                                      (struct sockaddr*)&g_upstream_addr, sizeof(g_upstream_addr));
-                if (msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT || sret < 0) {
-                    char src_ip[INET_ADDRSTRLEN] = {0};
-                    char up_ip[INET_ADDRSTRLEN] = {0};
-                    inet_ntop(AF_INET, &src->sin_addr, src_ip, sizeof(src_ip));
-                    inet_ntop(AF_INET, &g_upstream_addr.sin_addr, up_ip, sizeof(up_ip));
-                    fprintf(stderr, "[Gateway] route->upstream msg=%u src=%s:%u up=%s:%u ret=%zd errno=%d\n",
-                            (unsigned)msg_type,
-                            src_ip, (unsigned)ntohs(src->sin_port),
-                            up_ip, (unsigned)ntohs(g_upstream_addr.sin_port),
-                            sret, (sret < 0) ? errno : 0);
-                }
-            } else if (msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT) {
-                gateway_node_t *dst = find_node(route_id);
-                char dst_ip[INET_ADDRSTRLEN] = {0};
-                unsigned dst_port = 0;
-                if (dst) {
-                    inet_ntop(AF_INET, &dst->addr.sin_addr, dst_ip, sizeof(dst_ip));
-                    dst_port = (unsigned)ntohs(dst->addr.sin_port);
-                }
-                fprintf(stderr, "[Gateway] route->local msg=%u route=%u src=%s:%u dst=%s:%u\n",
-                        (unsigned)msg_type, route_id,
-                        inet_ntoa(src->sin_addr), (unsigned)ntohs(src->sin_port),
-                        dst_ip[0] ? dst_ip : "0.0.0.0", dst_port);
-            }
+            gateway_process_packet(local_fd, ptr, pkt_len, src);
         }
     }
     free(buffer_pool);
@@ -650,6 +728,9 @@ int init_aggregator(int local_port, const char *upstream_ip, int upstream_port, 
     if (g_primary_socket >= 0) return 0;
 
     g_local_port = local_port;
+    g_force_single_rx = (getenv("WVM_GATEWAY_SINGLE_RX") != NULL);
+    g_disable_reuseport = (getenv("WVM_GATEWAY_DISABLE_REUSEPORT") != NULL);
+    g_use_recvfrom = (getenv("WVM_GATEWAY_USE_RECVFROM") != NULL);
     if (load_slave_config(config_path) != 0) return -ENOENT;
 
     g_upstream_addr.sin_family = AF_INET;
@@ -668,12 +749,22 @@ int init_aggregator(int local_port, const char *upstream_ip, int upstream_port, 
     }
 
     long num_cores = get_nprocs();
+    g_allowed_cpus = count_allowed_cpus();
     // [FIX] Reserve 1 core for main thread (flush_all_buffers loop + control plane).
     // Without this, the last worker's CPU affinity collides with main, causing futex
     // deadlock in internal_push → its SO_REUSEPORT socket accumulates unread packets
     // and ~25% of traffic silently drops.
-    long num_workers = (num_cores > 1) ? num_cores - 1 : 1;
-    printf("[Gateway] System has %ld cores. Scaling out %ld RX workers...\n", num_cores, num_workers);
+    long base = (g_allowed_cpus > 0) ? g_allowed_cpus : num_cores;
+    long num_workers = (base > 1) ? base - 1 : 1;
+    if (g_force_single_rx && num_workers > 1) {
+        num_workers = 1;
+    }
+    printf("[Gateway] System has %ld cores (allowed=%d). Scaling out %ld RX workers...\n",
+           num_cores, g_allowed_cpus, num_workers);
+    if (g_disable_reuseport || g_force_single_rx || g_use_recvfrom) {
+        printf("[Gateway] Debug RX opts: single=%d disable_reuseport=%d recvfrom=%d\n",
+               g_force_single_rx, g_disable_reuseport, g_use_recvfrom);
+    }
 
     for (long i = 0; i < num_workers; i++) {
         pthread_t thread;
