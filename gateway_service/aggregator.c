@@ -25,6 +25,7 @@
 #include <sched.h>
 #include <poll.h>
 #include <sys/sysinfo.h>
+#include <sys/ioctl.h>
 #include <time.h>
 
 #include "aggregator.h"
@@ -66,6 +67,7 @@ static int g_allowed_cpus = 0;
 static int g_force_single_rx = 0;
 static int g_disable_reuseport = 0;
 static int g_use_recvfrom = 0;
+static int g_force_single_fd = 0;
 
 static inline gateway_node_t* find_node(uint32_t slave_id);
 static void learn_route(uint32_t slave_id, struct sockaddr_in *addr);
@@ -98,6 +100,12 @@ static int pick_allowed_cpu_index(long worker_idx) {
         seen++;
     }
     return (int)worker_idx;
+}
+
+static int get_rxq_bytes(int fd) {
+    int bytes = -1;
+    if (ioctl(fd, FIONREAD, &bytes) != 0) return -1;
+    return bytes;
 }
 
 void detect_cpu_env() {
@@ -624,6 +632,10 @@ static void* gateway_worker(void *arg) {
                                    (struct sockaddr *)&src_addrs[0], &slen);
             if (pkt_len <= 0) {
                 if (errno == EINTR) continue;
+                if (core_id == 0) {
+                    int rxq = get_rxq_bytes(local_fd);
+                    fprintf(stderr, "[Gateway] recvfrom err=%d rxq=%d\n", errno, rxq);
+                }
                 continue;
             }
             gateway_process_packet(local_fd, buffer_pool, pkt_len, &src_addrs[0]);
@@ -633,6 +645,10 @@ static void* gateway_worker(void *arg) {
         int n = recvmmsg(local_fd, msgs, BATCH_SIZE, 0, NULL);
         if (n <= 0) {
             if (errno == EINTR) continue;
+            if (core_id == 0) {
+                int rxq = get_rxq_bytes(local_fd);
+                fprintf(stderr, "[Gateway] recvmmsg err=%d rxq=%d\n", errno, rxq);
+            }
             continue; 
         }
 
@@ -759,13 +775,21 @@ int init_aggregator(int local_port, const char *upstream_ip, int upstream_port, 
     if (g_force_single_rx && num_workers > 1) {
         num_workers = 1;
     }
+    g_force_single_fd = (getenv("WVM_GATEWAY_FORCE_SINGLE_FD") != NULL);
     printf("[Gateway] System has %ld cores (allowed=%d). Scaling out %ld RX workers...\n",
            num_cores, g_allowed_cpus, num_workers);
-    if (g_disable_reuseport || g_force_single_rx || g_use_recvfrom) {
-        printf("[Gateway] Debug RX opts: single=%d disable_reuseport=%d recvfrom=%d\n",
-               g_force_single_rx, g_disable_reuseport, g_use_recvfrom);
+    if (g_disable_reuseport || g_force_single_rx || g_use_recvfrom || g_force_single_fd) {
+        printf("[Gateway] Debug RX opts: single=%d disable_reuseport=%d recvfrom=%d single_fd=%d\n",
+               g_force_single_rx, g_disable_reuseport, g_use_recvfrom, g_force_single_fd);
     }
 
+    if (g_force_single_fd) {
+        // Run a single receiver on the current thread with core_id=0 and prevent other sockets.
+        g_force_single_rx = 1;
+        g_disable_reuseport = 1;
+        gateway_worker((void*)0);
+        return 0;
+    }
     for (long i = 0; i < num_workers; i++) {
         pthread_t thread;
         if (pthread_create(&thread, NULL, gateway_worker, (void*)i) != 0) {

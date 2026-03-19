@@ -49,17 +49,12 @@ trap 'mv /dev/kvm.off /dev/kvm 2>/dev/null || true; pkill -f wavevm_node_master 
 
 QPATH="$ROOT/wavevm-qemu/build-native:$PATH"
 
-echo "=== Starting 5 gateways (fract topology) ==="
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19520 127.0.0.1 19520 "$ART_DIR/l2_routes.txt" 19521) >"$ART_DIR/gw_l2.log" 2>&1 &
-GL2=$!
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19320 127.0.0.1 19520 "$ART_DIR/l1a_routes.txt" 19321) >"$ART_DIR/gw_l1a.log" 2>&1 &
-GL1A=$!
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19420 127.0.0.1 19520 "$ART_DIR/l1b_routes.txt" 19421) >"$ART_DIR/gw_l1b.log" 2>&1 &
-GL1B=$!
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19120 127.0.0.1 19320 "$ART_DIR/sidecar_a_routes.txt" 19121) >"$ART_DIR/gw_sidecar_a.log" 2>&1 &
+echo "=== Starting single gateway (sidecar A only) ==="
+(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19120 127.0.0.1 19120 "$ART_DIR/sidecar_a_routes.txt" 19121) >"$ART_DIR/gw_sidecar_a.log" 2>&1 &
 GSA=$!
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19220 127.0.0.1 19420 "$ART_DIR/sidecar_b_routes.txt" 19221) >"$ART_DIR/gw_sidecar_b.log" 2>&1 &
-GSB=$!
+sleep 1
+echo "=== ss after gateway start (19120) ==="
+ss -ulnp | rg 19120 || true
 
 echo "=== Starting slaves ==="
 (env PATH="$QPATH" WVM_SHM_FILE=/wvm_fract_node0 stdbuf -oL -eL "$ROOT/slave_daemon/wavevm_node_slave" 19105 2 2048 0 19121) >"$ART_DIR/slave0.log" 2>&1 &
@@ -97,7 +92,7 @@ done
 
 echo ""
 echo "=== Checking processes ==="
-for p in GL2 GL1A GL1B GSA GSB S0 S1 M0 M1 Q; do
+for p in GSA S0 S1 M0 M1 Q; do
   pid=${!p}
   if kill -0 $pid 2>/dev/null; then
     echo "  $p ($pid): alive"
