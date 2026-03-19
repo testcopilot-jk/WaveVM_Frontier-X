@@ -27,11 +27,13 @@ ROUTE 1 1 127.0.0.1 19220
 EOCFG
 
 cat > "$ART_DIR/sidecar_a_routes.txt" <<'EOCFG'
-ROUTE 0 2 127.0.0.1 19320
+ROUTE 0 1 127.0.0.1 19105
+ROUTE 1 1 127.0.0.1 19220
 EOCFG
 
 cat > "$ART_DIR/sidecar_b_routes.txt" <<'EOCFG'
-ROUTE 0 2 127.0.0.1 19420
+ROUTE 1 1 127.0.0.1 19205
+ROUTE 0 1 127.0.0.1 19120
 EOCFG
 
 # === Kill old processes ===

@@ -409,9 +409,12 @@ static void* gateway_worker(void *arg) {
     
     struct sockaddr_in bind_addr = { .sin_family = AF_INET, .sin_addr.s_addr = INADDR_ANY, .sin_port = htons(g_local_port) };
     if (bind(local_fd, (struct sockaddr*)&bind_addr, sizeof(bind_addr)) < 0) {
-        perror("[Gateway] Worker bind failed"); 
+        fprintf(stderr, "[Gateway] Worker bind failed port=%u errno=%d\n",
+                (unsigned)g_local_port, errno);
         close(local_fd);
         return NULL;
+    } else if (core_id == 0) {
+        fprintf(stderr, "[Gateway] bind ok port=%u\n", (unsigned)g_local_port);
     }
 
     if (core_id == 0) {
@@ -451,6 +454,20 @@ static void* gateway_worker(void *arg) {
 
             if (pkt_len < sizeof(struct wvm_header)) continue;
             struct wvm_header *hdr = (struct wvm_header *)ptr;
+            { static int __rx=0;
+              if (__rx < 20) {
+                  fprintf(stderr, "[Gateway] rx len=%u magic=0x%08x\n",
+                          (unsigned)pkt_len, (unsigned)ntohl(hdr->magic));
+                  __rx++;
+              }
+            }
+            { static int __rx_big=0;
+              if (__rx_big < 20 && pkt_len >= 200) {
+                  fprintf(stderr, "[Gateway] rx-big len=%u magic=0x%08x\n",
+                          (unsigned)pkt_len, (unsigned)ntohl(hdr->magic));
+                  __rx_big++;
+              }
+            }
             if (ntohl(hdr->magic) != WVM_MAGIC) continue;
             uint16_t msg_type = ntohs(hdr->msg_type);
 
@@ -483,6 +500,17 @@ static void* gateway_worker(void *arg) {
             }
 
             int r = internal_push(local_fd, route_id, ptr, pkt_len);
+            if (msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT) {
+                static int __gw_dbg = 0;
+                if (__gw_dbg < 20) {
+                    char src_ip[INET_ADDRSTRLEN] = {0};
+                    inet_ntop(AF_INET, &src->sin_addr, src_ip, sizeof(src_ip));
+                    fprintf(stderr, "[Gateway] route msg=%u target=%u route=%u r=%d src=%s:%u\n",
+                            (unsigned)msg_type, (unsigned)target_id, (unsigned)route_id, r,
+                            src_ip, (unsigned)ntohs(src->sin_port));
+                    __gw_dbg++;
+                }
+            }
             if (r < 0) {
                 int tx_fd = (g_upstream_tx_socket >= 0) ? g_upstream_tx_socket : local_fd;
                 ssize_t sret = sendto(tx_fd, ptr, pkt_len, MSG_DONTWAIT,
@@ -640,4 +668,3 @@ int init_aggregator(int local_port, const char *upstream_ip, int upstream_port, 
     pthread_detach(ctrl_tid);
 
     return 0;}
-

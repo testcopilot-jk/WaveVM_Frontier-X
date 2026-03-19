@@ -70,14 +70,18 @@ __attribute__((weak)) int push_to_aggregator(uint32_t slave_id, void *data, int 
         return -EINVAL;
     }
 
-    struct sockaddr_in *target = &g_gateways[raw_id];
+    // 统一走本地 sidecar 网关，跨节点路由由 sidecar 负责
+    struct sockaddr_in *target = &g_gateways[g_my_node_id];
     if (target->sin_port == 0) {
         errno = EHOSTUNREACH;
         return -EHOSTUNREACH;
     }
 
+    { static int __dbg=0; if(__dbg<10 && len>100) { char __ip[16]={0}; inet_ntop(AF_INET,&target->sin_addr,__ip,16); fprintf(stderr,"[PTA-DBG] target=%u raw=%u ip=%s port=%u sock=%d len=%d\n", slave_id, raw_id, __ip, (unsigned)ntohs(target->sin_port), g_tx_socket, len); __dbg++; } }
+    { static int __tx=0; if(__tx<10 && len >= (int)sizeof(struct wvm_header)) { struct wvm_header *h=(struct wvm_header*)data; fprintf(stderr,"[TX-HDR] msg=%u len=%u payload=%u target=%u slave=%u req=%llu\n", (unsigned)ntohs(h->msg_type), (unsigned)len, (unsigned)ntohs(h->payload_len), (unsigned)ntohl(h->target_id), (unsigned)ntohl(h->slave_id), (unsigned long long)WVM_NTOHLL(h->req_id)); __tx++; } }
     ssize_t sent = sendto(g_tx_socket, data, len, MSG_DONTWAIT,
                           (struct sockaddr *)target, sizeof(*target));
+    { static int __dbg2=0; if(__dbg2<10 && len>100) { fprintf(stderr,"[PTA-DBG] sent=%zd errno=%d\n", sent, (sent<0)?errno:0); __dbg2++; } }
     if (sent == len) {
         return 0;
     }
@@ -568,6 +572,12 @@ static void u_set_gateway_ip(uint32_t gw_id, uint32_t ip, uint16_t port) {
         g_gateways[raw_node_id].sin_family = AF_INET;
         g_gateways[raw_node_id].sin_addr.s_addr = ip;
         g_gateways[raw_node_id].sin_port = port;
+        if (raw_node_id < 4) {
+            char ipbuf[16] = {0};
+            inet_ntop(AF_INET, &g_gateways[raw_node_id].sin_addr, ipbuf, sizeof(ipbuf));
+            fprintf(stderr, "[GW-SET] id=%u ip=%s port=%u\n",
+                    raw_node_id, ipbuf, (unsigned)ntohs(g_gateways[raw_node_id].sin_port));
+        }
     }
 
     // 2. [Fix #4] Mode A 内核路径对齐：传给内核的 gw_id 也用裸 node_id
@@ -756,6 +766,9 @@ static void* rx_thread_loop(void *arg) {
         close(sockfd);
         return NULL;
     }
+    if (thread_idx == 0) {
+        fprintf(stderr, "[TX-SOCK] bound port=%u\n", (unsigned)g_local_port);
+    }
 
     // 线程 0 负责提供全局发送 Socket
     if (thread_idx == 0) {
@@ -877,6 +890,18 @@ static void* rx_thread_loop(void *arg) {
                          msg_type == MSG_BLOCK_READ ||
                          msg_type == MSG_BLOCK_FLUSH);
                     int from_local_slave = (ntohs(src_addrs[i].sin_port) == (uint16_t)g_slave_forward_port);
+
+                    if (msg_type == MSG_VCPU_EXIT) {
+                        static int __rx_exit = 0;
+                        if (__rx_exit < 10) {
+                            u_log("[RX VCPU_EXIT] src_port=%u from_local=%d target=%u slave=%u req=%llu",
+                                  (unsigned)ntohs(src_addrs[i].sin_port), from_local_slave,
+                                  (unsigned)ntohl(hdr->target_id),
+                                  (unsigned)ntohl(hdr->slave_id),
+                                  (unsigned long long)rid);
+                            __rx_exit++;
+                        }
+                    }
 
                     // 本地 Slave 的执行结果需要回传给真正发起方（跨节点请求场景）。
                     // 新协议下回包目标在 hdr->target_id；旧包可回退到 hdr->slave_id。
@@ -1099,6 +1124,15 @@ int user_backend_init(int my_node_id, int port) {
     g_gateways[my_node_id].sin_family = AF_INET;
     g_gateways[my_node_id].sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     g_gateways[my_node_id].sin_port = htons(9000); 
+
+    for (uint32_t i = 0; i < 2; i++) {
+        if (g_gateways[i].sin_port != 0) {
+            char ipbuf[16] = {0};
+            inet_ntop(AF_INET, &g_gateways[i].sin_addr, ipbuf, sizeof(ipbuf));
+            fprintf(stderr, "[GW-FINAL] id=%u ip=%s port=%u\n",
+                    i, ipbuf, (unsigned)ntohs(g_gateways[i].sin_port));
+        }
+    }
 
     // 初始化请求上下文锁
     for (int i=0; i<MAX_INFLIGHT_REQS; i++) {

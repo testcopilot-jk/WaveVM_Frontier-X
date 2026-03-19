@@ -27,11 +27,13 @@ ROUTE 1 1 127.0.0.1 19220
 EOCFG
 
 cat > "$ART_DIR/sidecar_a_routes.txt" <<'EOCFG'
-ROUTE 0 2 127.0.0.1 19320
+ROUTE 0 1 127.0.0.1 19105
+ROUTE 1 1 127.0.0.1 19220
 EOCFG
 
 cat > "$ART_DIR/sidecar_b_routes.txt" <<'EOCFG'
-ROUTE 0 2 127.0.0.1 19420
+ROUTE 1 1 127.0.0.1 19205
+ROUTE 0 1 127.0.0.1 19120
 EOCFG
 
 # === Kill old processes ===
@@ -87,8 +89,8 @@ echo "=== Starting QEMU (TCG mode, no KVM) ==="
   -serial file:"$ART_DIR/vm-serial.log" -monitor none) >"$ART_DIR/vm.log" 2>&1 &
 Q=$!
 
-echo "=== Waiting 1200s (20 min) for QEMU TCG boot ==="
-for i in $(seq 1 20); do
+echo "=== Waiting 120s (2 min) for QEMU TCG boot ==="
+for i in $(seq 1 2); do
   sleep 60
   echo "  ${i}m elapsed — Q alive: $(kill -0 $Q 2>/dev/null && echo yes || echo NO)"
 done

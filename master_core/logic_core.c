@@ -1331,6 +1331,13 @@ void wvm_prophet_abi_scanner(wvm_kvm_context_t *ctx) {
 
 // 核心RPC (带指数退避)
 int wvm_rpc_call(uint16_t msg_type, void *payload, int len, uint32_t target_id, void *rx_buffer, int rx_len) {
+    { static int __rpc_dbg=0;
+      if (__rpc_dbg < 10) {
+          fprintf(stderr, "[RPC-CALL] msg=%u len=%d target=%u\n",
+                  (unsigned)msg_type, len, (unsigned)target_id);
+          __rpc_dbg++;
+      }
+    }
     // 1. 分配接收缓冲区
     // 我们需要一个足够大的缓冲区来接收可能的ACK包头
     uint8_t *net_rx_buf = g_ops->alloc_packet(WVM_MAX_PACKET_SIZE, 0); // Not atomic

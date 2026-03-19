@@ -706,6 +706,15 @@ void* dirty_sync_sender_thread(void* arg) {
 void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm_header *hdr, void *payload, int vcpu_id) {
     struct wvm_ipc_cpu_run_req *req = (struct wvm_ipc_cpu_run_req *)payload;
     if (!req) return;
+    { static int __run=0;
+      if (__run < 10) {
+          fprintf(stderr, "[VCPU-RUN] mode=%u vcpu=%d req=%llu src=%s:%u target=%u slave=%u\n",
+                  req->mode_tcg, vcpu_id, (unsigned long long)hdr->req_id,
+                  inet_ntoa(client->sin_addr), ntohs(client->sin_port),
+                  (unsigned)ntohl(hdr->target_id), (unsigned)ntohl(hdr->slave_id));
+          __run++;
+      }
+    }
 
     // 对“空上下文探针”走快速 ACK，避免在 KVM_RUN 中无意义阻塞。
     // 仅匹配明显空输入，不影响真实执行上下文。
@@ -1246,7 +1255,11 @@ void* kvm_worker_thread(void *arg) {
     long core = (long)arg;
     int s = socket(AF_INET, SOCK_DGRAM, 0); int opt=1; setsockopt(s, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
     struct sockaddr_in a = { .sin_family=AF_INET, .sin_addr.s_addr=htonl(INADDR_ANY), .sin_port=htons(g_service_port) };
-    bind(s, (struct sockaddr*)&a, sizeof(a));
+    if (bind(s, (struct sockaddr*)&a, sizeof(a)) != 0) {
+        fprintf(stderr, "[SLAVE-BIND] port=%d failed errno=%d\n", g_service_port, errno);
+    } else if (core == 0) {
+        fprintf(stderr, "[SLAVE-BIND] port=%d ok\n", g_service_port);
+    }
     
     // Worker 0 初始化 VFIO
     if (core == 0 && g_vfio_config_path) {
@@ -1262,6 +1275,30 @@ void* kvm_worker_thread(void *arg) {
         for(int i=0;i<n;i++) {
             struct wvm_header *h = (struct wvm_header*)bufs[i];
             if (h->magic != htonl(WVM_MAGIC)) continue;
+
+            { static int __dbg=0;
+              if (__dbg < 10) {
+                  char ipbuf[16] = {0};
+                  inet_ntop(AF_INET, &c[i].sin_addr, ipbuf, sizeof(ipbuf));
+                  uint16_t raw_type = ntohs(h->msg_type);
+                  fprintf(stderr, "[SLAVE-RX] src=%s:%u len=%u type=%u target=%u slave=%u\n",
+                          ipbuf, (unsigned)ntohs(c[i].sin_port),
+                          (unsigned)msgs[i].msg_len, (unsigned)raw_type,
+                          (unsigned)ntohl(h->target_id), (unsigned)ntohl(h->slave_id));
+                  __dbg++;
+              }
+            }
+            { static int __big=0;
+              if (__big < 10 && msgs[i].msg_len >= 200) {
+                  char ipbuf[16] = {0};
+                  inet_ntop(AF_INET, &c[i].sin_addr, ipbuf, sizeof(ipbuf));
+                  uint16_t raw_type = ntohs(h->msg_type);
+                  fprintf(stderr, "[SLAVE-RX-BIG] src=%s:%u len=%u type=%u\n",
+                          ipbuf, (unsigned)ntohs(c[i].sin_port),
+                          (unsigned)msgs[i].msg_len, (unsigned)raw_type);
+                  __big++;
+              }
+            }
             
             pthread_spin_lock(&g_master_lock);
             int addr_changed = (g_master_addr.sin_port != c[i].sin_port || g_master_addr.sin_addr.s_addr != c[i].sin_addr.s_addr);
@@ -1455,7 +1492,11 @@ void* tcg_proxy_thread(void *arg) {
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     int opt = 1; setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
     struct sockaddr_in addr = { .sin_family=AF_INET, .sin_addr.s_addr=htonl(INADDR_ANY), .sin_port=htons(g_service_port) };
-    bind(sockfd, (struct sockaddr*)&addr, sizeof(addr));
+    if (bind(sockfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+        fprintf(stderr, "[SLAVE-BIND] port=%d failed errno=%d\n", g_service_port, errno);
+    } else {
+        fprintf(stderr, "[SLAVE-BIND] port=%d ok\n", g_service_port);
+    }
 
     struct mmsghdr msgs[BATCH_SIZE]; struct iovec iovecs[BATCH_SIZE]; uint8_t buffers[BATCH_SIZE][POOL_ITEM_SIZE]; struct sockaddr_in src_addrs[BATCH_SIZE];
     memset(msgs, 0, sizeof(msgs));
@@ -1469,6 +1510,31 @@ void* tcg_proxy_thread(void *arg) {
 
         for (int i=0; i<n; i++) {
             struct wvm_header *hdr = (struct wvm_header *)buffers[i];
+            { static int __dbg=0;
+              if (__dbg < 10) {
+                  char ipbuf[16] = {0};
+                  inet_ntop(AF_INET, &src_addrs[i].sin_addr, ipbuf, sizeof(ipbuf));
+                  uint16_t raw_type = ntohs(hdr->msg_type);
+                  uint32_t raw_magic = ntohl(hdr->magic);
+                  fprintf(stderr, "[SLAVE-RX] src=%s:%u len=%u magic=0x%08x type=%u target=%u slave=%u\n",
+                          ipbuf, (unsigned)ntohs(src_addrs[i].sin_port),
+                          (unsigned)msgs[i].msg_len, raw_magic, (unsigned)raw_type,
+                          (unsigned)ntohl(hdr->target_id), (unsigned)ntohl(hdr->slave_id));
+                  __dbg++;
+              }
+            }
+            { static int __big=0;
+              if (__big < 10 && msgs[i].msg_len >= 200) {
+                  char ipbuf[16] = {0};
+                  inet_ntop(AF_INET, &src_addrs[i].sin_addr, ipbuf, sizeof(ipbuf));
+                  uint16_t raw_type = ntohs(hdr->msg_type);
+                  uint32_t raw_magic = ntohl(hdr->magic);
+                  fprintf(stderr, "[SLAVE-RX-BIG] src=%s:%u len=%u magic=0x%08x type=%u\n",
+                          ipbuf, (unsigned)ntohs(src_addrs[i].sin_port),
+                          (unsigned)msgs[i].msg_len, raw_magic, (unsigned)raw_type);
+                  __big++;
+              }
+            }
             if (hdr->magic != htonl(WVM_MAGIC)) continue;
 
             /* In single-host tests gateway packets can also come from 127.0.0.1.

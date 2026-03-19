@@ -234,6 +234,13 @@ static void handle_ipc_fault(int qemu_fd, struct wvm_ipc_fault_req* req) {
 
 static void handle_ipc_cpu_run(int qemu_fd, struct wvm_ipc_cpu_run_req* req) {
     struct wvm_ipc_cpu_run_ack ack;
+    { static int __ipc_run=0;
+      if (__ipc_run < 10) {
+          fprintf(stderr, "[IPC VCPU_RUN] vcpu=%u mode=%u slave_id=%u\n",
+                  req->vcpu_index, req->mode_tcg, (unsigned)req->slave_id);
+          __ipc_run++;
+      }
+    }
     if (!WVM_IS_VALID_TARGET(req->slave_id)) {
         req->slave_id = wvm_get_compute_slave_id(req->vcpu_index);
     }
