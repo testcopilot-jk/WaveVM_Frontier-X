@@ -60,6 +60,8 @@ static int g_local_port = 0;
 int g_ctrl_port = 0; // 供应给 wavevm_gateway
 
 static int g_is_single_core = 0;
+static volatile uint64_t g_rx_small_count = 0;
+static volatile uint64_t g_rx_big_count = 0;
 
 void detect_cpu_env() {
     if (get_nprocs() <= 1) g_is_single_core = 1;
@@ -316,6 +318,22 @@ int push_to_aggregator(uint32_t slave_id, void *data, int len) {
 
 void flush_all_buffers(void) {
     gateway_node_t *current_node, *tmp;
+    static uint64_t last_big = 0;
+    static uint64_t last_small = 0;
+    static uint64_t tick = 0;
+
+    // Low-noise RX visibility (once per ~1s) to verify big packets reach the gateway.
+    if ((++tick % 1000) == 0) {
+        uint64_t big = g_rx_big_count;
+        uint64_t small = g_rx_small_count;
+        if (big != last_big || small != last_small) {
+            fprintf(stderr, "[Gateway] rx-stats big=%llu small=%llu\n",
+                    (unsigned long long)big, (unsigned long long)small);
+            last_big = big;
+            last_small = small;
+        }
+    }
+
     if (g_primary_socket < 0) return;
 
     // [FIX] 必须加读锁保护遍历过程！
@@ -331,6 +349,7 @@ void flush_all_buffers(void) {
     }
     
     pthread_rwlock_unlock(&g_map_lock);
+
 }
 
 /* 
@@ -454,6 +473,11 @@ static void* gateway_worker(void *arg) {
 
             if (pkt_len < sizeof(struct wvm_header)) continue;
             struct wvm_header *hdr = (struct wvm_header *)ptr;
+            if (pkt_len >= 200) {
+                __sync_fetch_and_add(&g_rx_big_count, 1);
+            } else {
+                __sync_fetch_and_add(&g_rx_small_count, 1);
+            }
             { static int __rx=0;
               if (__rx < 20) {
                   fprintf(stderr, "[Gateway] rx len=%u magic=0x%08x\n",
