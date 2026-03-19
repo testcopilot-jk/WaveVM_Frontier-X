@@ -17712,3 +17712,11 @@ bash /tmp/run_fract_no_kvm.sh
 - QEMU 正常启动，`2226` 端口监听存在。
 - `SSH_BANNER` 为空，推断为 TCG 过慢导致交互未完成。
 - 无 `Bus error` / `SIGSEGV` 崩溃。
+
+## 🧪 2026-03-19 Codespace 排查记录（TCG / 单FD / 单网关）
+
+- 目标：验证大包是否能进入 gateway，排除内存/算力远程链路与网关逻辑问题。
+- 关键操作：强制 `WVM_GATEWAY_FORCE_SINGLE_FD=1` + `WVM_GATEWAY_USE_RECVFROM=1`，仅启动 sidecar A（19120），关闭其余网关；同时抓取 `tcpdump` 与 `ss -ulnp`/`ss -u -n -i`。
+- 结果：gateway 仅收到 52B 小包，无 `rx-big`；RPC `Type 5` 持续超时；`tcpdump` 能抓到 532B 的 `WVMX/MSG_VCPU_RUN` 包；`ss` 显示 19120 Recv-Q 高积压。
+- 结论：基本排除内存/VCU 远程链路逻辑问题与 gateway 路由/转发逻辑问题；根因锁定在 **gateway 接收/投递时序或 socket 队列消费异常**（疑似进程/FD/时序稳定性）。
+- 后续建议：将 socket 绑定状态与队列占用采样移入 gateway 进程内部，并验证是否存在隐藏 FD/进程竞争。
