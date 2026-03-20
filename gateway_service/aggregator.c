@@ -103,6 +103,16 @@ static packet_node_t* queue_pop(packet_queue_t *q) {
     return n;
 }
 
+static pthread_mutex_t g_hb_lock = PTHREAD_MUTEX_INITIALIZER;
+
+#define HB_TABLE_SIZE 16
+typedef struct {
+    uint32_t ip;
+    uint16_t port;
+    uint64_t last_ms;
+} hb_slot_t;
+static hb_slot_t g_hb_table[HB_TABLE_SIZE];
+
 static uint64_t now_ms(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -161,15 +171,6 @@ static int g_disable_reuseport = 0;
 static int g_use_recvfrom = 0;
 static int g_force_single_fd = 0;
 static int g_multi_queue = 1;
-static pthread_mutex_t g_hb_lock = PTHREAD_MUTEX_INITIALIZER;
-
-#define HB_TABLE_SIZE 16
-typedef struct {
-    uint32_t ip;
-    uint16_t port;
-    uint64_t last_ms;
-} hb_slot_t;
-static hb_slot_t g_hb_table[HB_TABLE_SIZE];
 
 static inline gateway_node_t* find_node(uint32_t slave_id);
 static void learn_route(uint32_t slave_id, struct sockaddr_in *addr);
