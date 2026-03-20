@@ -241,6 +241,17 @@ static inline void gateway_process_packet(int local_fd,
     }
     if (ntohl(hdr->magic) != WVM_MAGIC) return;
     uint16_t msg_type = ntohs(hdr->msg_type);
+    {
+        int rxq = get_rxq_bytes(local_fd);
+        if (rxq > WVM_RXQ_DROP_HEARTBEAT && pkt_len < WVM_BIG_PKT_THRESHOLD) {
+            static int __small_drop = 0;
+            if (__small_drop < 20) {
+                fprintf(stderr, "[Gateway] drop small pkt len=%d rxq=%d\n", pkt_len, rxq);
+                __small_drop++;
+            }
+            return;
+        }
+    }
     if (msg_type == MSG_HEARTBEAT) {
         int rxq = get_rxq_bytes(local_fd);
         if (rxq > WVM_RXQ_DROP_HEARTBEAT) {
