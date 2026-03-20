@@ -55,6 +55,7 @@ static pthread_rwlock_t g_map_lock = PTHREAD_RWLOCK_INITIALIZER; // A global loc
 #define BATCH_SIZE 64
 #define WVM_BIG_PKT_THRESHOLD 200
 #define WVM_RXQ_DROP_HEARTBEAT (512 * 1024)
+#define WVM_HEARTBEAT_MIN_INTERVAL_MS 100
 
 typedef struct packet_node {
     int len;
@@ -102,6 +103,49 @@ static packet_node_t* queue_pop(packet_queue_t *q) {
     return n;
 }
 
+static uint64_t now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)(ts.tv_nsec / 1000000);
+}
+
+static int should_drop_heartbeat(struct sockaddr_in *src) {
+    uint32_t ip = src->sin_addr.s_addr;
+    uint16_t port = src->sin_port;
+    uint64_t now = now_ms();
+    int drop = 0;
+
+    pthread_mutex_lock(&g_hb_lock);
+    int idx = (int)((ip ^ port) & (HB_TABLE_SIZE - 1));
+    for (int i = 0; i < HB_TABLE_SIZE; i++) {
+        hb_slot_t *slot = &g_hb_table[(idx + i) & (HB_TABLE_SIZE - 1)];
+        if (slot->ip == ip && slot->port == port) {
+            if (now - slot->last_ms < WVM_HEARTBEAT_MIN_INTERVAL_MS) {
+                drop = 1;
+            } else {
+                slot->last_ms = now;
+            }
+            pthread_mutex_unlock(&g_hb_lock);
+            return drop;
+        }
+        if (slot->ip == 0) {
+            slot->ip = ip;
+            slot->port = port;
+            slot->last_ms = now;
+            pthread_mutex_unlock(&g_hb_lock);
+            return 0;
+        }
+    }
+    // Table full; overwrite the hashed slot.
+    hb_slot_t *slot = &g_hb_table[idx];
+    drop = (now - slot->last_ms < WVM_HEARTBEAT_MIN_INTERVAL_MS);
+    slot->ip = ip;
+    slot->port = port;
+    slot->last_ms = now;
+    pthread_mutex_unlock(&g_hb_lock);
+    return drop;
+}
+
 static struct sockaddr_in g_upstream_addr; // The address of the upstream gateway or master
 static volatile int g_primary_socket = -1; 
 static int g_upstream_tx_socket = -1;
@@ -117,6 +161,15 @@ static int g_disable_reuseport = 0;
 static int g_use_recvfrom = 0;
 static int g_force_single_fd = 0;
 static int g_multi_queue = 1;
+static pthread_mutex_t g_hb_lock = PTHREAD_MUTEX_INITIALIZER;
+
+#define HB_TABLE_SIZE 16
+typedef struct {
+    uint32_t ip;
+    uint16_t port;
+    uint64_t last_ms;
+} hb_slot_t;
+static hb_slot_t g_hb_table[HB_TABLE_SIZE];
 
 static inline gateway_node_t* find_node(uint32_t slave_id);
 static void learn_route(uint32_t slave_id, struct sockaddr_in *addr);
@@ -195,6 +248,14 @@ static inline void gateway_process_packet(int local_fd,
             if (__hb_drop < 20) {
                 fprintf(stderr, "[Gateway] drop heartbeat rxq=%d\n", rxq);
                 __hb_drop++;
+            }
+            return;
+        }
+        if (should_drop_heartbeat(src)) {
+            static int __hb_rl = 0;
+            if (__hb_rl < 20) {
+                fprintf(stderr, "[Gateway] drop heartbeat rate-limit\n");
+                __hb_rl++;
             }
             return;
         }
