@@ -107,7 +107,7 @@ static struct {
 } g_gossip_agg = { .curr_offset = 0 };
 
 #define MAX_LOCAL_VIEW 1024  // 本地感知的邻居上限
-#define GOSSIP_INTERVAL_US 500000 // 500ms 心跳一次
+#define GOSSIP_INTERVAL_US 60000000 // 60s 心跳一次 (测试压制心跳洪泛)
 #define VIEW_SYNC_INTERVAL_US 2000000 // 2秒同步一次全量视图
 static uint64_t g_last_view_sync_us = 0;
 
@@ -601,7 +601,7 @@ static uint64_t g_last_gossip_us = 0;
 static uint64_t g_state_start_us = 0;
 
 // 配置参数：严格遵循物理时延
-#define HEARTBEAT_TIMEOUT_US 5000000 // 5秒未收到心跳则判定 Fail-in-place
+#define HEARTBEAT_TIMEOUT_US 180000000 // 180秒未收到心跳则判定 Fail-in-place (测试)
 #define WARMING_DURATION_US  10000000 // 预热态持续10秒，同步元数据
 #define GOSSIP_FANOUT        3        // 每次随机向3个邻居扩散
 
