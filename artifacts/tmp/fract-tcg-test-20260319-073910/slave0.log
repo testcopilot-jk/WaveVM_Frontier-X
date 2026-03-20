@@ -1,0 +1,33 @@
+[Hybrid] Using Physical Cores: 4
+[Init] WaveVM Hybrid Slave V28.0 (Swarm Edition)
+[Init] Config: Port=19105, Cores=2, RAM=2048 MB, BaseID=0, VM=0
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 0.0.0.0:19105
+[Hybrid] Spawning 2 QEMU-TCG instances (Tri-Channel Isolation)...
+[WaveVM] /dev/kvm not available (mode=user), stay on TCG path
+qemu-system-x86_64: -accel wavevm: WaveVM: defer user mem init until first RAM block is registered
+[WaveVM] Starting Slave Net Thread on FD 3...
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 3).
+[WaveVM-Slave] vCPU service loop online cpu=0
+[WaveVM] region_add gpa=0 size=0x80000000 count=1
+[WaveVM-User] ram_block hva=0x7e1c23e00000..0x7e1ca3e00000 gpa=0 size=0x80000000 blocks=1
+[WaveVM] /dev/kvm not available (mode=user), stay on TCG path
+qemu-system-x86_64: -accel wavevm: WaveVM: defer user mem init until first RAM block is registered
+[WaveVM] Starting Slave Net Thread on FD 3...
+[WaveVM-Slave] Network Loop Active (Engine: TCG, FD: 3).
+[WaveVM-Slave] vCPU service loop online cpu=0
+[WaveVM] region_add gpa=0 size=0x80000000 count=1
+[WaveVM-User] ram_block hva=0x74d79fe00000..0x74d81fe00000 gpa=0 size=0x80000000 blocks=1
+[WaveVM-User] V29 Wavelet Engine Active (Slave ID: 1)
+[WVM] Async Push Listener Started (Streaming Mode + Lazy Flush).
+[WaveVM] region_add gpa=0 size=0xc0000 count=2
+[WaveVM-User] ram_block hva=0x7e1c23e00000..0x7e1c23ec0000 gpa=0 size=0xc0000 blocks=2
+[WaveVM] region_add gpa=0x100000 size=0x7ff00000 count=3
+[WaveVM-User] ram_block hva=0x7e1c23f00000..0x7e1ca3e00000 gpa=0x100000 size=0x7ff00000 blocks=3
+[WaveVM-User] V29 Wavelet Engine Active (Slave ID: 0)
+[WVM] Async Push Listener Started (Streaming Mode + Lazy Flush).
+[WaveVM] region_add gpa=0 size=0xc0000 count=2
+[WaveVM-User] ram_block hva=0x74d79fe00000..0x74d79fec0000 gpa=0 size=0xc0000 blocks=2
+[WaveVM] region_add gpa=0x100000 size=0x7ff00000 count=3
+[WaveVM-User] ram_block hva=0x74d79ff00000..0x74d81fe00000 gpa=0x100000 size=0x7ff00000 blocks=3
+[Proxy] Tri-Channel NAT Active (CMD/REQ/PUSH) + MESI Support.
+[Proxy] Gateway Locked: 127.0.0.1:19200

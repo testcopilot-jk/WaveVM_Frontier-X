@@ -1,0 +1,5 @@
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19121
+[Gateway] Loaded 2 route groups.
+[Gateway] System has 4 cores. Scaling out 3 RX workers...
+[Gateway] Control Plane Active on Port 19121 (Static)
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100

@@ -1,0 +1,17 @@
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19101
+[Gateway] Loaded 0 route groups.
+[Gateway] System has 4 cores. Scaling out 3 RX workers...
+[Gateway] Control Plane Active on Port 19101 (Static)
+[Gateway-Auto] Learned New Node: 1
+[Gateway-Auto] Learned New Node: 0
+[BUF] node=0 len=532 buf_offset=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[BUF] node=0 len=112 buf_offset=532
+[BUF] node=0 len=112 buf_offset=644
+[BUF] node=0 len=96 buf_offset=756
+[BUF] node=0 len=96 buf_offset=852
+[BUF] node=0 len=64 buf_offset=948
+[BUF] node=0 len=64 buf_offset=1012
+[BUF] node=0 len=64 buf_offset=1076
+[BUF] node=0 len=56 buf_offset=1140
+[FLUSH] node=0 dst=127.0.0.1:19100 len=1196 fd=4

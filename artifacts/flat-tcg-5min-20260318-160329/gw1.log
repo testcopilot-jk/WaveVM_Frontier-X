@@ -1,0 +1,5 @@
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19201
+[Gateway] Loaded 0 route groups.
+[Gateway] System has 2 cores. Scaling out 1 RX workers...
+[Gateway] Control Plane Active on Port 19201 (Static)
+[Gateway-Auto] Learned New Node: 0

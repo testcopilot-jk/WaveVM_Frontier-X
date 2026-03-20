@@ -1,0 +1,7 @@
+[Hybrid] Using Physical Cores: 2
+[Init] WaveVM Hybrid Slave V28.0 (Swarm Edition)
+[Init] Config: Port=19105, Cores=2, RAM=1024 MB, BaseID=0, VM=0
+[Hybrid] Mode: TCG PROXY (Tri-Channel). Listening on 0.0.0.0:19105
+[Hybrid] Spawning 2 QEMU-TCG instances (Tri-Channel Isolation)...
+[Hybrid] execlp qemu: No such file or directory
+[Hybrid] execlp qemu: No such file or directory

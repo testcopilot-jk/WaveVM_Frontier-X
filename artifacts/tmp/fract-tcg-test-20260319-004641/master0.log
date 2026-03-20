@@ -1,0 +1,18 @@
+[Warning] Failed to open /dev/wavevm (Kernel Mode disabled?): No such file or directory
+[*] WaveVM Swarm V30.0 'Wavelet' Node Daemon (PhysID: 0, VM: 0)
+[Backend] V29.5 Logic Core Sharded Pool Ready: 100032 items.
+[Config] Parsing Swarm Topology (Heterogeneous Mode)...
+[Config] DHT Ring Size: 2 Virtual Nodes (from 2 Physical).
+[Config] CPU Routing Table Initialized (Weighted by Cores).
+[+] Starting 8 Wavelet Broadcast Engines...
+[+] All Wavelet Broadcast Engines started.
+[Check] Resource verified: Alloc 2048 MB >= Config 1 GB.
+[Init] Identity Mapped: PhysID 0 -> VirtualID 0 (Primary)
+[System] Initializing SHM: /wvm_fract_node0 (Size: 2048 MB)
+[+] Memory Ready at 0x749f767fd000
+[System] Control Socket: /tmp/wvm_user_0.sock
+[+] WaveVM V29 Node Ready. Waiting for QEMU...
+[Swarm] New neighbor discovered: 1
+[Autonomous] Node started in SHADOW mode. Auto-scaling into cluster...
+[Lifecycle] Transition to WARMING
+[Lifecycle] Transition to ACTIVE. Participating in Owner Set.

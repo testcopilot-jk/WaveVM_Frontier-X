@@ -1,0 +1,8 @@
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19221
+[Gateway] Loaded 2 route groups.
+[Gateway] System has 4 cores. Scaling out 3 RX workers...
+[Gateway] Control Plane Active on Port 19221 (Static)
+[Gateway] bind ok port=19220
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] rx len=52 magic=0x57564d58
