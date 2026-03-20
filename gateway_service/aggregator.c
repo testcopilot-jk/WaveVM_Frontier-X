@@ -55,6 +55,52 @@ static pthread_rwlock_t g_map_lock = PTHREAD_RWLOCK_INITIALIZER; // A global loc
 #define BATCH_SIZE 64
 #define WVM_BIG_PKT_THRESHOLD 200
 
+typedef struct packet_node {
+    int len;
+    struct sockaddr_in src;
+    uint8_t *data;
+    struct packet_node *next;
+} packet_node_t;
+
+typedef struct packet_queue {
+    packet_node_t *head;
+    packet_node_t *tail;
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+} packet_queue_t;
+
+static void queue_init(packet_queue_t *q) {
+    q->head = NULL;
+    q->tail = NULL;
+    pthread_mutex_init(&q->lock, NULL);
+    pthread_cond_init(&q->cond, NULL);
+}
+
+static void queue_push(packet_queue_t *q, packet_node_t *n) {
+    n->next = NULL;
+    pthread_mutex_lock(&q->lock);
+    if (q->tail) {
+        q->tail->next = n;
+    } else {
+        q->head = n;
+    }
+    q->tail = n;
+    pthread_cond_signal(&q->cond);
+    pthread_mutex_unlock(&q->lock);
+}
+
+static packet_node_t* queue_pop(packet_queue_t *q) {
+    pthread_mutex_lock(&q->lock);
+    while (!q->head) {
+        pthread_cond_wait(&q->cond, &q->lock);
+    }
+    packet_node_t *n = q->head;
+    q->head = n->next;
+    if (!q->head) q->tail = NULL;
+    pthread_mutex_unlock(&q->lock);
+    return n;
+}
+
 static struct sockaddr_in g_upstream_addr; // The address of the upstream gateway or master
 static volatile int g_primary_socket = -1; 
 static int g_upstream_tx_socket = -1;
@@ -69,6 +115,7 @@ static int g_force_single_rx = 0;
 static int g_disable_reuseport = 0;
 static int g_use_recvfrom = 0;
 static int g_force_single_fd = 0;
+static int g_multi_queue = 1;
 
 static inline gateway_node_t* find_node(uint32_t slave_id);
 static void learn_route(uint32_t slave_id, struct sockaddr_in *addr);
@@ -209,6 +256,23 @@ static inline void gateway_process_packet(int local_fd,
                 inet_ntoa(src->sin_addr), (unsigned)ntohs(src->sin_port),
                 dst_ip[0] ? dst_ip : "0.0.0.0", dst_port);
     }
+}
+
+typedef struct {
+    int local_fd;
+    packet_queue_t *q;
+} gateway_queue_arg_t;
+
+static void* gateway_queue_consumer(void *arg) {
+    gateway_queue_arg_t *qa = (gateway_queue_arg_t*)arg;
+    for (;;) {
+        packet_node_t *n = queue_pop(qa->q);
+        if (!n) continue;
+        gateway_process_packet(qa->local_fd, n->data, n->len, &n->src);
+        free(n->data);
+        free(n);
+    }
+    return NULL;
 }
 
 
@@ -626,6 +690,24 @@ static void* gateway_worker(void *arg) {
         msgs[i].msg_hdr.msg_namelen = sizeof(struct sockaddr_in);
     }
 
+    packet_queue_t q_big, q_small;
+    gateway_queue_arg_t qa_big, qa_small;
+    pthread_t th_big, th_small;
+    int mq_ok = 0;
+    if (g_multi_queue) {
+        queue_init(&q_big);
+        queue_init(&q_small);
+        qa_big.local_fd = local_fd; qa_big.q = &q_big;
+        qa_small.local_fd = local_fd; qa_small.q = &q_small;
+        if (pthread_create(&th_big, NULL, gateway_queue_consumer, &qa_big) == 0 &&
+            pthread_create(&th_small, NULL, gateway_queue_consumer, &qa_small) == 0) {
+            mq_ok = 1;
+        } else {
+            fprintf(stderr, "[Gateway] multi-queue init failed, fallback to inline\n");
+            mq_ok = 0;
+        }
+    }
+
     while (1) {
         if (g_use_recvfrom) {
             socklen_t slen = sizeof(struct sockaddr_in);
@@ -639,7 +721,26 @@ static void* gateway_worker(void *arg) {
                 }
                 continue;
             }
-            gateway_process_packet(local_fd, buffer_pool, pkt_len, &src_addrs[0]);
+            if (mq_ok) {
+                packet_node_t *n = malloc(sizeof(*n));
+                uint8_t *copy = malloc(pkt_len);
+                if (n && copy) {
+                    memcpy(copy, buffer_pool, pkt_len);
+                    n->len = pkt_len;
+                    n->data = copy;
+                    n->src = src_addrs[0];
+                    if (pkt_len >= WVM_BIG_PKT_THRESHOLD) {
+                        queue_push(&q_big, n);
+                    } else {
+                        queue_push(&q_small, n);
+                    }
+                } else {
+                    if (n) free(n);
+                    if (copy) free(copy);
+                }
+            } else {
+                gateway_process_packet(local_fd, buffer_pool, pkt_len, &src_addrs[0]);
+            }
             continue;
         }
 
@@ -653,29 +754,52 @@ static void* gateway_worker(void *arg) {
             continue; 
         }
 
-        int big_idx[BATCH_SIZE];
-        int small_idx[BATCH_SIZE];
-        int nb = 0, ns = 0;
-        for (int i = 0; i < n; i++) {
-            if ((int)msgs[i].msg_len >= WVM_BIG_PKT_THRESHOLD) {
-                big_idx[nb++] = i;
-            } else {
-                small_idx[ns++] = i;
+        if (mq_ok) {
+            for (int i = 0; i < n; i++) {
+                uint8_t *ptr = (uint8_t *)iovecs[i].iov_base;
+                int pkt_len = msgs[i].msg_len;
+                packet_node_t *node = malloc(sizeof(*node));
+                uint8_t *copy = malloc(pkt_len);
+                if (node && copy) {
+                    memcpy(copy, ptr, pkt_len);
+                    node->len = pkt_len;
+                    node->data = copy;
+                    node->src = src_addrs[i];
+                    if (pkt_len >= WVM_BIG_PKT_THRESHOLD) {
+                        queue_push(&q_big, node);
+                    } else {
+                        queue_push(&q_small, node);
+                    }
+                } else {
+                    if (node) free(node);
+                    if (copy) free(copy);
+                }
             }
-        }
-        for (int k = 0; k < nb; k++) {
-            int i = big_idx[k];
-            uint8_t *ptr = (uint8_t *)iovecs[i].iov_base;
-            int pkt_len = msgs[i].msg_len;
-            struct sockaddr_in *src = &src_addrs[i];
-            gateway_process_packet(local_fd, ptr, pkt_len, src);
-        }
-        for (int k = 0; k < ns; k++) {
-            int i = small_idx[k];
-            uint8_t *ptr = (uint8_t *)iovecs[i].iov_base;
-            int pkt_len = msgs[i].msg_len;
-            struct sockaddr_in *src = &src_addrs[i];
-            gateway_process_packet(local_fd, ptr, pkt_len, src);
+        } else {
+            int big_idx[BATCH_SIZE];
+            int small_idx[BATCH_SIZE];
+            int nb = 0, ns = 0;
+            for (int i = 0; i < n; i++) {
+                if ((int)msgs[i].msg_len >= WVM_BIG_PKT_THRESHOLD) {
+                    big_idx[nb++] = i;
+                } else {
+                    small_idx[ns++] = i;
+                }
+            }
+            for (int k = 0; k < nb; k++) {
+                int i = big_idx[k];
+                uint8_t *ptr = (uint8_t *)iovecs[i].iov_base;
+                int pkt_len = msgs[i].msg_len;
+                struct sockaddr_in *src = &src_addrs[i];
+                gateway_process_packet(local_fd, ptr, pkt_len, src);
+            }
+            for (int k = 0; k < ns; k++) {
+                int i = small_idx[k];
+                uint8_t *ptr = (uint8_t *)iovecs[i].iov_base;
+                int pkt_len = msgs[i].msg_len;
+                struct sockaddr_in *src = &src_addrs[i];
+                gateway_process_packet(local_fd, ptr, pkt_len, src);
+            }
         }
     }
     free(buffer_pool);
@@ -766,6 +890,10 @@ int init_aggregator(int local_port, const char *upstream_ip, int upstream_port, 
     g_force_single_rx = (getenv("WVM_GATEWAY_SINGLE_RX") != NULL);
     g_disable_reuseport = (getenv("WVM_GATEWAY_DISABLE_REUSEPORT") != NULL);
     g_use_recvfrom = (getenv("WVM_GATEWAY_USE_RECVFROM") != NULL);
+    {
+        const char *mq = getenv("WVM_GATEWAY_MULTI_QUEUE");
+        if (mq && mq[0] == '0') g_multi_queue = 0;
+    }
     if (load_slave_config(config_path) != 0) return -ENOENT;
 
     g_upstream_addr.sin_family = AF_INET;
