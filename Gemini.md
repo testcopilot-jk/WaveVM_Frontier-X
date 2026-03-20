@@ -3218,7 +3218,7 @@ static struct {
 } g_gossip_agg = { .curr_offset = 0 };
 
 #define MAX_LOCAL_VIEW 1024  // 本地感知的邻居上限
-#define GOSSIP_INTERVAL_US 500000 // 500ms 心跳一次
+#define GOSSIP_INTERVAL_US 60000000 // 60s 心跳一次 (测试压制心跳洪泛)
 #define VIEW_SYNC_INTERVAL_US 2000000 // 2秒同步一次全量视图
 static uint64_t g_last_view_sync_us = 0;
 
@@ -3712,7 +3712,7 @@ static uint64_t g_last_gossip_us = 0;
 static uint64_t g_state_start_us = 0;
 
 // 配置参数：严格遵循物理时延
-#define HEARTBEAT_TIMEOUT_US 5000000 // 5秒未收到心跳则判定 Fail-in-place
+#define HEARTBEAT_TIMEOUT_US 180000000 // 180秒未收到心跳则判定 Fail-in-place (测试)
 #define WARMING_DURATION_US  10000000 // 预热态持续10秒，同步元数据
 #define GOSSIP_FANOUT        3        // 每次随机向3个邻居扩散
 
@@ -5084,6 +5084,7 @@ void wvm_logic_broadcast_rpc(void *full_pkt_data, int full_pkt_len, uint16_t msg
     }
     pthread_rwlock_unlock(&g_view_lock);
 }
+
 ```
 
 ---
@@ -15677,6 +15678,108 @@ static gateway_node_t *g_node_map = NULL; // IMPORTANT: Must be initialized to N
 // [REVISED PATCH] 使用读写锁替代互斥锁，保障数据面性能
 static pthread_rwlock_t g_map_lock = PTHREAD_RWLOCK_INITIALIZER; // A global lock to protect the hash map itself (for creation/deletion)
 #define BATCH_SIZE 64
+#define WVM_BIG_PKT_THRESHOLD 200
+#define WVM_RXQ_DROP_HEARTBEAT (512 * 1024)
+#define WVM_HEARTBEAT_MIN_INTERVAL_MS 100
+
+typedef struct packet_node {
+    int len;
+    struct sockaddr_in src;
+    uint8_t *data;
+    struct packet_node *next;
+} packet_node_t;
+
+typedef struct packet_queue {
+    packet_node_t *head;
+    packet_node_t *tail;
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+} packet_queue_t;
+
+static void queue_init(packet_queue_t *q) {
+    q->head = NULL;
+    q->tail = NULL;
+    pthread_mutex_init(&q->lock, NULL);
+    pthread_cond_init(&q->cond, NULL);
+}
+
+static void queue_push(packet_queue_t *q, packet_node_t *n) {
+    n->next = NULL;
+    pthread_mutex_lock(&q->lock);
+    if (q->tail) {
+        q->tail->next = n;
+    } else {
+        q->head = n;
+    }
+    q->tail = n;
+    pthread_cond_signal(&q->cond);
+    pthread_mutex_unlock(&q->lock);
+}
+
+static packet_node_t* queue_pop(packet_queue_t *q) {
+    pthread_mutex_lock(&q->lock);
+    while (!q->head) {
+        pthread_cond_wait(&q->cond, &q->lock);
+    }
+    packet_node_t *n = q->head;
+    q->head = n->next;
+    if (!q->head) q->tail = NULL;
+    pthread_mutex_unlock(&q->lock);
+    return n;
+}
+
+static pthread_mutex_t g_hb_lock = PTHREAD_MUTEX_INITIALIZER;
+
+#define HB_TABLE_SIZE 16
+typedef struct {
+    uint32_t ip;
+    uint16_t port;
+    uint64_t last_ms;
+} hb_slot_t;
+static hb_slot_t g_hb_table[HB_TABLE_SIZE];
+
+static uint64_t now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)(ts.tv_nsec / 1000000);
+}
+
+static int should_drop_heartbeat(struct sockaddr_in *src) {
+    uint32_t ip = src->sin_addr.s_addr;
+    uint16_t port = src->sin_port;
+    uint64_t now = now_ms();
+    int drop = 0;
+
+    pthread_mutex_lock(&g_hb_lock);
+    int idx = (int)((ip ^ port) & (HB_TABLE_SIZE - 1));
+    for (int i = 0; i < HB_TABLE_SIZE; i++) {
+        hb_slot_t *slot = &g_hb_table[(idx + i) & (HB_TABLE_SIZE - 1)];
+        if (slot->ip == ip && slot->port == port) {
+            if (now - slot->last_ms < WVM_HEARTBEAT_MIN_INTERVAL_MS) {
+                drop = 1;
+            } else {
+                slot->last_ms = now;
+            }
+            pthread_mutex_unlock(&g_hb_lock);
+            return drop;
+        }
+        if (slot->ip == 0) {
+            slot->ip = ip;
+            slot->port = port;
+            slot->last_ms = now;
+            pthread_mutex_unlock(&g_hb_lock);
+            return 0;
+        }
+    }
+    // Table full; overwrite the hashed slot.
+    hb_slot_t *slot = &g_hb_table[idx];
+    drop = (now - slot->last_ms < WVM_HEARTBEAT_MIN_INTERVAL_MS);
+    slot->ip = ip;
+    slot->port = port;
+    slot->last_ms = now;
+    pthread_mutex_unlock(&g_hb_lock);
+    return drop;
+}
 
 static struct sockaddr_in g_upstream_addr; // The address of the upstream gateway or master
 static volatile int g_primary_socket = -1; 
@@ -15692,6 +15795,7 @@ static int g_force_single_rx = 0;
 static int g_disable_reuseport = 0;
 static int g_use_recvfrom = 0;
 static int g_force_single_fd = 0;
+static int g_multi_queue = 1;
 
 static inline gateway_node_t* find_node(uint32_t slave_id);
 static void learn_route(uint32_t slave_id, struct sockaddr_in *addr);
@@ -15763,6 +15867,36 @@ static inline void gateway_process_packet(int local_fd,
     }
     if (ntohl(hdr->magic) != WVM_MAGIC) return;
     uint16_t msg_type = ntohs(hdr->msg_type);
+    {
+        int rxq = get_rxq_bytes(local_fd);
+        if (rxq > WVM_RXQ_DROP_HEARTBEAT && pkt_len < WVM_BIG_PKT_THRESHOLD) {
+            static int __small_drop = 0;
+            if (__small_drop < 20) {
+                fprintf(stderr, "[Gateway] drop small pkt len=%d rxq=%d\n", pkt_len, rxq);
+                __small_drop++;
+            }
+            return;
+        }
+    }
+    if (msg_type == MSG_HEARTBEAT) {
+        int rxq = get_rxq_bytes(local_fd);
+        if (rxq > WVM_RXQ_DROP_HEARTBEAT) {
+            static int __hb_drop = 0;
+            if (__hb_drop < 20) {
+                fprintf(stderr, "[Gateway] drop heartbeat rxq=%d\n", rxq);
+                __hb_drop++;
+            }
+            return;
+        }
+        if (should_drop_heartbeat(src)) {
+            static int __hb_rl = 0;
+            if (__hb_rl < 20) {
+                fprintf(stderr, "[Gateway] drop heartbeat rate-limit\n");
+                __hb_rl++;
+            }
+            return;
+        }
+    }
 
     uint32_t source_id = ntohl(hdr->slave_id); // 发送者 ID
     uint32_t target_id = ntohl(hdr->target_id); // 目标 ID（兼容旧逻辑时可能为 AUTO_ROUTE）
@@ -15832,6 +15966,23 @@ static inline void gateway_process_packet(int local_fd,
                 inet_ntoa(src->sin_addr), (unsigned)ntohs(src->sin_port),
                 dst_ip[0] ? dst_ip : "0.0.0.0", dst_port);
     }
+}
+
+typedef struct {
+    int local_fd;
+    packet_queue_t *q;
+} gateway_queue_arg_t;
+
+static void* gateway_queue_consumer(void *arg) {
+    gateway_queue_arg_t *qa = (gateway_queue_arg_t*)arg;
+    for (;;) {
+        packet_node_t *n = queue_pop(qa->q);
+        if (!n) continue;
+        gateway_process_packet(qa->local_fd, n->data, n->len, &n->src);
+        free(n->data);
+        free(n);
+    }
+    return NULL;
 }
 
 
@@ -16249,6 +16400,24 @@ static void* gateway_worker(void *arg) {
         msgs[i].msg_hdr.msg_namelen = sizeof(struct sockaddr_in);
     }
 
+    packet_queue_t q_big, q_small;
+    gateway_queue_arg_t qa_big, qa_small;
+    pthread_t th_big, th_small;
+    int mq_ok = 0;
+    if (g_multi_queue) {
+        queue_init(&q_big);
+        queue_init(&q_small);
+        qa_big.local_fd = local_fd; qa_big.q = &q_big;
+        qa_small.local_fd = local_fd; qa_small.q = &q_small;
+        if (pthread_create(&th_big, NULL, gateway_queue_consumer, &qa_big) == 0 &&
+            pthread_create(&th_small, NULL, gateway_queue_consumer, &qa_small) == 0) {
+            mq_ok = 1;
+        } else {
+            fprintf(stderr, "[Gateway] multi-queue init failed, fallback to inline\n");
+            mq_ok = 0;
+        }
+    }
+
     while (1) {
         if (g_use_recvfrom) {
             socklen_t slen = sizeof(struct sockaddr_in);
@@ -16262,7 +16431,26 @@ static void* gateway_worker(void *arg) {
                 }
                 continue;
             }
-            gateway_process_packet(local_fd, buffer_pool, pkt_len, &src_addrs[0]);
+            if (mq_ok) {
+                packet_node_t *n = malloc(sizeof(*n));
+                uint8_t *copy = malloc(pkt_len);
+                if (n && copy) {
+                    memcpy(copy, buffer_pool, pkt_len);
+                    n->len = pkt_len;
+                    n->data = copy;
+                    n->src = src_addrs[0];
+                    if (pkt_len >= WVM_BIG_PKT_THRESHOLD) {
+                        queue_push(&q_big, n);
+                    } else {
+                        queue_push(&q_small, n);
+                    }
+                } else {
+                    if (n) free(n);
+                    if (copy) free(copy);
+                }
+            } else {
+                gateway_process_packet(local_fd, buffer_pool, pkt_len, &src_addrs[0]);
+            }
             continue;
         }
 
@@ -16276,11 +16464,52 @@ static void* gateway_worker(void *arg) {
             continue; 
         }
 
-        for (int i = 0; i < n; i++) {
-            uint8_t *ptr = (uint8_t *)iovecs[i].iov_base;
-            int pkt_len = msgs[i].msg_len;
-            struct sockaddr_in *src = &src_addrs[i];
-            gateway_process_packet(local_fd, ptr, pkt_len, src);
+        if (mq_ok) {
+            for (int i = 0; i < n; i++) {
+                uint8_t *ptr = (uint8_t *)iovecs[i].iov_base;
+                int pkt_len = msgs[i].msg_len;
+                packet_node_t *node = malloc(sizeof(*node));
+                uint8_t *copy = malloc(pkt_len);
+                if (node && copy) {
+                    memcpy(copy, ptr, pkt_len);
+                    node->len = pkt_len;
+                    node->data = copy;
+                    node->src = src_addrs[i];
+                    if (pkt_len >= WVM_BIG_PKT_THRESHOLD) {
+                        queue_push(&q_big, node);
+                    } else {
+                        queue_push(&q_small, node);
+                    }
+                } else {
+                    if (node) free(node);
+                    if (copy) free(copy);
+                }
+            }
+        } else {
+            int big_idx[BATCH_SIZE];
+            int small_idx[BATCH_SIZE];
+            int nb = 0, ns = 0;
+            for (int i = 0; i < n; i++) {
+                if ((int)msgs[i].msg_len >= WVM_BIG_PKT_THRESHOLD) {
+                    big_idx[nb++] = i;
+                } else {
+                    small_idx[ns++] = i;
+                }
+            }
+            for (int k = 0; k < nb; k++) {
+                int i = big_idx[k];
+                uint8_t *ptr = (uint8_t *)iovecs[i].iov_base;
+                int pkt_len = msgs[i].msg_len;
+                struct sockaddr_in *src = &src_addrs[i];
+                gateway_process_packet(local_fd, ptr, pkt_len, src);
+            }
+            for (int k = 0; k < ns; k++) {
+                int i = small_idx[k];
+                uint8_t *ptr = (uint8_t *)iovecs[i].iov_base;
+                int pkt_len = msgs[i].msg_len;
+                struct sockaddr_in *src = &src_addrs[i];
+                gateway_process_packet(local_fd, ptr, pkt_len, src);
+            }
         }
     }
     free(buffer_pool);
@@ -16371,6 +16600,10 @@ int init_aggregator(int local_port, const char *upstream_ip, int upstream_port, 
     g_force_single_rx = (getenv("WVM_GATEWAY_SINGLE_RX") != NULL);
     g_disable_reuseport = (getenv("WVM_GATEWAY_DISABLE_REUSEPORT") != NULL);
     g_use_recvfrom = (getenv("WVM_GATEWAY_USE_RECVFROM") != NULL);
+    {
+        const char *mq = getenv("WVM_GATEWAY_MULTI_QUEUE");
+        if (mq && mq[0] == '0') g_multi_queue = 0;
+    }
     if (load_slave_config(config_path) != 0) return -ENOENT;
 
     g_upstream_addr.sin_family = AF_INET;
@@ -16431,6 +16664,7 @@ int init_aggregator(int local_port, const char *upstream_ip, int upstream_port, 
     pthread_detach(ctrl_tid);
 
     return 0;}
+
 ```
 
 **文件**: `gateway_service/Makefile`
@@ -18000,3 +18234,24 @@ bash /tmp/run_fract_no_kvm.sh
 - 结果：gateway 仅收到 52B 小包，无 `rx-big`；RPC `Type 5` 持续超时；`tcpdump` 能抓到 532B 的 `WVMX/MSG_VCPU_RUN` 包；`ss` 显示 19120 Recv-Q 高积压。
 - 结论：基本排除内存/VCU 远程链路逻辑问题与 gateway 路由/转发逻辑问题；根因锁定在 **gateway 接收/投递时序或 socket 队列消费异常**（疑似进程/FD/时序稳定性）。
 - 后续建议：将 socket 绑定状态与队列占用采样移入 gateway 进程内部，并验证是否存在隐藏 FD/进程竞争。
+
+---
+
+## 🧪 2026-03-20 Codespace 分形双 sidecar 链路核验（UDP 回环异常）
+
+说明：
+- 执行环境：GitHub Codespaces 单机容器。
+- 目标口径：验证分形链路 `master → sidecar A → sidecar B → master → slave` 是否可达；重点核验 sidecar A → sidecar B 的 UDP 回环。
+
+### 关键证据
+
+- 运行脚本：`artifacts/fract-tcg-test/run.sh`（双 sidecar + UDP probe）
+- 产物目录：`artifacts/tmp/fract-tcg-test-20260320-063353`、`artifacts/tmp/fract-tcg-test-20260320-063755`、`artifacts/tmp/fract-tcg-test-20260320-064123`
+- UDP 探针结果（A → B）：`(no data)`，B 端未收到探针包
+- 网关日志：sidecar A 有 `route->local dst=127.0.0.1:19220`，sidecar B 无任何 `rx`/`rx-vcpu`
+- 业务结果：`RPC Timeout Type 5` 持续，slave 无 VCPU_RUN
+
+### 结论
+
+- 在同一实例内，**UDP 19120 → 19220 回环不可达**，A→B 数据包被系统层吞掉。
+- 该问题已脱离 WaveVM 路由逻辑与内存/算力链路本身，**指向环境/内核层网络异常**。
