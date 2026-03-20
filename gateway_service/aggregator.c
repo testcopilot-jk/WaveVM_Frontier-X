@@ -54,6 +54,7 @@ static gateway_node_t *g_node_map = NULL; // IMPORTANT: Must be initialized to N
 static pthread_rwlock_t g_map_lock = PTHREAD_RWLOCK_INITIALIZER; // A global lock to protect the hash map itself (for creation/deletion)
 #define BATCH_SIZE 64
 #define WVM_BIG_PKT_THRESHOLD 200
+#define WVM_RXQ_DROP_HEARTBEAT (512 * 1024)
 
 typedef struct packet_node {
     int len;
@@ -187,6 +188,17 @@ static inline void gateway_process_packet(int local_fd,
     }
     if (ntohl(hdr->magic) != WVM_MAGIC) return;
     uint16_t msg_type = ntohs(hdr->msg_type);
+    if (msg_type == MSG_HEARTBEAT) {
+        int rxq = get_rxq_bytes(local_fd);
+        if (rxq > WVM_RXQ_DROP_HEARTBEAT) {
+            static int __hb_drop = 0;
+            if (__hb_drop < 20) {
+                fprintf(stderr, "[Gateway] drop heartbeat rxq=%d\n", rxq);
+                __hb_drop++;
+            }
+            return;
+        }
+    }
 
     uint32_t source_id = ntohl(hdr->slave_id); // 发送者 ID
     uint32_t target_id = ntohl(hdr->target_id); // 目标 ID（兼容旧逻辑时可能为 AUTO_ROUTE）
