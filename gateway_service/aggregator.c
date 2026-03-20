@@ -53,6 +53,7 @@ static gateway_node_t *g_node_map = NULL; // IMPORTANT: Must be initialized to N
 // [REVISED PATCH] 使用读写锁替代互斥锁，保障数据面性能
 static pthread_rwlock_t g_map_lock = PTHREAD_RWLOCK_INITIALIZER; // A global lock to protect the hash map itself (for creation/deletion)
 #define BATCH_SIZE 64
+#define WVM_BIG_PKT_THRESHOLD 200
 
 static struct sockaddr_in g_upstream_addr; // The address of the upstream gateway or master
 static volatile int g_primary_socket = -1; 
@@ -652,7 +653,25 @@ static void* gateway_worker(void *arg) {
             continue; 
         }
 
+        int big_idx[BATCH_SIZE];
+        int small_idx[BATCH_SIZE];
+        int nb = 0, ns = 0;
         for (int i = 0; i < n; i++) {
+            if ((int)msgs[i].msg_len >= WVM_BIG_PKT_THRESHOLD) {
+                big_idx[nb++] = i;
+            } else {
+                small_idx[ns++] = i;
+            }
+        }
+        for (int k = 0; k < nb; k++) {
+            int i = big_idx[k];
+            uint8_t *ptr = (uint8_t *)iovecs[i].iov_base;
+            int pkt_len = msgs[i].msg_len;
+            struct sockaddr_in *src = &src_addrs[i];
+            gateway_process_packet(local_fd, ptr, pkt_len, src);
+        }
+        for (int k = 0; k < ns; k++) {
+            int i = small_idx[k];
             uint8_t *ptr = (uint8_t *)iovecs[i].iov_base;
             int pkt_len = msgs[i].msg_len;
             struct sockaddr_in *src = &src_addrs[i];
