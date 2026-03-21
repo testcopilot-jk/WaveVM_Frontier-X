@@ -71,7 +71,7 @@ __attribute__((weak)) int push_to_aggregator(uint32_t slave_id, void *data, int 
     }
 
     // 统一走本地 sidecar 网关，跨节点路由由 sidecar 负责
-    struct sockaddr_in *target = &g_gateways[g_my_node_id];
+    struct sockaddr_in *target = &g_gateways[g_my_node_id];  /* always route through local sidecar */
     if (target->sin_port == 0) {
         errno = EHOSTUNREACH;
         return -EHOSTUNREACH;

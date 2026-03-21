@@ -3,3 +3,4 @@ gateway_service/wavevm_gateway
 master_core/wavevm_node_master
 slave_daemon/wavevm_node_slave
 
+wavevm-qemu/build-native/

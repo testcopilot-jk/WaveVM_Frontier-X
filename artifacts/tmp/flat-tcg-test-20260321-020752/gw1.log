@@ -1,0 +1,23 @@
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19201
+[Gateway] Loaded 1 route groups.
+[Gateway] System has 4 cores (allowed=4). Scaling out 3 RX workers...
+[Gateway] sockfd=4 reuseport=0
+[Gateway] Control Plane Active on Port 19201 (Static)
+[Gateway] sockfd=6 reuseport=0
+[Gateway] bind ok port=19220 fd=6 local=0.0.0.0:19220
+[Gateway] sockfd=7 reuseport=0
+[Gateway] rx-stats big=0 small=0
+[Gateway] rx-stats big=0 small=0
+[Gateway] rx-stats big=0 small=0
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=532 magic=0x57564d58
+[Gateway] rx-big len=532 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=0 src=127.0.0.1:19100
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19100 dst=127.0.0.1:19200
+[Gateway] rx len=532 magic=0x57564d58
+[Gateway] rx-big len=532 magic=0x57564d58
+[Gateway] rx len=52 magic=0x57564d58

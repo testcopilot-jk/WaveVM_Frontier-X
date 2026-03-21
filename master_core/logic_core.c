@@ -556,7 +556,6 @@ void update_local_topology_view(uint32_t src_id, uint32_t src_epoch, uint8_t src
             // 如果地址发生变更（如节点重启更换了物理机），同步更新
             if (src_addr && src_addr->sin_addr.s_addr != 0) {
                 g_peer_view[i].addr = *src_addr;
-                g_ops->set_gateway_ip(src_id, src_addr->sin_addr.s_addr, src_addr->sin_port);
             }
             found = 1;
             break;

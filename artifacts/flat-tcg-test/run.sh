@@ -10,6 +10,22 @@ CFG="$ART_DIR/flat_2node.conf"
 cat > "$CFG" <<'EOCFG'
 NODE 0 127.0.0.1 19120 1 1
 NODE 1 127.0.0.1 19220 1 1
+EOCFG
+
+# L2 gateway configs — each only knows its own local node → local master
+CFG_GW0="$ART_DIR/gw0.conf"
+cat > "$CFG_GW0" <<'EOCFG'
+ROUTE 0 1 127.0.0.1 19100
+EOCFG
+
+CFG_GW1="$ART_DIR/gw1.conf"
+cat > "$CFG_GW1" <<'EOCFG'
+ROUTE 1 1 127.0.0.1 19200
+EOCFG
+
+# L1 gateway config — full routing table pointing to L2 gateways
+CFG_L1="$ART_DIR/l1.conf"
+cat > "$CFG_L1" <<'EOCFG'
 ROUTE 0 1 127.0.0.1 19120
 ROUTE 1 1 127.0.0.1 19220
 EOCFG
@@ -26,10 +42,14 @@ trap 'mv /dev/kvm.off /dev/kvm 2>/dev/null || true; pkill -f wavevm_node_master 
 
 QPATH="$ROOT/wavevm-qemu/build-native:$PATH"
 
-echo "=== Starting gateways ==="
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19120 127.0.0.1 19100 "$CFG" 19101) >"$ART_DIR/gw0.log" 2>&1 &
+echo "=== Starting L1 gateway ==="
+(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19320 127.0.0.1 19399 "$CFG_L1" 19321) >"$ART_DIR/l1.log" 2>&1 &
+L1=$!
+
+echo "=== Starting L2 gateways ==="
+(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19120 127.0.0.1 19320 "$CFG_GW0" 19101) >"$ART_DIR/gw0.log" 2>&1 &
 G0=$!
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19220 127.0.0.1 19200 "$CFG" 19201) >"$ART_DIR/gw1.log" 2>&1 &
+(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19220 127.0.0.1 19320 "$CFG_GW1" 19201) >"$ART_DIR/gw1.log" 2>&1 &
 G1=$!
 
 echo "=== Starting slaves ==="
@@ -68,7 +88,7 @@ done
 
 echo ""
 echo "=== Checking processes ==="
-for p in G0 G1 S0 S1 M0 M1 Q; do
+for p in L1 G0 G1 S0 S1 M0 M1 Q; do
   pid=${!p}
   if kill -0 $pid 2>/dev/null; then
     echo "  $p ($pid): alive"
@@ -100,7 +120,7 @@ fi
 
 echo ""
 echo "=== Log tails ==="
-for f in gw0 gw1 slave0 slave1 master0 master1 vm; do
+for f in l1 gw0 gw1 slave0 slave1 master0 master1 vm; do
   echo "--- $f.log (last 15 lines) ---"
   tail -15 "$ART_DIR/$f.log" 2>/dev/null || echo "  (empty)"
 done

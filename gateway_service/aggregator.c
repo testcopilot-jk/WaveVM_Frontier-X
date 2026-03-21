@@ -676,13 +676,12 @@ static void learn_route(uint32_t slave_id, struct sockaddr_in *addr) {
     // Double check
     HASH_FIND_INT(g_node_map, &slave_id, node);
     if (!node) {
-        node = calloc(1, sizeof(gateway_node_t));
-        if (node) {
-            node->id = slave_id;
-            pthread_mutex_init(&node->lock, NULL);
-            HASH_ADD_INT(g_node_map, id, node);
-            printf("[Gateway-Auto] Learned New Node: %u\n", slave_id);
-        }
+        // [FIX-M9] Do NOT create new route entries via auto-learning.
+        // L2 sidecar gateways must only know the nodes in their ROUTE config;
+        // creating new entries here would let L2 bypass L1 for cross-node traffic.
+        // Only update addresses for nodes that already exist (seeded by config).
+        pthread_rwlock_unlock(&g_map_lock);
+        return;
     }
 
     if (node) {

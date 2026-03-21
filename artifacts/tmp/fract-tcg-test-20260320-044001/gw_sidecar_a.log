@@ -1,0 +1,35 @@
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19121
+[Gateway] Loaded 2 route groups.
+[Gateway] System has 4 cores (allowed=4). Scaling out 3 RX workers...
+[Gateway] sockfd=4 reuseport=0
+[Gateway] bind ok port=19120 fd=4 local=0.0.0.0:19120
+[Gateway] Control Plane Active on Port 19121 (Static)
+[Gateway] sockfd=6 reuseport=0
+[Gateway] sockfd=7 reuseport=0
+[Gateway] rx-stats big=0 small=0
+[Gateway] rx-stats big=0 small=0
+[Gateway] rx-stats big=0 small=0
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=112 magic=0x57564d58
+[Gateway] rx len=112 magic=0x57564d58
+[Gateway] rx len=104 magic=0x57564d58
+[Gateway] rx len=64 magic=0x57564d58
+[Gateway] rx len=64 magic=0x57564d58
+[Gateway] rx len=64 magic=0x57564d58
+[Gateway] rx len=56 magic=0x57564d58
+[Gateway] rx len=64 magic=0x57564d58
+[Gateway] rx len=64 magic=0x57564d58
+[Gateway] rx len=64 magic=0x57564d58
+[Gateway] rx len=56 magic=0x57564d58
+[Gateway] rx len=64 magic=0x57564d58
+[Gateway] rx len=64 magic=0x57564d58
+[Gateway] rx len=64 magic=0x57564d58
+[Gateway] rx len=56 magic=0x57564d58
+[Gateway] rx len=64 magic=0x57564d58
+[Gateway] rx len=64 magic=0x57564d58
+[Gateway] rx-big len=532 magic=0x57564d58
+[Gateway] rx-vcpu msg=5 rid=1 target=0 src=0
