@@ -3667,7 +3667,6 @@ void update_local_topology_view(uint32_t src_id, uint32_t src_epoch, uint8_t src
             // 如果地址发生变更（如节点重启更换了物理机），同步更新
             if (src_addr && src_addr->sin_addr.s_addr != 0) {
                 g_peer_view[i].addr = *src_addr;
-                g_ops->set_gateway_ip(src_id, src_addr->sin_addr.s_addr, src_addr->sin_port);
             }
             found = 1;
             break;
@@ -6742,7 +6741,7 @@ __attribute__((weak)) int push_to_aggregator(uint32_t slave_id, void *data, int 
     }
 
     // 统一走本地 sidecar 网关，跨节点路由由 sidecar 负责
-    struct sockaddr_in *target = &g_gateways[g_my_node_id];
+    struct sockaddr_in *target = &g_gateways[g_my_node_id];  /* always route through local sidecar */
     if (target->sin_port == 0) {
         errno = EHOSTUNREACH;
         return -EHOSTUNREACH;
@@ -9384,7 +9383,7 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
         /* ACK must originate from this slave node and target the requester. */
         ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
-        ack_hdr.target_id = htonl(hdr->slave_id);
+        ack_hdr.target_id = hdr->slave_id;  /* already in network byte order */
         ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
 
         struct wvm_ipc_cpu_run_ack ack;
@@ -9421,7 +9420,7 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
         /* ACK must originate from this slave node and target the requester. */
         ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
-        ack_hdr.target_id = htonl(hdr->slave_id);
+        ack_hdr.target_id = hdr->slave_id;  /* already in network byte order */
         ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
 
         struct wvm_ipc_cpu_run_ack ack;
@@ -9623,8 +9622,8 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
     /* ACK must originate from this slave node and target the requester. */
     ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
-    ack_hdr.target_id = htonl(hdr->slave_id);
-    ack_hdr.req_id = WVM_HTONLL(hdr->req_id);      
+    ack_hdr.target_id = hdr->slave_id;  /* already in network byte order */
+    ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
     
     struct wvm_ipc_cpu_run_ack *ack = (struct wvm_ipc_cpu_run_ack *)payload;
     ack->status = 0;
@@ -9701,7 +9700,7 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
         ack_hdr.msg_type = htons(MSG_MEM_ACK);
         ack_hdr.payload_len = htons(4096);
         ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
-        ack_hdr.target_id = htonl(hdr->slave_id);
+        ack_hdr.target_id = hdr->slave_id;  /* already in network byte order */
         ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
 
         uint8_t tx[sizeof(ack_hdr) + 4096];
@@ -10336,6 +10335,7 @@ int main(int argc, char **argv) {
     }
     return 0;
 }
+
 ```
 
 **文件**: `slave_daemon/slave_vfio.h`
@@ -16301,13 +16301,12 @@ static void learn_route(uint32_t slave_id, struct sockaddr_in *addr) {
     // Double check
     HASH_FIND_INT(g_node_map, &slave_id, node);
     if (!node) {
-        node = calloc(1, sizeof(gateway_node_t));
-        if (node) {
-            node->id = slave_id;
-            pthread_mutex_init(&node->lock, NULL);
-            HASH_ADD_INT(g_node_map, id, node);
-            printf("[Gateway-Auto] Learned New Node: %u\n", slave_id);
-        }
+        // [FIX-M9] Do NOT create new route entries via auto-learning.
+        // L2 sidecar gateways must only know the nodes in their ROUTE config;
+        // creating new entries here would let L2 bypass L1 for cross-node traffic.
+        // Only update addresses for nodes that already exist (seeded by config).
+        pthread_rwlock_unlock(&g_map_lock);
+        return;
     }
 
     if (node) {
