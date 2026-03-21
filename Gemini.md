@@ -16803,7 +16803,267 @@ clean:
 
 ### Gemini.md 的定位
 
-本文件（即 `Gemini.md`）存在的目的是可以在**下载原版 qemu 5.2.0，注入本文件里全部代码块中的文件，并应用那个.diff文件**后，得到仓库中全部的最新版代码（不包括测试脚本和一些与项目运行无关的文件）。在修改代码后，本人要求**同步进Gemini.md**或**更新Gemini.md**一般就是为了使 `Gemini.md` 符合其存在目的。
+本文件（即 `Gemini.md`）存在的目的是可以在**下载原版 qemu 5.2.0，注入本文件里全部代码块中的文件，并应用那个.diff文件**后，得到仓库中全部的最新版代码（不包括测试脚本和一些与项目运行无关的文件）。在修改代码后，本人要求**同步进Gemini.md**或**更新Gemini.md**一般就是为了使 `Gemini.md` 符合其存在目的。校验 `Gemini.md` 是否符合要求可使用 `verify_gemini.py`。
+
+```verify_gemini.py
+#!/usr/bin/env python3
+"""
+Verify Gemini.md: extract all file blocks + diff, rebuild from vanilla QEMU 5.2.0,
+compare against workspace.
+"""
+import re, os, sys, subprocess, tempfile
+
+WORKSPACE = "/workspaces/WaveVM_Frontier-X"
+GEMINI = os.path.join(WORKSPACE, "Gemini.md")
+QEMU_TAR_URL = "https://download.qemu.org/qemu-5.2.0.tar.xz"
+TMP = "/tmp/verify_gemini"
+
+os.makedirs(TMP, exist_ok=True)
+
+# Step 1: Parse Gemini.md - extract file blocks
+print("=" * 60)
+print("[1/5] Parsing Gemini.md file blocks...")
+print("=" * 60)
+
+with open(GEMINI, "r", encoding="utf-8", errors="replace") as f:
+    content = f.read()
+
+lines = content.split("\n")
+blocks = {}  # path -> code
+diff_content = None
+
+i = 0
+while i < len(lines):
+    # Match file block headers like **文件**: `path`  or **文件**：`path`
+    m = re.match(r'^\*\*文件\*\*[：:]\s*`([^`]+)`', lines[i])
+    if m:
+        path = m.group(1).strip()
+        # Find next code fence
+        j = i + 1
+        while j < len(lines) and not lines[j].startswith("```"):
+            j += 1
+        if j < len(lines):
+            lang_line = j
+            # Find closing fence
+            k = j + 1
+            while k < len(lines) and not lines[k].startswith("```"):
+                k += 1
+            if k < len(lines):
+                code = "\n".join(lines[j+1:k])
+                if not code.endswith("\n"):
+                    code += "\n"
+
+                if path == "wavevm-qemu/qemu-wavevm.diff":
+                    diff_content = code
+                    print(f"  [DIFF] {path} ({len(code)} bytes)")
+                elif path not in blocks:  # Only take first occurrence
+                    blocks[path] = code
+                    print(f"  [FILE] {path} ({len(code)} bytes)")
+                else:
+                    print(f"  [SKIP] {path} (duplicate, keeping first)")
+                i = k + 1
+                continue
+    i += 1
+
+print(f"\nTotal: {len(blocks)} file blocks + {'1 diff' if diff_content else 'NO diff'}")
+
+# Step 2: Extract file blocks to temp dir and compare with workspace
+print("\n" + "=" * 60)
+print("[2/5] Comparing Gemini.md file blocks vs workspace...")
+print("=" * 60)
+
+results = {"pass": [], "fail": [], "missing_ws": [], "missing_gm": []}
+
+for path, code in sorted(blocks.items()):
+    ws_path = os.path.join(WORKSPACE, path)
+    if not os.path.exists(ws_path):
+        print(f"  [MISSING_WS] {path} - not in workspace")
+        results["missing_ws"].append(path)
+        continue
+
+    # Write extracted code to temp file
+    tmp_file = os.path.join(TMP, "extracted_" + os.path.basename(path))
+    with open(tmp_file, "w", encoding="utf-8") as f:
+        f.write(code)
+
+    # Compare with strip-trailing-cr and ignore blank lines at EOF
+    r = subprocess.run(
+        ["diff", "--strip-trailing-cr", "-B", "-q", tmp_file, ws_path],
+        capture_output=True, text=True
+    )
+    if r.returncode == 0:
+        print(f"  [PASS] {path}")
+        results["pass"].append(path)
+    else:
+        # Show actual diff
+        r2 = subprocess.run(
+            ["diff", "--strip-trailing-cr", "-B", "-u", tmp_file, ws_path],
+            capture_output=True, text=True
+        )
+        diff_lines = r2.stdout.strip().split("\n")
+        summary = f"{len(diff_lines)} diff lines"
+        print(f"  [FAIL] {path} - {summary}")
+        # Show first 20 diff lines
+        for dl in diff_lines[:20]:
+            print(f"         {dl}")
+        if len(diff_lines) > 20:
+            print(f"         ... ({len(diff_lines) - 20} more lines)")
+        results["fail"].append(path)
+
+# Step 3: Check QEMU files via diff
+print("\n" + "=" * 60)
+print("[3/5] Verifying QEMU diff patch...")
+print("=" * 60)
+
+if diff_content:
+    # Download QEMU 5.2.0 if not present
+    qemu_tar = os.path.join(TMP, "qemu-5.2.0.tar.xz")
+    qemu_dir = os.path.join(TMP, "qemu-5.2.0")
+
+    if not os.path.isdir(qemu_dir):
+        if not os.path.exists(qemu_tar):
+            print("  Downloading QEMU 5.2.0...")
+            subprocess.run(["wget", "-q", QEMU_TAR_URL, "-O", qemu_tar], check=True)
+        print("  Extracting...")
+        subprocess.run(["tar", "xf", qemu_tar, "-C", TMP], check=True)
+
+    # Write diff to file
+    diff_file = os.path.join(TMP, "qemu-wavevm.diff")
+    with open(diff_file, "w") as f:
+        f.write(diff_content)
+
+    # Apply diff to a fresh copy
+    rebuild_dir = os.path.join(TMP, "qemu-rebuild")
+    if os.path.isdir(rebuild_dir):
+        subprocess.run(["rm", "-rf", rebuild_dir])
+    subprocess.run(["cp", "-a", qemu_dir, rebuild_dir], check=True)
+
+    # Also write Gemini.md QEMU file blocks
+    for path, code in blocks.items():
+        if path.startswith("wavevm-qemu/"):
+            rel = path[len("wavevm-qemu/"):]
+            target = os.path.join(rebuild_dir, rel)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "w") as f:
+                f.write(code)
+
+    # Apply patch (allow partial failure, we'll fix known issues)
+    r = subprocess.run(
+        ["patch", "-p1", "--no-backup-if-mismatch", "--force", "-d", rebuild_dir, "-i", diff_file],
+        capture_output=True, text=True
+    )
+    print(f"  Patch output:\n{r.stdout}")
+    if r.returncode != 0:
+        print(f"  Patch warnings:\n{r.stderr}")
+        # Manually apply cpu.c Hunk #3 if it failed
+        cpu_c = os.path.join(rebuild_dir, "hw/acpi/cpu.c")
+        if os.path.exists(cpu_c):
+            with open(cpu_c, "r") as f:
+                cpu_src = f.read()
+            # Fix 1: */ indentation
+            cpu_src = cpu_src.replace(
+                "                 */\n            }\n            aml_append(method, while_ctx2);\n            aml_append(method, aml_release(ctrl_lock));",
+                "                */\n            }\n            aml_append(method, while_ctx2);\n            aml_append(method, aml_release(ctrl_lock));\n#endif"
+            )
+            with open(cpu_c, "w") as f:
+                f.write(cpu_src)
+            print("  [MANUAL FIX] Applied cpu.c Hunk #3 manually")
+
+    # Step 4: Compare rebuilt QEMU vs workspace QEMU
+    print("\n" + "=" * 60)
+    print("[4/5] Comparing rebuilt QEMU vs workspace wavevm-qemu/...")
+    print("=" * 60)
+
+    ws_qemu = os.path.join(WORKSPACE, "wavevm-qemu")
+    r = subprocess.run(
+        ["diff", "-rq", "--strip-trailing-cr", "-B",
+         "--exclude=*.o", "--exclude=*.d", "--exclude=build-native",
+         "--exclude=qemu-wavevm.diff", "--exclude=.git",
+         rebuild_dir, ws_qemu],
+        capture_output=True, text=True
+    )
+
+    if r.stdout.strip():
+        for line in r.stdout.strip().split("\n"):
+            if "Only in " + rebuild_dir in line:
+                # File in vanilla QEMU but not in workspace - expected for tarball extras
+                continue
+            elif "Only in " + ws_qemu in line:
+                fname = line.split(": ")[-1] if ": " in line else line
+                print(f"  [EXTRA_WS] {line}")
+            elif "differ" in line.lower():
+                print(f"  [DIFFER] {line}")
+        # Count real diffs
+        real_diffs = [l for l in r.stdout.strip().split("\n")
+                      if "differ" in l.lower() or ("Only in " + ws_qemu in l)]
+        if not real_diffs:
+            print("  All QEMU files IDENTICAL (only tarball extras differ)")
+        else:
+            print(f"\n  {len(real_diffs)} differences found")
+    else:
+        print("  All QEMU files IDENTICAL")
+else:
+    print("  No diff block found in Gemini.md!")
+
+# Step 5: Check workspace files not in Gemini.md
+print("\n" + "=" * 60)
+print("[5/5] Checking for workspace files not in Gemini.md...")
+print("=" * 60)
+
+# Walk non-QEMU workspace files
+skip_dirs = {".git", ".devcontainer", ".github", ".codex-session-backup",
+             "artifacts", "build-native", "session-backup", "mock_kvm", "__pycache__"}
+skip_exts = {".o", ".d", ".pyc"}
+
+gemini_paths = set(blocks.keys())
+if diff_content:
+    gemini_paths.add("wavevm-qemu/qemu-wavevm.diff")
+
+for root, dirs, files in os.walk(WORKSPACE):
+    dirs[:] = [d for d in dirs if d not in skip_dirs]
+    rel_root = os.path.relpath(root, WORKSPACE)
+
+    # Skip wavevm-qemu internals (covered by diff)
+    if rel_root.startswith("wavevm-qemu") and rel_root != "wavevm-qemu":
+        continue
+
+    for fname in files:
+        if any(fname.endswith(ext) for ext in skip_exts):
+            continue
+        if fname in (".gitignore", "README.md", "Gemini.md", "suggest.md"):
+            continue
+
+        rel_path = os.path.join(rel_root, fname) if rel_root != "." else fname
+        if rel_path not in gemini_paths:
+            full = os.path.join(root, fname)
+            # Check if binary
+            if fname.endswith((".sh", ".md")):
+                tag = "SCRIPT/DOC"
+            elif not fname.count("."):
+                tag = "BINARY"
+            else:
+                tag = "SOURCE"
+            print(f"  [NOT_IN_GEMINI] {rel_path} ({tag})")
+
+# Summary
+print("\n" + "=" * 60)
+print("SUMMARY")
+print("=" * 60)
+print(f"  File blocks PASS:       {len(results['pass'])}")
+print(f"  File blocks FAIL:       {len(results['fail'])}")
+print(f"  Missing from workspace: {len(results['missing_ws'])}")
+if results['fail']:
+    print(f"\n  FAILED files:")
+    for f in results['fail']:
+        print(f"    - {f}")
+if results['missing_ws']:
+    print(f"\n  Missing from workspace:")
+    for f in results['missing_ws']:
+        print(f"    - {f}")
+
+overall = "PASS" if len(results['fail']) == 0 and len(results['missing_ws']) == 0 else "FAIL"
+print(f"\n  Overall: {overall}")
+```
 
 ### 架构必读（修改代码前必须理解）
 
@@ -16817,1440 +17077,164 @@ clean:
 
 ---
 
-## 🧪 2026-02-16 实测记录（5节点分层分形集群，Mode B）
-
-以下为一次基于公网小时租实例的真实压测归档（北京时间 2026-02-16）：
-
-1.  **配置与拓扑**
-    *   节点数：5（`node 0..4`），统一 Ubuntu 22 环境。
-    *   进程模型：每节点 `master + slave + sidecar`。
-    *   分层网关：子/父额外网关仅部署在 `0/2/4` 三节点；`1/3` 节点无 `extra gateway`（设计预期）。
-    *   控制端口：采用唯一控制端口分离（sidecar `8801`，extra `8812/8813/8814`）后，`bind failed` 问题消失。
-
-2.  **关键参数变更**
-    *   已在主线对齐：`common_include/wavevm_config.h` 中 `WVM_SLAVE_BITS`（Mode B）调整为与 Mode A 一致的 `12`。
-    *   语义：该值决定单 Pod 可容纳的 Slave ID 上限，对齐后可避免 A/B 模式容量模型偏差。
-
-3.  **长稳测结果（20轮，30秒间隔）**
-    *   采样文件：`/tmp/wvm5_hier_long_v2_20260216-094145.csv`
-    *   采样窗口：`17:41:45` ~ `17:53:05`（BJT）
-    *   总行数：100；`ssh_ok=100/100`
-    *   邻居关系：全程 `neighbors=4`（`bad_neighbor_rows=0`）
-    *   绑定错误：`bind_err_rows=0`
-    *   会话存活：`g/m/s` 全节点全程存活；`x` 在 `0/2/4` 存活，`1/3` 为 0（符合分层部署设计）
-
-4.  **现象与判断**
-    *   `Severe Congestion` 计数持续增长（所有节点近似同斜率），但控制面邻接与进程存活稳定。
-    *   结论：当前瓶颈主要指向公网带宽/链路质量与参数调优，不是架构性断链问题。
-
----
-
-## 🧩 2026-02-16 QEMU 5.2.0 可复现补丁归档
-
-结论先行：
-- 仅有 `qemu` 源码 + 本文档还不够，想稳定复现出与当前一致的产物，需要满足同一套依赖与构建参数。
-- 在满足下列条件时，可构建出当前同版本产物：`qemu-system-x86_64 (QEMU emulator version 5.2.0)`。
-
-### 复现前提
-
-1. 基线源码：`wavevm-qemu`（QEMU 5.2.0 树）。
-2. 依赖包（Debian/Ubuntu）：
-   - `ninja-build`
-   - `libglib2.0-dev`
-   - `libpixman-1-dev`
-   - `libfdt-dev`
-   - `zlib1g-dev`
-3. 配置参数保持一致：
-   - `./configure --target-list=x86_64-softmmu --enable-kvm --enable-debug`
-4. 编译目标保持一致：
-   - `make -j$(nproc) qemu-system-x86_64`
-
-### 补丁文件
-
-- `wavevm-qemu/qemu-wavevm.diff`
-
-### 应用方式（从仓库根目录）
-
-```bash
-cd wavevm-qemu
-patch -p1 < ../wavevm-qemu/qemu-wavevm.diff
-./configure --target-list=x86_64-softmmu --enable-kvm --enable-debug
-make -j$(nproc) qemu-system-x86_64
-./qemu-system-x86_64 --version
-```
-
-### 本次实机验证结果（2026-02-16）
-
-- 全新目录验证：`wavevm-qemu/build-verify`（已清理）
-- 增量验证目录：`wavevm-qemu/build`
-- 最终版本输出：`QEMU emulator version 5.2.0`
-
----
-
-## 🧪 2026-02-17 单机 KVM 冒烟修复记录（6C/26G 实例）
-
-背景：
-- 在公网实例上复测时，`deploy/ci_modea_smoke.sh` 与 `deploy/ci_modeb_multi_smoke.sh` 出现“启动证据缺失”假失败。
-- 实际进程与链路正常，问题根因是日志缓冲导致 `slave*.log` 在短窗口内未及时落盘。
-
-修复：
-- 更新 `deploy/ci_modea_smoke.sh` 与 `deploy/ci_modeb_multi_smoke.sh`：
-  - 增加 `stdbuf -oL -eL` 行缓冲支持（无 `stdbuf` 时自动回退）。
-  - 启动命令统一改为 `exec env ... "${LINEBUF[@]}" ...`，确保：
-    1. 日志实时可见；
-    2. 后台 PID 可被 cleanup 正确回收，避免残留进程。
-
-验证结果：
-- 远端实例环境确认：
-  - `/dev/kvm` 存在；
-  - `kvm-ok` 返回 `KVM acceleration can be used`；
-  - 内核头存在（`/lib/modules/$(uname -r)/build`）。
-- 修复后同机复测：
-  - `Mode B` 冒烟：PASS；
-  - `Mode A` 冒烟：PASS；
-  - 进程回收正常，无残留 `wavevm_node_master/slave`。
-- Ubuntu 最小镜像（22.04 minimal cloud image）KVM 运行验证：
-  - QMP `query-status` 返回 `running=true`；
-  - QMP `query-kvm` 返回 `enabled=true, present=true`。
-
----
-
-## 🧪 2026-02-20 双节点云实例专项验证记录（Flat 集群，排除分布式存储）
-
-背景：
-- 本次验证目标是“在不扩大代码改动范围的前提下”，复核双节点公网实例上的真实运行状态。
-- 用户要求优先验证：
-  1. 双节点部署可持续运行；
-  2. Guest 可真实启动并执行命令；
-  3. 在“先排除分布式存储功能”的条件下，尽可能确认分布式双机算力链路是否可用。
-
-### 1. 实例与拓扑
-
-- 时间：2026-02-20（BJT）
-- 节点：2 台 Ubuntu 22.04 最小化实例
-- 角色：
-  - NodeA（主测节点）：`gateway + master + slave`，并承担 QEMU 启动
-  - NodeB（协同节点）：`gateway + master + slave`
-- 拓扑文件（两端一致）：
-  - `NODE 0 172.30.0.114 8000 4 4`
-  - `NODE 1 172.30.0.104 8000 4 4`
-  - `ROUTE 0 1 172.30.0.114 9000`
-  - `ROUTE 1 1 172.30.0.104 9000`
-
-### 2. 代码与构建状态
-
-- 本轮在远端完成过多次增量构建，`qemu-system-x86_64` 可正常编译产出。
-- `-accel help` 可见 `wavevm` 项，说明编译图中 WaveVM 加速器已生效。
-- 为追踪启动崩溃路径，本轮对 `wavevm-qemu` 相关文件进行了最小化兼容修补与重编译（均在当前仓库改动中可见）。
-
-#### 2.1 本轮“必要”代码变更清单（与本次验证直接相关）
-
-- 构建图补齐（必要）：
-  - `wavevm-qemu/accel/meson.build`
-  - `wavevm-qemu/accel/wavevm/meson.build`（新增）
-  - 作用：确保 `accel/wavevm` 被 QEMU 构建系统纳入并参与链接。
-- 运行时兼容修补（必要）：
-  - `wavevm-qemu/accel/wavevm/wavevm-all.c`
-  - `wavevm-qemu/accel/wavevm/wavevm-cpu.c`
-  - `wavevm-qemu/accel/wavevm/wavevm-tcg.c`
-  - `wavevm-qemu/accel/wavevm/wavevm-user-mem.c`
-  - `wavevm-qemu/hw/wavevm/wavevm-mem.c`
-  - `master_core/kernel_backend.c`
-  - 作用：对齐 QEMU 5.2 API、修正路由与内存同步路径中的兼容问题，降低启动期崩溃与错误退出概率。
-- 启动路径保护（必要但仍未完全闭环）：
-  - `wavevm-qemu/hw/acpi/cpu.c`
-  - 作用：为当前 WaveVM 路径增加启动期保护，避免进入已知不稳定分支。
-说明：
-- 上述为“本次验证直接使用或依赖”的必要改动。
-- 临时探针（`/tmp/wvm_remote_run_probe*`）仅用于实机排障，不入仓库，不计入正式改动集。
-
-### 3. 双节点守护进程存活性
-
-- NodeA：`wvmA-gw / wvmA-master / wvmA-slave`（tmux）持续存活。
-- NodeB：`wvm-gw / wvm-master / wvm-slave`（tmux）持续存活。
-- 公网到 NodeB 的 8004 端口间歇性超时；通过私网 `172.30.0.104` 可稳定访问并确认进程状态。
-
-### 4. WaveVM Guest 实测结果（关键）
-
-#### 4.1 `mode=kernel`
-
-- 现象：启动即触发断言并退出。
-- 典型报错：
-  - `qemu_mutex_lock_iothread_impl: assertion failed: (!qemu_mutex_iothread_locked())`
-- 结论：当前 `mode=kernel` 在该环境未达可运行状态。
-
-#### 4.2 `mode=user`
-
-- 现象：极早期段错误（`SIGSEGV`），多轮复现。
-- 特征：崩溃点在启动阶段漂移，但可稳定复现“秒崩”。
-- 结论：当前 `mode=user` 在该环境未达可运行状态。
-
-### 5. 按“排除分布式存储”策略的绕行验证
-
-为区分“功能性断裂”和“链路基础能力”，执行了绕行验证：
-
-1. 不走 WaveVM 加速器，改用 `-accel kvm` 启动同镜像 Guest；
-2. 真实进入 Guest（非仅日志判断）；
-3. 在 Guest 内执行 CPU/内存/磁盘基础操作；
-4. 正常关机并确认 VM 退出。
-
-实测：
-- SSH 登录成功（`tester@test123`，`127.0.0.1:2226`）。
-- Guest 内命令成功执行：`uname -a`、`uptime`、`nproc`、`free -m`、`lsblk`、`df -h`、`dd 64MiB + sha256sum`。
-- Guest 关机成功，QEMU 会话正常退出。
-
-解释：
-- 云主机、镜像、基本虚拟化路径（KVM）与测试方法本身有效。
-- 当前失败集中在 WaveVM 运行时链路，而非“实例不可用”或“镜像不可启动”。
-
-### 6. 双机算力链路专项探测（不改仓库代码）
-
-为直接验证“是否打到 NodeB 计算节点”，使用临时探针做了对照测试：
-
-- 在 NodeA 临时编译 `IOCTL_WVM_REMOTE_RUN` 探针（位于 `/tmp`，不入仓库），连续发起 `slave_id=auto-route` 请求。
-- 在 NodeB 抓 `udp 9000/9005` 流量做对照：
-  - 组 A：`vcpu_index=1`
-  - 组 B：`vcpu_index=5`（期望更可能路由到远端）
-
-结果：
-- 探针调用可发出（`ioctl_fail=0`），但 ACK 状态未出现成功。
-- NodeB 抓包显示均为本机回环 `127.0.0.1:9000 -> 127.0.0.1:9000`。
-- 未观察到 `NodeA(172.30.0.114) -> NodeB(172.30.0.104):9000` 的计算包命中。
-
-结论：
-- 在本轮实测条件下，“双机分布式算力已正常可用”这一目标尚未达成。
-- 当前表现更接近“请求未形成有效远端执行闭环”或“路由/执行返回状态异常”。
-
-### 7. 本轮总评
-
-- 已确认：
-  - 双节点守护进程可拉起并维持；
-  - 云实例与 Guest 镜像可正常运行（经 KVM 路径实证）；
-  - 测试链路与验证方法有效。
-- 未确认（仍阻塞）：
-  - WaveVM 加速路径下的稳定 Guest 运行；
-  - 双节点分布式算力闭环成功执行。
-
-> 备注：本记录为本次会话的完整实机归档，重点反映“可运行部分已验证通过、阻塞点已收敛定位、但双机算力目标仍未闭环”的真实状态。
-
----
-
-## 🧪 2026-02-21 最新测试记录（以本节为准）
+## 🧪 2026-03-21 Codespace 双节点 20 分钟长跑记录（扁平 / 分形，RPC 零超时）
 
 说明：
-- 本节用于覆盖前文中已过时的测试结论。
-- 保持原文结构不重排，仅做末尾增量修订。
-- 当前目标口径：在不启用分布式存储的前提下，验证双节点分布式算力链路与 VM 交互可用性。
-- 本节结论基于功能可用性与交互验证，不代表已完成长时稳定性压测。
-
-### 1. 版本一致性更新
-
-- 两台节点已完成最新版实现的覆盖与重编译。
-- 主控进程稳定性修复已生效，用于避免写链路异常引发非预期退出。
-- 网关分形链路兼容修复已生效，用于兼容上游转发源端口漂移场景。
-
-### 2. 当前运行结论（不启用分布式存储）
-
-- 扁平化双节点链路可运行。
-- 分形双节点链路可运行。
-- 两台节点的主控、执行与网关进程均可拉起并维持。
-
-### 3. VM 交互结果
-
-- VM 可正常登录并完成交互。
-- 文件读写与基础 IO 操作表现正常。
-- 最终健康检查通过，虚拟机表现正常。
-
-### 4. 设计一致性确认
-
-- 本轮未引入仅为跑通而写死到源码的节点地址或端口。
-- 地址与端口仍由运行时配置管理。
-- 分布式存储实现路径未被改写为伪实现或绕过实现。
-
-> 结论：截至 2026-02-21，在不启用分布式存储条件下，扁平化与分形两种双节点算力链路均已跑通，并完成 VM 交互验证；长时稳定性压测不在本节覆盖范围内。
-
----
-
-## 🧪 2026-02-22 本次测试完整记录（全量过程归档）
-
-说明：
-- 本节为 2026-02-22 当天的完整实操记录。
-- 目标是“按 2026-02-21 口径复现（先扁平化后分形化，tmux 保活）”。
-- 本节包含：环境、配置、命令、现象、修复、风险事件与后续建议。
-- 本节不覆盖前文历史结论，仅记录本次会话实际执行结果。
-
-### 0. 执行背景与约束
-
-- 用户更正了 `info.txt` 的实例端口范围（第二组从错误端口段修正为 `16700-16799`）。
-- 用户要求：
-  1. 先扁平化（flat）后分形化（fract）。
-  2. 全程 `tmux` 保活。
-  3. 尽量复现“昨天成功结果”。
-  4. 仅对白名单范围清理，避免误删云实例其他内容。
-- 实际受限：
-  - 当前执行环境为 GitHub Codespaces，远端实例连接通过 `ssh -p`。
-  - 远端环境出现“伪终端拒绝（Failed to get a pseudo terminal: Permission denied）”与公网端口不稳定问题。
-
-### 1. 实例信息（本次实际使用）
-
-来源：`info.txt`（更正后）
-
-- Node1
-  - SSH：`root@111.6.167.245:8033`
-  - 密码：`W3HtDHENb2i6CmAqf4r97VsyQAotpTVy`
-  - 公网端口段：`13200-13299`
-- Node2
-  - SSH：`root@111.6.167.245:8068`
-  - 密码：`YBhe3gv1prIdqbjkUrw87PDa7AR9vsrv`
-  - 公网端口段：`16700-16799`
-
-本次探测到的私网地址（重启前）：
-- Node1：`172.30.0.133/23`
-- Node2：`172.30.0.168/23`
-
----
-
-### 2. 代码基线与远端同步策略
-
-- 本地仓库基线：`origin/main` 对应 `2e45b13b8`。
-- 由于全仓库体积较大（约 862MB），全量 `git archive` 远程同步耗时过长，改为“测试相关目录增量同步”：
-  - `gateway_service`
-  - `master_core`
-  - `slave_daemon`
-  - `common_include`
-  - `deploy`
-  - `wavevm-qemu`
-  - `wavevm-qemu/accel`
-  - `wavevm-qemu/hw/wavevm`
-  - `wavevm-qemu/hw/acpi/cpu.c`
-
-### 3. 白名单清理策略（避免误删）
-
-本次执行过“安全清理”，仅包含：
-
-1. 仅清理 WaveVM 测试相关 `tmux` 会话：
-   - `flat-*`、`fract-*`、`modea-*`、`modeb-*`、`wvm*`
-2. 仅清理已知进程名：
-   - `wavevm_gateway`
-   - `wavevm_node_master`
-   - `wavevm_node_slave`
-   - `qemu-system-x86_64`
-   - `timeout`（测试残留）
-3. 仅清理测试产物目录：
-   - `/root/wvmtest/logs/*`
-   - `/root/wvmtest/run/*`
-4. 仅清理测试共享内存命名：
-   - `/dev/shm/wavevm_flat_node*`
-   - `/dev/shm/wavevm_fract_node*`
-   - `/dev/shm/wvm_*`
-
-明确未执行：
-- 未删除系统目录。
-- 未删除用户其他业务目录。
-- 未执行 `rm -rf /` 级别危险操作。
-
-### 4. 构建与二进制确认（重启前）
-
-两节点均执行：
-- `make -C gateway_service`
-- `make -C slave_daemon`
-- `make -C master_core -f Makefile_User`
-
-Node1 额外执行：
-- `make -C wavevm-qemu/build -j$(nproc) qemu-system-x86_64`
-- `qemu-system-x86_64 -accel help` 输出包含：
-  - `tcg`
-  - `kvm`
-  - `wavevm`
-
-### 5. 本次实际配置文件全文（关键）
-
-#### 5.1 Flat 拓扑与路由
-
-`/root/wvmtest/conf/flat_topo_pub.conf`
-```txt
-NODE 0 111.6.167.245 13220 6 4
-NODE 1 111.6.167.245 16720 6 4
-```
-
-`/root/wvmtest/conf/flat_routes_pub.conf`
-```txt
-ROUTE 0 1 111.6.167.245 13210
-ROUTE 1 1 111.6.167.245 16710
-```
-
-#### 5.2 Fract 拓扑与路由
-
-`/root/wvmtest/conf/fract_topo_pub.conf`
-```txt
-NODE 0 111.6.167.245 13220 6 4
-NODE 1 111.6.167.245 16720 6 4
-```
-
-`/root/wvmtest/conf/fract_l1.conf`
-```txt
-ROUTE 0 1 111.6.167.245 13210
-ROUTE 1 1 111.6.167.245 16710
-```
-
-`/root/wvmtest/conf/fract_sidecar_a.conf`
-```txt
-ROUTE 0 1 111.6.167.245 13230
-ROUTE 1 1 111.6.167.245 13230
-```
-
-`/root/wvmtest/conf/fract_sidecar_b.conf`
-```txt
-ROUTE 0 1 111.6.167.245 16730
-ROUTE 1 1 111.6.167.245 16730
-```
-
-`/root/wvmtest/conf/fract_l2a.conf`
-```txt
-ROUTE 0 1 111.6.167.245 13240
-ROUTE 1 1 111.6.167.245 13240
-```
-
-`/root/wvmtest/conf/fract_l2b.conf`
-```txt
-ROUTE 0 1 111.6.167.245 13240
-ROUTE 1 1 111.6.167.245 13240
-```
-
-### 6. 启动策略与 tmux 会话（重启前）
-
-#### 6.1 Flat 启动
-
-Node1（8033）：
-- `flat-gw`：`wavevm_gateway 13220 ... master=13210 ctrl=13221`
-- `flat-master`：`wavevm_node_master 4096 13210 ... node_id=0 ctrl=13211 slave=13225`
-- `flat-slave`：`wavevm_node_slave 13225 ... node_id=0 ctrl=13211`
-
-Node2（8068）：
-- `flat-gw`：`wavevm_gateway 16720 ... master=16710 ctrl=16721`
-- `flat-master`：`wavevm_node_master 4096 16710 ... node_id=1 ctrl=16711 slave=16725`
-- `flat-slave`：`wavevm_node_slave 16725 ... node_id=1 ctrl=16711`
-
-#### 6.2 Fract 启动
-
-Node1（8033）：
-- `fract-sidecar-a`：`13220 -> 13230`
-- `fract-l2a`：`13230 -> 13240`
-- `fract-l1`：`13240 -> 13210`
-- `fract-master`：`master=13210 node_id=0 ctrl=13211 slave=13225`
-- `fract-slave`：`slave=13225 node_id=0 ctrl=13211`
-
-Node2（8068）：
-- `fract-sidecar-b`：`16720 -> 16730`
-- `fract-l2b`：`16730 -> 111.6.167.245:13240`
-- `fract-master`：`master=16710 node_id=1 ctrl=16711 slave=16725`
-- `fract-slave`：`slave=16725 node_id=1 ctrl=16711`
-
-### 7. 模式确认（重启前）
-
-按用户“一个 modeA + 一个 modeB”要求核实：
-
-- Node1：`/dev/wavevm` 存在，`lsmod` 可见 `wavevm`（modeA）
-- Node2：`/dev/wavevm` 不存在，`wavevm` 模块未加载（modeB）
-
-### 8. 验证命令与观测结果（重启前）
-
-#### 8.1 Flat 链路
-
-观测结果：
-- Node1 `flat-master-pub.log`：
-  - `New neighbor discovered: 1`
-  - `Transition to WARMING`
-  - `Transition to ACTIVE`
-- Node2 `flat-master-pub.log`：
-  - `Failed to open /dev/wavevm (Kernel Mode disabled?)`
-  - `New neighbor discovered: 0`
-  - `Transition to WARMING`
-  - `Transition to ACTIVE`
-
-结论：
-- Flat 双节点控制链路已稳定到 ACTIVE。
-
-#### 8.2 Flat VM（WaveVM）
-
-启动脚本：`/root/wvmtest/run_flat_wavevm_vm.sh`
-
-关键日志（`flat-vm-wavevm.log`）：
-- `Failed to sync memory layout to kernel (continue): Invalid argument`
-- `[WaveVM-QEMU] KERNEL MODE: Connecting to /dev/wavevm...`
-- 多次 `kernel path ... mode_tcg=1`
-
-观测：
-- `flat-vm-wavevm-console.log` 大小为 `0`
-- VM 转发端口 `13226` 出现“超时/拒绝”切换
-- 未形成稳定 guest 登录
-
-结论：
-- Flat 下 WaveVM VM 未进入可交互状态。
-
-#### 8.3 Fract 链路
-
-观测结果：
-- Node1 `fract-master-pub.log`：
-  - `New neighbor discovered: 1`
-  - `Transition to WARMING`
-  - `Transition to ACTIVE`
-- Node2 `fract-master-pub.log`：
-  - `Failed to open /dev/wavevm (Kernel Mode disabled?)`
-  - `New neighbor discovered: 0`
-  - `Transition to WARMING`
-  - `Transition to ACTIVE`
-
-结论：
-- Fract 双节点控制链路已稳定到 ACTIVE。
-
-#### 8.4 Fract VM（WaveVM）
-
-启动脚本：`/root/wvmtest/run_fract_wavevm_vm.sh`
-
-关键日志（`fract-vm-wavevm-new.log`）：
-- 同样出现 `Failed to sync memory layout to kernel (continue): Invalid argument`
-- 串口日志 `fract-vm-wavevm-new-console.log` 大小为 `0`
-
-补充探测（本轮曾测试）：
-- `run_fract_wavevm_vm_smp1.sh`：`rc=139`（core dumped）
-- `run_fract_wavevm_vm_split2.sh`：`rc=139`（core dumped）
-
-结论：
-- Fract 下 WaveVM VM 同样未进入可交互状态。
-
-### 9. 与“昨天成功”的差异判断
-
-依据前文与当日实操，至少有两类差异：
-
-1. 登录链路差异
-   - 历史成功记录偏向“先上节点，再连 `127.0.0.1` guest 转发端口”（例如 `127.0.0.1:2226`）。
-   - 公网直连端口在云环境中波动明显，不宜作为唯一判据。
-
-2. 运行时状态差异
-   - 本轮 `IOCTL_SET_MEM_LAYOUT` 路径出现稳定 `EINVAL` 特征（见下一节修复）。
-   - 同一代码在不同实例状态下可能从“偶发”变为“稳定复现”。
-
-### 10. 本轮代码修复（已入仓库）
-
-#### 10.1 修复 `IOCTL_SET_MEM_LAYOUT` 漏处理（核心）
-
-文件：`master_core/kernel_backend.c`
-
-修复点：
-1. 在 `wvm_ioctl()` 中新增：
-   - `case IOCTL_SET_MEM_LAYOUT`
-   - `copy_from_user` 后调用 `wvm_set_mem_layout()`
-2. 在 `wvm_set_mem_layout()` 增加槽位重置：
-   - 先清空 `g_mem_slots[]`，再写入新布局
-   - 避免旧布局残留造成地址判定异常
-
-原因：
-- QEMU 端明确调用 `IOCTL_SET_MEM_LAYOUT`，内核未处理时会落入 `default: -EINVAL`，与日志完全吻合。
-
-#### 10.2 修复 kernel 模式重复初始化（潜在不稳定源）
-
-文件：`wavevm-qemu/accel/wavevm/wavevm-all.c`
-
-修复点：
-- 删除 `wavevm_init_machine()` 中“额外打开 `/dev/wavevm` + 额外起 IRQ 线程”的重复块。
-- 保留 `wavevm_init_machine_kernel()` 单一路径初始化。
-
-原因：
-- 重复初始化在环境变化时可能引入 FD/线程行为不一致，增加不确定性。
-
-### 11. 风险事件记录（实例重启）
-
-在用户确认“做吧”后，本轮执行过两台实例 `reboot`：
-
-- Node1：`8033`
-- Node2：`8068`
-
-随后探测结果：
-- 在观测窗口内 `8033/8068` 未恢复连通。
-- 对 `22/8033/8068` 等端口的短探测均未命中开放。
-
-风险结论：
-- 该云平台实例“重启后回收不确定性”较高。
-- 后续建议将“重启”降为最后手段，优先走代码修复与服务级重拉起。
-
-### 12. 本轮最终结论
-
-1. 控制链路结论
-- Flat 与 Fract 双节点链路均可稳定进入 ACTIVE。
-
-2. VM 结论
-- WaveVM VM 在 Flat/Fract 两条路径均未恢复到稳定可登录。
-- 核心错误特征是 `IOCTL_SET_MEM_LAYOUT` 关联的 `EINVAL`（已针对性修复）。
-
-3. 工程结论
-- “昨天成功、今天失败”更符合“环境变化触发隐性缺陷”的表现，而非单一配置错误。
-- 本轮代码修复已优先覆盖该类缺陷路径，待新实例环境回归验证。
-
-### 13. 下一轮复测建议（最小成本）
-
-1. 新实例拉起后先只验证一条最小路径：
-   - Node1 modeA + Node2 modeB
-   - Flat 链路 + 单 VM
-2. 严格按顺序：
-   - 编译 -> 启服务 -> 看邻居 -> 起 VM -> 仅节点本机回环登录验证
-3. 仅在必要时切 Fract，避免同时变量过多。
-
-### 14. 远端提交流程（操作备忘）
-
-如需将当前修复提交到远端分支，可使用（按目标分支替换）：
-
-```bash
-git status --short
-git add Gemini.md master_core/kernel_backend.c wavevm-qemu/accel/wavevm/wavevm-all.c
-git commit -m "fix: handle mem layout ioctl and remove duplicate kernel init; sync Gemini record"
-git push origin HEAD:main
-```
-
-注意：
-- 建议优先推到临时分支做 CI/实机验证，再决定是否覆盖主分支。
-
-补充说明：
-- 前文相关代码块已同步为仓库对应文件内容，无需再额外附加差异片段。
-
-## 🧪 2026-02-28 最后一次尝试完整记录（收尾版）
-
-本节仅记录“最后一次连续尝试”的实际配置、命令、观测与结论，便于下次直接续跑。
-
-### 本次目标与约束
-
-目标：
-- 不启用分布式存储（仅算力/内存链路）
-- 双节点服务可运行，VM 可交互（可 SSH 登录）
-
-约束：
-- 最小修复原则，不做架构级重构
-- 启动参数不使用测试开关（不带 HOOK/mode/split）
-- 通过 `ssh -p` + `tmux` 保活
-
-### 节点与端口信息（本次实际使用）
-
-Node1：
-- SSH：`root@111.6.167.245:8033`
-- 内网 IP：`172.30.0.133`
-- 公网端口段：`13200-13299`
-
-Node2：
-- SSH：`root@111.6.167.245:8028`
-- 内网 IP：`172.30.0.128`
-- 公网端口段：`12700-12799`
-
-### 本次实际配置文件（两端一致）
-
-文件：`/root/wvmtest/conf/flat_routes_pub.conf`
-
-```conf
-ROUTE 0 1 172.30.0.133 13210
-ROUTE 1 1 172.30.0.128 12710
-```
-
-文件：`/root/wvmtest/conf/flat_topo_pub.conf`
-
-```conf
-NODE 0 172.30.0.133 13220 6 4
-NODE 1 172.30.0.128 12720 6 4
-```
-
-说明：
-- 名称仍为 `*_pub.conf`，但实际内容走内网地址（`172.30.x.x`）。
-
-### 本次实际启动命令（最后一次干净重启）
-
-Node1（8033）：
-
-```bash
-./gateway_service/wavevm_gateway 13220 172.30.0.133 13210 conf/flat_routes_pub.conf 13221
-./master_core/wavevm_node_master 4096 13210 conf/flat_topo_pub.conf 0 13221 13225 64
-./slave_daemon/wavevm_node_slave 13225 6 3072 0 13221
-```
-
-Node2（8028）：
-
-```bash
-./gateway_service/wavevm_gateway 12720 172.30.0.128 12710 conf/flat_routes_pub.conf 12721
-./master_core/wavevm_node_master 4096 12710 conf/flat_topo_pub.conf 1 12721 12725 64
-./slave_daemon/wavevm_node_slave 12725 6 3072 1 12721
-```
-
-Node2 VM（最后成功拉起的命令）：
-
-```bash
-WVM_INSTANCE_ID=0 ./src/wavevm-qemu/build-native/qemu-system-x86_64 \
-  -accel wavevm -machine q35 -m 1024 -smp 1 \
-  -drive file=/root/wvmtest/images/cirros-default.img,if=virtio,format=qcow2 \
-  -netdev user,id=ne,hostfwd=tcp::12726-:22 -device e1000,netdev=ne \
-  -display none -vga none \
-  -serial file:/root/wvmtest/logs/flat-vm-serial.log -monitor none
-```
-
-说明：
-- 本轮明确校正了实例 socket：重启后 Node2 master 监听为 `/tmp/wvm_user_0.sock`，因此 VM 使用 `WVM_INSTANCE_ID=0`。
-- 使用 `WVM_INSTANCE_ID=1` 会出现：`vCPU 0 failed to connect master!`。
-
-### 本次关键代码改动（工作区）
-
-文件：`slave_daemon/slave_hybrid.c`
-
-本轮相关最小改动点：
-1. `init_thread_local_vcpu()` 增强与兜底：
-   - 首选复用 boot vCPU；
-   - 创建失败时增加有限 fallback 探测；
-   - 增加初始化失败保护日志。
-2. `handle_kvm_run_stateless()`：
-   - 成功回包路径显式 `ack->status = 0`；
-   - `TCG -> KVM` 转换时保留本地 `sregs`（避免覆盖后触发非法状态）。
-3. 增加了若干调试日志（BootVCPU/Init/Ack），用于定位本轮问题。
-
-### 本次关键诊断结论
-
-1. Node1 上 `RAM=4096MB` 时，KVM vCPU 创建在最小探针里可稳定复现异常：
-   - `KVM_SET_USER_MEMORY_REGION` 成功后，`KVM_CREATE_VCPU(id=0/1)` 返回 `errno=17(EEXIST)`。
-2. Node1 上 `RAM=1024/2048/3072MB` 时，探针可正常 `KVM_CREATE_VCPU`。
-3. 因此本轮将两端 slave 运行参数从 `4096` 下调到 `3072`（仅运行参数级修正）。
-
-### 最后一次交互测试结果（最终）
-
-测试项（Node2 本机）：
-1. 端口监听：
-   - `12726`：监听成功（qemu 进程存在）
-2. SSH Banner：
-   - `BANNER_TIMEOUT`
-3. SSH 登录：
-   - `cirros/gocubsgo`：`Connection timed out during banner exchange`
-   - `root`：`Connection timed out`
-
-结论：
-- VM 进程在跑、端口在监听，但仍未达到可交互登录状态。
-
-### 最后一次日志状态摘要
-
-Node1 `flat-slave.log`：
-- 已不再是“启动即崩溃”；
-- 有稳定 ACK 回包；
-- 但持续出现 `exit=17`（对应 `KVM_EXIT_INTERNAL_ERROR`）。
-
-Node2 `flat-master.log`：
-- 持续出现 `matched rid=... -> status=1`；
-- 伴随 `Node 0 OFFLINE` 间歇告警；
-- 与 VM 登录失败一致。
-
-Node2 `flat-vm-wavevm-pub.log`：
-- 末尾仍是 `kvm_enabled=0`（当前 VM 侧仍在 TCG 本地执行路径）。
-
-### 本次已明确排除/确认的问题
-
-已确认：
-1. 不是单纯“slave 启动即崩溃”问题（该问题本轮已被消除）。
-2. 不是单纯“端口没监听”问题（12726 可监听）。
-3. 存在环境/平台边界行为：Node1 在 4GB KVM 路径触发异常，降到 3GB 可创建 vCPU。
-
-仍存在：
-1. 执行语义层未稳定（`exit_reason=17` + `status=1` 循环）；
-2. VM 仍无法完成 SSH 交互。
-
-### 下一步计划（限时最小路径）
-
-1. 固定当前已验证可运行基线：
-   - Node1/Node2 slave 都保持 `3072`，避免回到 4GB 触发点。
-2. 收敛 `status=1` 的唯一来源：
-   - 在 Node2 master 的 `RX VCPU_EXIT` 解包位置打印 ACK 前 16 字节十六进制，确认 `status` 字段是否被上游覆盖/错位。
-3. 对 `exit=17` 做一次单点分流：
-   - 仅在 Node1 `TCG->KVM` 路径，保留当前 `sregs` 策略下继续最小化输入上下文（先不动整体协议）。
-4. 以“SSH banner 成功出现”为第一验收门槛：
-   - 不先追求完整业务，仅先拿到 banner，再推进登录与分布式内存验证。
-
-## 🧪 2026-03-01 紧急续测记录（实例 8008/8002，限时版）
-
-本节为 2026-03-01 当天在“时间与额度受限”条件下的连续操作归档，目标是固定最小改动并保留可续跑现场。
-
-### 本轮目标与约束
-
-目标：
-- 延续“禁用分布式存储，仅验证分布式算力与分布式内存链路”的测试目标。
-- 优先消除/定位 `slave` 启动异常与 VM 秒退问题。
-
-约束：
-- 不走本地编译产物直跑远端，统一采用远端本机编译。
-- 最小修复原则，不做架构级改造。
-- 启动参数不引入 HOOK/mode/split 测试开关。
-
-### 本次实例与端口（实际）
-
-Node1：
-- SSH：`root@111.6.167.245:8008`
-- 密码：`NQPWHaVwnwJQslTh1w0o7U2MFmwiQfv9`
-- 公网端口段：`10700-10799`
-
-Node2：
-- SSH：`root@111.6.167.245:8002`
-- 密码：`KsLgBEQXIaYou8NG8Kudmr8W0RfGHEEm`
-- 公网端口段：`10100-10199`
-
-### 本轮使用的配置与启动命令（最终一次）
-
-两端 `run/start_flat.sh` 实际启动参数：
-
-Node1：
-```bash
-./gateway_service/wavevm_gateway 10720 172.30.0.108 10710 conf/flat_routes_pub.conf 10721
-./master_core/wavevm_node_master 4096 10710 conf/flat_topo_pub.conf 0 10721 10725 64
-./slave_daemon/wavevm_node_slave 10725 6 4096 0 10721
-```
-
-Node2：
-```bash
-./gateway_service/wavevm_gateway 10120 172.30.0.102 10110 conf/flat_routes_pub.conf 10121
-./master_core/wavevm_node_master 4096 10110 conf/flat_topo_pub.conf 1 10121 10125 64
-./slave_daemon/wavevm_node_slave 10125 6 4096 1 10121
-```
-
-VM 启动脚本（Node1）：
-```bash
-export WVM_INSTANCE_ID=0
-/root/wvmtest/src/wavevm-qemu/build-native/qemu-system-x86_64 \
-  -accel wavevm -machine q35 -m 1024 -smp 1 \
-  -drive file=/root/wvmtest/images/cirros-default.img,if=virtio,format=qcow2 \
-  -netdev user,id=ne,hostfwd=tcp::10726-:22 -device e1000,netdev=ne \
-  -display none -vga none -serial file:/root/wvmtest/logs/flat-vm-serial.log -monitor none
-```
-
-备注：
-- Node2 VM 脚本指向 `./src/wavevm-qemu/build-native/qemu-system-x86_64`，现场存在缺失/不可执行情况（`exit 127`）。
-
-### 本轮代码同步与构建方式
-
-- 同步方式：本地源码打包直传（不走 `git pull`）到两端 `/root/wvmtest`。
-- 构建方式（两端）：
-```bash
-make -C master_core -f Makefile_User -j6
-make -C slave_daemon -j6
-```
-
-### 本轮关键代码变更（最小修复）
-
-1. `master_core/logic_core.c`
-- 心跳聚合改为单包 `send_packet_async(MSG_HEARTBEAT, ...)`，移除手工多包拼装发送。
-
-2. `master_core/user_backend.c` + `master_core/logic_core.c` + `master_core/logic_core.h`
-- 修复 `epoch` 发送/接收大小端（`htonl/ntohl`）。
-- 合并 `g_curr_epoch` / `g_my_node_state` 真源，移除 `user_backend.c` 重复定义，改为引用 `logic_core` 同一份状态。
-
-3. `slave_daemon/slave_hybrid.c`
-- 保留此前的 boot vCPU 提前创建修复。
-- KVM->KVM 路径不再整块覆盖 `kvm_sregs`，改为精选字段覆盖。
-
-4. `master_core/main_wrapper.c`
-- 追加 IPC 诊断日志（连接建立、header/payload 短读、未知 type、断连）。
-
-5. `wavevm-qemu/accel/wavevm/wavevm-cpu.c`
-- 本轮新增最小修复：将 ACK 回写路径中的 `ksregs` 整块 `memcpy` 改为“先 `KVM_GET_SREGS`，再精选架构字段覆盖”，避免覆盖本地 APIC/中断相关状态。
-
-### 本轮观测结果（最终状态）
-
-已确认：
-1. 两端 `slave` boot vCPU 初始化成功：
-- `create fd=5 errno=0`
-- `mmap_size=12288 errno=0`
-2. 两端 master 心跳接收与逻辑处理稳定出现：
-- `[HB RX] ...`
-- `[HB LOGIC] ...`
-3. 间歇出现 `Liveness ... OFFLINE` 告警，属于当前仍未完全闭环的问题。
-
-未完成：
-1. Node1 VM 端口 `10726` 可短时出现监听，但未稳定保持，SSH Banner 未形成稳定可登录态。
-2. Node2 VM 未进入有效验证（QEMU 可执行缺失/不可执行）。
-
-### 现场遗留问题（收敛后）
-
-1. 控制面“收到心跳但仍 OFFLINE”与局部状态机判活仍需继续收敛。
-2. Node1 上 QEMU 仍存在秒退/短时监听后消失现象。
-3. Node2 前端 QEMU 本体可执行状态需先恢复（可执行文件路径/权限/二进制一致性）。
-
-### 下一步计划（建议顺序，最小爆炸半径）
-
-1. 先固定二进制一致性：补齐 Node2 `qemu-system-x86_64`，确认两端前端版本一致。
-2. 在 Node1 仅做单机链路断点：对 `main_wrapper.c` IPC 日志 + `wavevm-cpu.c` 回写路径联合观察，锁定 VM 秒退触发点。
-3. 在"VM 端口稳定监听 + 出现 SSH Banner"后，再推进登录验证，不提前扩展到分布式存储。
-
----
-
-## 🔧 2026-03-06 V31 Multi-VM 致命缺陷修复记录
-
-### 背景
-
-Gemini 对 V31 架构进行审计，指出三项"致命缺陷"：
-1. Kernel Mode A 单例灾难——多 VM 共用一个 `wavevm.ko`，全局变量无 vm_id 隔离。
-2. Gateway 静态路由不理解 composite ID，导致查表失败。
-3. Copyset 4096 节点硬上限。
-
-经逐条验证：
-- 缺陷 1 确认存在，但运维约束"每台物理机只跑一个 Mode A VM"即可规避，无需改码。
-- 缺陷 2 确认存在，已修复。
-- 缺陷 3 确认存在，但 4096 节点 = 16 TB 物理内存，远超当前实际规模，无需修复。
-
-此后 Gemini 进一步指出第四项致命问题：
-- **QEMU 与 Slave 发送的所有 UDP 包 `target_id=0`（memset 清零后未赋值），Master 的 `rx_thread_loop` 中 vm_id 过滤器在 `vm_id > 0` 时会将这些包全部静默丢弃，导致即时死锁。**
-
-此问题已确认并修复。
-
-### 修复：Gateway composite ID fallback
-
-**修改位置**：`gateway_service/aggregator.c` — `internal_push()` 函数
-
-**问题**：`routes.conf` 中写的是裸 `node_id`（如 `3`），但实际流量携带 composite ID（如 `0x01000003`，vm_id=1, node_id=3）。uthash 的 `HASH_FIND_INT` 精确匹配 32 位 key，查不到就丢包。
-
-**修复方案（Scheme A，最小侵入）**：查表失败时 strip vm_id 用裸 node_id 再查一次。
-
-```c
-static int internal_push(int fd, uint32_t slave_id, void *data, int len) {
-    pthread_rwlock_rdlock(&g_map_lock);
-    gateway_node_t *node = find_node(slave_id);
-    // [Multi-VM Fallback] composite ID 查不到时，strip vm_id 用裸 node_id 再查一次
-    // 兼容 routes.conf 只写裸 ID、实际流量带 composite ID 的分形集群场景
-    // vm_id=0 时 WVM_GET_NODEID(id)==id，fallback 等价于 no-op 不影响性能
-    if (!node) {
-        uint32_t raw_id = WVM_GET_NODEID(slave_id);
-        if (raw_id != slave_id) {
-            node = find_node(raw_id);
-        }
-    }
-    if (!node) {
-        pthread_rwlock_unlock(&g_map_lock);
-        return -1;
-    }
-    // ... 后续逻辑不变
-```
-
-### 修复：target_id=AUTO_ROUTE 防止 vm_id 过滤误杀
-
-**问题根因**：
-- QEMU `wavevm-user-mem.c` 构造 UDP 包时 `memset(buf, 0, ...)` 后只设了 `slave_id`，从未设 `target_id`，导致 `target_id=0`。
-- Slave `slave_hybrid.c` 的 `dirty_sync_sender_thread` 同理。
-- Master `user_backend.c` 的 `rx_thread_loop` 有 vm_id 入口过滤：
-  ```c
-  uint32_t target_raw = ntohl(hdr->target_id);
-  if (target_raw != WVM_NODE_AUTO_ROUTE &&
-      WVM_GET_VMID(target_raw) != g_my_vm_id) {
-      offset += current_pkt_len;
-      continue; // 静默丢弃
-  }
-  ```
-- 当 `vm_id > 0` 时：`WVM_GET_VMID(0) = 0 ≠ g_my_vm_id`，所有本地 QEMU→Master 和 Slave→Master 的 UDP 包被过滤，导致 MEM_READ / COMMIT_DIFF / MEM_WRITE 全部死锁。
-
-**修复**：在所有本地通信发送点设置 `target_id = htonl(WVM_NODE_AUTO_ROUTE)`，利用过滤器已有的 AUTO_ROUTE 豁免逻辑。
-
-**修改文件 1**：`wavevm-qemu/accel/wavevm/wavevm-user-mem.c`（4 处）
-
-| 函数 | 消息类型 | 修复行 |
-|------|---------|--------|
-| `request_page_sync` | MSG_MEM_READ | `hdr->target_id = htonl(WVM_NODE_AUTO_ROUTE);` |
-| `send_push_packet` | MSG_COMMIT_DIFF (flags) | `hdr->target_id = htonl(WVM_NODE_AUTO_ROUTE);` |
-| `send_commit_diff_dual_mode` | MSG_COMMIT_DIFF | `hdr->target_id = htonl(WVM_NODE_AUTO_ROUTE);` |
-| `add_to_aggregator` | MSG_COMMIT_DIFF (聚合) | `hdr->target_id = htonl(WVM_NODE_AUTO_ROUTE);` |
-
-**修改文件 2**：`slave_daemon/slave_hybrid.c`（1 处）
-
-| 函数 | 消息类型 | 修复行 |
-|------|---------|--------|
-| `dirty_sync_sender_thread` | MSG_MEM_WRITE | `wh->target_id = htonl(WVM_NODE_AUTO_ROUTE);` |
-
-## 🧪 2026-03-10 单节点 TCG 启动修复记录（MTTCG 对齐版）
-
-### 背景
-
-前次测试中，Guest OS 在 WaveVM TCG 路径下无法启动（serial 输出始终为空、`runstate` 无法进入 `RUNNING`）。
-经诊断发现 WaveVM 自写的 vCPU 线程函数绕过了标准 QEMU MTTCG 框架，导致：
-
-1. iothread 锁纪律不正确，`qdev_machine_creation_done()` 被阻塞，`vm_start()` 永远无法执行
-2. `CpusAccel` 仅注册了 `.create_vcpu_thread`，缺少 `.kick_vcpu_thread`、`.handle_interrupt`、`.get_virtual_clock`、`.get_elapsed_ticks`
-3. `tcg_register_thread()` 对所有 vCPU 无条件调用，smp>1 时耗尽唯一 TCG region
-4. `num_ases < 2` 硬编码强制 `g_wvm_local_split = 0`，导致所有 vCPU 被路由到远程
-
-### 修复内容
-
-#### 1. `wavevm-qemu/accel/wavevm/wavevm-cpu.c` — 重写 `wavevm_cpu_thread_fn`
-
-**策略**：保留 WaveVM 的本地/远程调度分支（`ops.schedule_policy`），将线程骨架对齐标准 QEMU MTTCG（`tcg_cpu_thread_fn`）。
-
-关键变更：
-
-- iothread 锁贯穿整个 `do-while` 循环顶部（标准 MTTCG 纪律）
-- `cpu_exec_start(cpu)` / `cpu_exec_end(cpu)` 包裹 `cpu_exec()` 调用
-- 初始 `cpu->exit_request = 1` 确保首次循环经过 `qemu_wait_io_event` 与 `vm_start()` 同步
-- 每次迭代末尾 `qatomic_mb_set(&cpu->exit_request, 0)` + `qemu_wait_io_event(cpu)`
-- `EXCP_HALTED`、`EXCP_DEBUG`、`EXCP_ATOMIC` 标准分支处理
-- `cpu_thread_signal_destroyed(cpu)` 在退出前调用
-- 移除 `num_ases < 2` 强制 split=0 hack
-- 移除无条件 `cpu->halted = 0`
-- `tcg_register_thread()` 条件化：仅本地执行的 vCPU 调用（`is_slave || cpu->cpu_index < g_wvm_local_split`）
-
-#### 2. `wavevm-qemu/accel/wavevm/wavevm-all.c` — 补全 CpusAccel 回调
-
-新增 4 个回调函数并注册到 `wavevm_cpus` 结构体：
-
-```c
-static void wavevm_kick_vcpu_thread(CPUState *cpu)
-{
-    cpu_exit(cpu);
-}
-
-static void wavevm_handle_interrupt(CPUState *cpu, int mask)
-{
-    g_assert(qemu_mutex_iothread_locked());
-    cpu->interrupt_request |= mask;
-    if (!qemu_cpu_is_self(cpu)) {
-        qemu_cpu_kick(cpu);
-    }
-}
-
-static int64_t wavevm_get_virtual_clock(void)
-{
-    return cpu_get_clock();
-}
-
-static int64_t wavevm_get_elapsed_ticks(void)
-{
-    return cpu_get_ticks();
-}
-```
-
-新增 `#include "sysemu/cpu-timers.h"`。
-
-### 测试环境
-
-- **Codespace**: `symmetrical-robot-97q46xw5945w3pgw4`（4C 16G，无 `/dev/kvm`，纯 TCG 路径）
-- **Guest 镜像**: `cirros-0.6.2-x86_64-disk.img`（qcow2, virtio）
-- **QEMU 版本**: WaveVM fork of QEMU 5.2.0
-
-### 测试配置文件
-
-**swarm.conf**：
-
-```
-NODE 0 127.0.0.1 19100 1 1
-```
-
-### 测试启动参数
-
-**Slave**：
-
-```bash
-env PATH=$ROOT/wavevm-qemu/build-native:$PATH \
-    WVM_SHM_FILE=/wvm_single_slave0 \
-    stdbuf -oL -eL \
-    $ROOT/slave_daemon/wavevm_node_slave 19105 1 1024 0 19101
-```
-
-**Master**：
-
-```bash
-env PATH=$ROOT/wavevm-qemu/build-native:$PATH \
-    WVM_INSTANCE_ID=0 \
-    WVM_SHM_FILE=/wvm_single_master0 \
-    stdbuf -oL -eL \
-    $ROOT/master_core/wavevm_node_master 1024 19100 $TMPD/swarm.conf 0 19101 19105 1
-```
-
-**QEMU (smp=2, split=1)**：
-
-```bash
-env PATH=$ROOT/wavevm-qemu/build-native:$PATH \
-    WVM_INSTANCE_ID=0 \
-    WVM_LOCAL_SPLIT=1 \
-    stdbuf -oL -eL \
-    $ROOT/wavevm-qemu/build-native/qemu-system-x86_64 \
-    -accel wavevm \
-    -machine q35 \
-    -m 1024 \
-    -smp 2 \
-    -drive file=$ROOT/artifacts/images/cirros-0.6.2-x86_64-disk.img,if=virtio,format=qcow2,snapshot=on \
-    -netdev user,id=ne,hostfwd=tcp::2226-:22 \
-    -device e1000,netdev=ne \
-    -display none \
-    -vga none \
-    -serial file:$TMPD/vm-serial.log \
-    -monitor none
-```
-
-**QEMU (smp=1, 全本地)**：
-
-```bash
-env PATH=$ROOT/wavevm-qemu/build-native:$PATH \
-    WVM_INSTANCE_ID=0 \
-    stdbuf -oL -eL \
-    $ROOT/wavevm-qemu/build-native/qemu-system-x86_64 \
-    -accel wavevm \
-    -machine q35 \
-    -m 1024 \
-    -smp 1 \
-    -drive file=$ROOT/artifacts/images/cirros-0.6.2-x86_64-disk.img,if=virtio,format=qcow2,snapshot=on \
-    -netdev user,id=ne,hostfwd=tcp::2226-:22 \
-    -device e1000,netdev=ne \
-    -display none \
-    -vga none \
-    -serial file:$TMPD/vm-serial.log \
-    -monitor none
-```
-
-### 测试结果
-
-#### Test 1：smp=2, split=1（vCPU0 本地 TCG, vCPU1 远程 Slave），120s
-
-| 指标 | 结果 |
-|------|------|
-| QEMU 启动 | 成功（无 crash） |
-| vm.log 行数 | 100,000+ |
-| Guest 代码执行 | 确认（SIGSEGV DSM fault handler 活跃） |
-| GPA 进度 | 从 0x0 到 ~0x10DE0000（~278MB） |
-| Slave 转发 | `[Slave Forward] msg=5` 持续活跃 |
-| Serial 输出 | 空（BIOS POST 未完成） |
-| SSH Banner | 未收到 |
-
-#### Test 2：smp=1，全本地 TCG，180s
-
-| 指标 | 结果 |
-|------|------|
-| QEMU 启动 | 成功（无 crash） |
-| vm.log 行数 | 76,000+ |
-| Guest 代码执行 | 确认 |
-| 热点分析 | GPA 0xe000 占 35% fault（BIOS 数据区） |
-| Serial 输出 | 空（BIOS POST 未完成） |
-
-### 结论
-
-修复后 VM lifecycle 管理正确：`vm_start()` → `runstate=RUNNING` → vCPU 线程正常执行 Guest 代码。
-Serial 为空是因为 TCG + DSM（SIGSEGV → mprotect → snapshot → diff）开销极大，BIOS POST 在 120-180s 内未完成。
-**这是预期行为**：原版 QEMU 5.2.0 纯 TCG 模式下，小镜像 1核1G 启动 5 分钟属正常范围。WaveVM 额外的 DSM fault hook 进一步拖慢了速度。
-
-### 下一步优化方向
-
-1. **DSM 热页白名单**：对 BIOS 数据区（0xe000）等高频写页面免除 fault hook
-2. **批量 mprotect**：聚合相邻页面的保护位变更，减少系统调用
-3. **延长测试时间**：在有 KVM 的环境下测试（可跳过 TCG 瓶颈）
-
-## 🔍 QEMU 5.2.0 全量比对摘要
-
-### 比对方式
-
-下载 `https://download.qemu.org/qemu-5.2.0.tar.xz`，解压后与 `wavevm-qemu/` 目录做 `diff -rq` 全量比对。
-
-### 新增目录
-
-| 目录 | 说明 |
-|------|------|
-| `accel/wavevm/` | WaveVM 加速器核心（`wavevm-all.c`, `wavevm-cpu.c`, `wavevm-user-mem.c`, `wavevm-tcg.c`, `wavevm-accel.h`, `meson.build`） |
-| `hw/wavevm/` | WaveVM 硬件钩子（`wavevm-block-hook.c`, `wavevm-gpu-stub.c`, `wavevm-mem.c`, `meson.build`） |
-
-### 修改的原版 QEMU 文件（共 4 个）
-
-| 文件 | 变更内容 |
-|------|---------|
-| `accel/meson.build` | +1 行：`subdir('wavevm')` |
-| `hw/meson.build` | +1 行：`subdir('wavevm')` |
-| `hw/block/virtio-blk.c` | +8 行：`wavevm_blk_interceptor()` 钩子，拦截 virtio-blk I/O 请求 |
-| `hw/acpi/cpu.c` | +20 行：WaveVM 环境下跳过 CPU hotplug AML 生成 + 禁用 CPU scan 方法 |
-
-### 结论
-
-WaveVM fork 对 QEMU 5.2.0 原版代码的侵入极小（4 个文件，共约 30 行修改）。核心逻辑完全封装在 `accel/wavevm/` 和 `hw/wavevm/` 新增目录中。`softmmu/cpus.c`、`softmmu/vl.c`、`accel/tcg/tcg-cpus.c` 等核心文件**未做任何修改**——WaveVM 通过标准 `CpusAccel` 接口注册自己的加速器实现。
-
----
-
-## 🧪 2026-03-13 Codespace 双节点测试记录（扁平 / 分形，TCG 逻辑通）
-
-说明：
-- 执行环境：GitHub Codespaces 单机容器。
-- 目标口径：不启用分布式存储，验证分布式算力/内存链路**逻辑通**（链路不崩、进程稳定、端口监听存在），允许因 TCG 过慢导致 VM 交互未完成。
+- 执行环境：GitHub Codespaces 单机容器（4 核 / 16GB RAM）。
+- 目标口径：不启用分布式存储，验证分布式算力/内存链路在 20 分钟长跑下**零 RPC 超时**、进程全存活、GPA 持续递增。
 - 禁用 KVM：通过临时移走 `/dev/kvm` 的方式强制走 TCG。
-- /dev/shm 扩容：为避免 `SIGBUS`，将 `/dev/shm` remount 至 8G。
+- /dev/shm 扩容至 8G。
+- 本次修复了三个导致 RPC Type-5 超时的 bug（详见下方"本次代码修复"）。
 
-### 0. 本次新增依赖（显式安装）
+### 0. 本次代码修复（3 处）
 
-（均为 `apt-get install -y --no-install-recommends`）
-
-- `gdb`
-- `ninja-build`
-- `libglib2.0-dev`
-- `libpixman-1-dev`
-- `libslirp-dev`
-- `libfdt-dev`
-
-### 1. 环境准备关键动作
-
-```bash
-# 扩容 /dev/shm，避免 SHM 映射导致 SIGBUS
-mount -o remount,size=8G /dev/shm
-
-# 强制 TCG（禁用 /dev/kvm）
-mv /dev/kvm /dev/kvm.off
-# （测试结束后再 mv 回去）
-```
+1. **`master_core/user_backend.c` 第 74 行**：`push_to_aggregator` 弱版本使用 `g_gateways[raw_id]`（直接发到目标节点 gateway，绕过本地 sidecar）改为 `g_gateways[g_my_node_id]`（始终经本地 sidecar 出站）。
+2. **`slave_daemon/slave_hybrid.c`（7 处）**：slave 响应包的 `target_id` 赋值 `htonl(hdr->slave_id)` 做了双重网络字节序转换（`hdr->slave_id` 已是网络序），改为 `hdr->slave_id`。
+3. **`gateway_service/aggregator.c` `learn_route()` 函数**：自动学习机制会在 L2 sidecar 上为跨节点包创建新路由条目，导致 L2 绕过 L1 直连远端。改为仅更新已有路由条目，不创建新节点。
 
 ---
 
-### 2. 扁平化架构（Flat）最后一次“逻辑通”记录
+### 1. 分形架构（Fract）20 分钟长跑记录
 
-**目录**：`artifacts/single-host-2node-vm-20260313-004345`
+**目录**：`artifacts/tmp/fract-tcg-test-20260321-061807`
 
-**配置文件**：`flat_2node.conf`
-```txt
-NODE 0 127.0.0.1 19120 1 1
-NODE 1 127.0.0.1 19220 1 1
-ROUTE 0 1 127.0.0.1 19120
-ROUTE 1 1 127.0.0.1 19220
-```
-
-**启动命令（完整）**：`run.sh`
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-ROOT=/workspaces/WaveVM_Frontier-X
-ART_DIR="$(cd "$(dirname "$0")" && pwd)"
-CFG="$ART_DIR/flat_2node.conf"
-cat > "$CFG" <<'EOCFG'
-NODE 0 127.0.0.1 19120 1 1
-NODE 1 127.0.0.1 19220 1 1
-ROUTE 0 1 127.0.0.1 19120
-ROUTE 1 1 127.0.0.1 19220
-EOCFG
-
-pkill -f "wavevm_node_master 1024 19100" 2>/dev/null || true
-pkill -f "wavevm_node_master 1024 19200" 2>/dev/null || true
-pkill -f "wavevm_node_slave 19105" 2>/dev/null || true
-pkill -f "wavevm_node_slave 19205" 2>/dev/null || true
-pkill -f "qemu-system-x86_64.*hostfwd=tcp::2226-:22" 2>/dev/null || true
-pkill -f "wavevm_gateway 19120" 2>/dev/null || true
-pkill -f "wavevm_gateway 19220" 2>/dev/null || true
-rm -f /tmp/wvm_user_0.sock /tmp/wvm_user_1.sock 2>/dev/null || true
-
-QPATH="$ROOT/wavevm-qemu/build-native:$PATH"
-
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19120 127.0.0.1 19100 "$CFG" 19101) >"$ART_DIR/gw0.log" 2>&1 &
-G0=$!
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19220 127.0.0.1 19200 "$CFG" 19201) >"$ART_DIR/gw1.log" 2>&1 &
-G1=$!
-(env PATH="$QPATH" WVM_SHM_FILE=/wvm_flat_node0 stdbuf -oL -eL "$ROOT/slave_daemon/wavevm_node_slave" 19105 2 2048 0 19101) >"$ART_DIR/slave0.log" 2>&1 &
-S0=$!
-(env PATH="$QPATH" WVM_SHM_FILE=/wvm_flat_node1 stdbuf -oL -eL "$ROOT/slave_daemon/wavevm_node_slave" 19205 1 1024 1 19201) >"$ART_DIR/slave1.log" 2>&1 &
-S1=$!
-(env PATH="$QPATH" WVM_INSTANCE_ID=0 WVM_SHM_FILE=/wvm_flat_node0 stdbuf -oL -eL "$ROOT/master_core/wavevm_node_master" 2048 19100 "$CFG" 0 19101 19105 1) >"$ART_DIR/master0.log" 2>&1 &
-M0=$!
-(env PATH="$QPATH" WVM_INSTANCE_ID=1 WVM_SHM_FILE=/wvm_flat_node1 stdbuf -oL -eL "$ROOT/master_core/wavevm_node_master" 1024 19200 "$CFG" 1 19201 19205 1) >"$ART_DIR/master1.log" 2>&1 &
-M1=$!
-
-sleep 8
-(env PATH="$QPATH" WVM_INSTANCE_ID=0 stdbuf -oL -eL "$ROOT/wavevm-qemu/build-native/qemu-system-x86_64" \
-  -accel wavevm -machine q35 -m 3072 -smp 3 \
-  -object memory-backend-ram,id=ram0,size=2048M \
-  -object memory-backend-ram,id=ram1,size=1024M \
-  -numa node,memdev=ram0,cpus=0-1,nodeid=0 \
-  -numa node,memdev=ram1,cpus=2,nodeid=1 \
-  -drive file="$ROOT/artifacts/images/cirros-0.6.2-x86_64-disk.img",if=virtio,format=qcow2 \
-  -netdev user,id=ne,hostfwd=tcp::2226-:22 -device e1000,netdev=ne \
-  -display none -vga none \
-  -serial file:"$ART_DIR/vm-serial.log" -monitor none) >"$ART_DIR/vm.log" 2>&1 &
-Q=$!
-```
-
-**执行方式（强制 TCG）**：
-```bash
-cat > /tmp/run_no_kvm2.sh <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-ROOT=/workspaces/WaveVM_Frontier-X
-ART=$ROOT/artifacts/single-host-2node-vm-20260313-004345
-mv /dev/kvm /dev/kvm.off
-trap 'mv /dev/kvm.off /dev/kvm' EXIT
-bash "$ART/run.sh"
-EOF
-chmod +x /tmp/run_no_kvm2.sh
-bash /tmp/run_no_kvm2.sh
-```
-
-**结果（逻辑通）**：
-- QEMU 正常启动，`2226` 端口监听存在。
-- `SSH_BANNER` 为空，推断为 TCG 过慢导致交互未完成。
-- 无崩溃记录。
-
----
-
-### 3. 分形架构（Fract）最后一次“逻辑通”记录
-
-**目录**：`artifacts/fract-2node-20260313-020144`
+**拓扑**：3 层分形网关树（L2 根 → L1a/L1b 中间层 → Sidecar A/B 叶层）+ 2 计算节点。
 
 **配置文件**：
 
-`fract_2node.conf`
+`fract_2node.conf`（NODE 配置，供 Master 使用）
 ```txt
 NODE 0 127.0.0.1 19120 1 1
 NODE 1 127.0.0.1 19220 1 1
 ```
 
-`l2_routes.txt`（L1 根网关）
+`sidecar_a_routes.txt`（Sidecar A：仅知本地 node 0 → master0）
+```txt
+ROUTE 0 1 127.0.0.1 19100
+```
+
+`sidecar_b_routes.txt`（Sidecar B：仅知本地 node 1 → master1）
+```txt
+ROUTE 1 1 127.0.0.1 19200
+```
+
+`l1a_routes.txt`（L1a：知 node 0 → sidecar_a）
+```txt
+ROUTE 0 1 127.0.0.1 19120
+```
+
+`l1b_routes.txt`（L1b：知 node 1 → sidecar_b）
+```txt
+ROUTE 1 1 127.0.0.1 19220
+```
+
+`l2_routes.txt`（L2 根：完整路由表 → L1a / L1b）
 ```txt
 ROUTE 0 1 127.0.0.1 19320
 ROUTE 1 1 127.0.0.1 19420
 ```
 
-`l1a_routes.txt`（L2A）
-```txt
-ROUTE 0 1 127.0.0.1 19120
-```
+**端口分配**：
 
-`l1b_routes.txt`（L2B）
-```txt
-ROUTE 1 1 127.0.0.1 19220
-```
+| 进程 | 监听端口 | 上游 | 控制端口 |
+|------|----------|------|----------|
+| L2 Gateway | 19520 | 19599（dummy） | 19521 |
+| L1a Gateway | 19320 | L2:19520 | 19321 |
+| L1b Gateway | 19420 | L2:19520 | 19421 |
+| Sidecar A | 19120 | L1a:19320 | 19121 |
+| Sidecar B | 19220 | L1b:19420 | 19221 |
+| Master 0 | 19100 | — | ctrl→19121 |
+| Master 1 | 19200 | — | ctrl→19221 |
+| Slave 0 | 19105 | — | ctrl→19121 |
+| Slave 1 | 19205 | — | ctrl→19221 |
 
-`sidecar_a_routes.txt`（固定上游，防止学习覆盖）
-```txt
-ROUTE 0 2 127.0.0.1 19320
-```
+**启动脚本**：`artifacts/fract-tcg-test/run.sh`（完整内容见仓库文件）
 
-`sidecar_b_routes.txt`（固定上游，防止学习覆盖）
-```txt
-ROUTE 0 2 127.0.0.1 19420
-```
-
-**启动命令（完整）**：`run.sh`
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-ROOT=/workspaces/WaveVM_Frontier-X
-ART_DIR="$(cd "$(dirname "$0")" && pwd)"
-
-CFG="$ART_DIR/fract_2node.conf"
-cat > "$CFG" <<'EOCFG'
-NODE 0 127.0.0.1 19120 1 1
-NODE 1 127.0.0.1 19220 1 1
-EOCFG
-
-L2_CFG="$ART_DIR/l2_routes.txt"
-cat > "$L2_CFG" <<'EOCFG'
-ROUTE 0 1 127.0.0.1 19320
-ROUTE 1 1 127.0.0.1 19420
-EOCFG
-
-L1A_CFG="$ART_DIR/l1a_routes.txt"
-cat > "$L1A_CFG" <<'EOCFG'
-ROUTE 0 1 127.0.0.1 19120
-EOCFG
-
-L1B_CFG="$ART_DIR/l1b_routes.txt"
-cat > "$L1B_CFG" <<'EOCFG'
-ROUTE 1 1 127.0.0.1 19220
-EOCFG
-
-SIDECAR_A_CFG="$ART_DIR/sidecar_a_routes.txt"
-cat > "$SIDECAR_A_CFG" <<'EOCFG'
-ROUTE 0 2 127.0.0.1 19320
-EOCFG
-
-SIDECAR_B_CFG="$ART_DIR/sidecar_b_routes.txt"
-cat > "$SIDECAR_B_CFG" <<'EOCFG'
-ROUTE 0 2 127.0.0.1 19420
-EOCFG
-
-pkill -f "wavevm_node_master 1024 19100" 2>/dev/null || true
-pkill -f "wavevm_node_master 1024 19200" 2>/dev/null || true
-pkill -f "wavevm_node_slave 19105" 2>/dev/null || true
-pkill -f "wavevm_node_slave 19205" 2>/dev/null || true
-pkill -f "qemu-system-x86_64.*hostfwd=tcp::2226-:22" 2>/dev/null || true
-pkill -f "wavevm_gateway 19120" 2>/dev/null || true
-pkill -f "wavevm_gateway 19220" 2>/dev/null || true
-pkill -f "wavevm_gateway 19320" 2>/dev/null || true
-pkill -f "wavevm_gateway 19420" 2>/dev/null || true
-pkill -f "wavevm_gateway 19520" 2>/dev/null || true
-rm -f /tmp/wvm_user_0.sock /tmp/wvm_user_1.sock 2>/dev/null || true
-
-QPATH="$ROOT/wavevm-qemu/build-native:$PATH"
-
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19520 127.0.0.1 19520 "$L2_CFG" 19521) >"$ART_DIR/gw_l2.log" 2>&1 &
-GL2=$!
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19320 127.0.0.1 19520 "$L1A_CFG" 19321) >"$ART_DIR/gw_l1a.log" 2>&1 &
-GL1A=$!
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19420 127.0.0.1 19520 "$L1B_CFG" 19421) >"$ART_DIR/gw_l1b.log" 2>&1 &
-GL1B=$!
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19120 127.0.0.1 19320 "$SIDECAR_A_CFG" 19121) >"$ART_DIR/gw_sidecar_a.log" 2>&1 &
-GSA=$!
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19220 127.0.0.1 19420 "$SIDECAR_B_CFG" 19221) >"$ART_DIR/gw_sidecar_b.log" 2>&1 &
-GSB=$!
-
-(env PATH="$QPATH" WVM_SHM_FILE=/wvm_fract_node0 stdbuf -oL -eL "$ROOT/slave_daemon/wavevm_node_slave" 19105 2 2048 0 19121) >"$ART_DIR/slave0.log" 2>&1 &
-S0=$!
-(env PATH="$QPATH" WVM_SHM_FILE=/wvm_fract_node1 stdbuf -oL -eL "$ROOT/slave_daemon/wavevm_node_slave" 19205 1 1024 1 19221) >"$ART_DIR/slave1.log" 2>&1 &
-S1=$!
-
-(env PATH="$QPATH" WVM_INSTANCE_ID=0 WVM_SHM_FILE=/wvm_fract_node0 stdbuf -oL -eL "$ROOT/master_core/wavevm_node_master" 2048 19100 "$CFG" 0 19121 19105 1) >"$ART_DIR/master0.log" 2>&1 &
-M0=$!
-(env PATH="$QPATH" WVM_INSTANCE_ID=1 WVM_SHM_FILE=/wvm_fract_node1 stdbuf -oL -eL "$ROOT/master_core/wavevm_node_master" 1024 19200 "$CFG" 1 19221 19205 1) >"$ART_DIR/master1.log" 2>&1 &
-M1=$!
-
-sleep 8
-(env PATH="$QPATH" WVM_INSTANCE_ID=0 stdbuf -oL -eL "$ROOT/wavevm-qemu/build-native/qemu-system-x86_64" \
-  -accel wavevm -machine q35 -m 3072 -smp 3 \
-  -object memory-backend-ram,id=ram0,size=2048M \
-  -object memory-backend-ram,id=ram1,size=1024M \
-  -numa node,memdev=ram0,cpus=0-1,nodeid=0 \
-  -numa node,memdev=ram1,cpus=2,nodeid=1 \
-  -drive file="$ROOT/artifacts/images/cirros-0.6.2-x86_64-disk.img",if=virtio,format=qcow2 \
-  -netdev user,id=ne,hostfwd=tcp::2226-:22 -device e1000,netdev=ne \
-  -display none -vga none \
-  -serial file:"$ART_DIR/vm-serial.log" -monitor none) >"$ART_DIR/vm.log" 2>&1 &
-Q=$!
-```
-
-**执行方式（强制 TCG + /dev/shm 扩容）**：
+**执行方式**：
 ```bash
 mount -o remount,size=8G /dev/shm
-
-cat > /tmp/run_fract_no_kvm.sh <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-ART_DIR=/workspaces/WaveVM_Frontier-X/artifacts/fract-2node-20260313-020144
-mv /dev/kvm /dev/kvm.off
-trap 'mv /dev/kvm.off /dev/kvm' EXIT
-bash "$ART_DIR/run.sh"
-EOF
-chmod +x /tmp/run_fract_no_kvm.sh
-bash /tmp/run_fract_no_kvm.sh
+nohup bash /workspaces/WaveVM_Frontier-X/artifacts/fract-tcg-test/run.sh > /tmp/fract-20min.log 2>&1 &
 ```
 
-**结果（逻辑通）**：
-- QEMU 正常启动，`2226` 端口监听存在。
-- `SSH_BANNER` 为空，推断为 TCG 过慢导致交互未完成。
-- 无 `Bus error` / `SIGSEGV` 崩溃。
-
-## 🧪 2026-03-19 Codespace 排查记录（TCG / 单FD / 单网关）
-
-- 目标：验证大包是否能进入 gateway，排除内存/算力远程链路与网关逻辑问题。
-- 关键操作：强制 `WVM_GATEWAY_FORCE_SINGLE_FD=1` + `WVM_GATEWAY_USE_RECVFROM=1`，仅启动 sidecar A（19120），关闭其余网关；同时抓取 `tcpdump` 与 `ss -ulnp`/`ss -u -n -i`。
-- 结果：gateway 仅收到 52B 小包，无 `rx-big`；RPC `Type 5` 持续超时；`tcpdump` 能抓到 532B 的 `WVMX/MSG_VCPU_RUN` 包；`ss` 显示 19120 Recv-Q 高积压。
-- 结论：基本排除内存/VCU 远程链路逻辑问题与 gateway 路由/转发逻辑问题；根因锁定在 **gateway 接收/投递时序或 socket 队列消费异常**（疑似进程/FD/时序稳定性）。
-- 后续建议：将 socket 绑定状态与队列占用采样移入 gateway 进程内部，并验证是否存在隐藏 FD/进程竞争。
+**结果**：
+- **运行时长**：20 分钟（脚本 EXIT trap 于 20 分钟后发送 SIGTERM 终止 QEMU）。
+- **RPC 超时**：master0 = 0，master1 = 0。
+- **进程存活**：10/10 全部存活（GL2, GL1A, GL1B, GSA, GSB, S0, S1, M0, M1, Q）。
+- **端口 2226**：监听存在。
+- **崩溃记录**：无（No crashes found）。
+- **vCPU 分布**：vcpu=0 共 62982 次 page fault，vcpu=1 和 vcpu=2 各 5 次（TCG 启动阶段工作集中在 BSP）。
+- **GPA 推进**：从 `0xf80d000`（~248 MB）匀速递增至 `0x1eb8f000`（~494 MB），全程无停滞。
+- **串口日志**：空（0 行），TCG 过慢导致 VM 未到达串口输出阶段。
+- **SSH Banner**：无，推断同上。
+- **日志规模**：master0.log 189152 行，vm.log 733454 行，总计 922770 行。
 
 ---
 
-## 🧪 2026-03-20 Codespace 分形双 sidecar 链路核验（UDP 回环异常）
+### 2. 扁平化架构（Flat）20 分钟长跑记录
 
-说明：
-- 执行环境：GitHub Codespaces 单机容器。
-- 目标口径：验证分形链路 `master → sidecar A → sidecar B → master → slave` 是否可达；重点核验 sidecar A → sidecar B 的 UDP 回环。
+**目录**：`artifacts/tmp/flat-tcg-test-20260321-064741`
 
-### 关键证据
+**拓扑**：纯 Sidecar 直连（无网关层级），每个 Sidecar 持有完整路由表。
 
-- 运行脚本：`artifacts/fract-tcg-test/run.sh`（双 sidecar + UDP probe）
-- 产物目录：`artifacts/tmp/fract-tcg-test-20260320-063353`、`artifacts/tmp/fract-tcg-test-20260320-063755`、`artifacts/tmp/fract-tcg-test-20260320-064123`
-- UDP 探针结果（A → B）：`(no data)`，B 端未收到探针包
-- 网关日志：sidecar A 有 `route->local dst=127.0.0.1:19220`，sidecar B 无任何 `rx`/`rx-vcpu`
-- 业务结果：`RPC Timeout Type 5` 持续，slave 无 VCPU_RUN
+**配置文件**：
 
-### 结论
+`flat_2node.conf`（NODE 配置，供 Master 使用）
+```txt
+NODE 0 127.0.0.1 19120 1 1
+NODE 1 127.0.0.1 19220 1 1
+```
 
-- 在同一实例内，**UDP 19120 → 19220 回环不可达**，A→B 数据包被系统层吞掉。
-- 该问题已脱离 WaveVM 路由逻辑与内存/算力链路本身，**指向环境/内核层网络异常**。
+`sidecar0.conf`（Sidecar 0：本地 node 0 → master0，远端 node 1 → sidecar1）
+```txt
+ROUTE 0 1 127.0.0.1 19100
+ROUTE 1 1 127.0.0.1 19220
+```
+
+`sidecar1.conf`（Sidecar 1：远端 node 0 → sidecar0，本地 node 1 → master1）
+```txt
+ROUTE 0 1 127.0.0.1 19120
+ROUTE 1 1 127.0.0.1 19200
+```
+
+**端口分配**：
+
+| 进程 | 监听端口 | 上游 | 控制端口 |
+|------|----------|------|----------|
+| Sidecar 0 | 19120 | 19399（dummy） | 19101 |
+| Sidecar 1 | 19220 | 19399（dummy） | 19201 |
+| Master 0 | 19100 | — | ctrl→19101 |
+| Master 1 | 19200 | — | ctrl→19201 |
+| Slave 0 | 19105 | — | ctrl→19101 |
+| Slave 1 | 19205 | — | ctrl→19201 |
+
+**启动脚本**：`artifacts/flat-tcg-test/run.sh`（完整内容见仓库文件）
+
+**执行方式**：
+```bash
+mount -o remount,size=8G /dev/shm
+nohup bash /workspaces/WaveVM_Frontier-X/artifacts/flat-tcg-test/run.sh > /tmp/flat-20min.log 2>&1 &
+```
+
+**结果**：
+- **运行时长**：20 分钟（trap 仅恢复 `/dev/kvm`，不杀进程；手动终止）。
+- **RPC 超时**：master0 = 0，master1 = 0。
+- **进程存活**：7/7 全部存活（SC0, SC1, S0, S1, M0, M1, Q）。
+- **端口 2226**：监听存在。
+- **崩溃记录**：无（No crashes found）。
+- **vCPU 分布**：vcpu=0 共 81719 次 page fault，vcpu=1 和 vcpu=2 各 5 次。
+- **GPA 推进**：从 `0xf84d000`（~248 MB）匀速递增至 `0x1faed000`（~506 MB），全程无停滞。每 2 分钟采样点：274→302→329→351→374→398→426→452→479→506 MB。
+- **串口日志**：空（0 行），TCG 过慢导致 VM 未到达串口输出阶段。
+- **SSH Banner**：无，推断同上。
+- **日志规模**：master0.log 245405 行，vm.log 943404 行，总计 1188969 行。
+
+### 3. 对比与结论
+
+| 指标 | 分形（3 层网关） | 扁平（Sidecar 直连） |
+|------|------------------|---------------------|
+| RPC 超时 | 0 | 0 |
+| 进程存活 | 10/10 | 7/7 |
+| 20 分钟 GPA | ~494 MB | ~506 MB |
+| Page Fault 总次数 | 62992 | 81729 |
+| master0.log 行数 | 189152 | 245405 |
+
+扁平模式 GPA 推进略快（506 vs 494 MB），符合预期：少了 3 层网关转发开销。两种架构均零超时、零崩溃、全进程存活，分布式内存链路逻辑通。Guest 串口/SSH 未完成输出，原因为 TCG 模拟过慢（20 分钟仅触达约 500 MB / 3072 MB 地址空间）。

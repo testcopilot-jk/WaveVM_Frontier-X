@@ -36,7 +36,7 @@ rm -f /tmp/wvm_user_0.sock /tmp/wvm_user_1.sock 2>/dev/null || true
 sleep 1
 
 mv /dev/kvm /dev/kvm.off 2>/dev/null || true
-trap 'mv /dev/kvm.off /dev/kvm 2>/dev/null || true; pkill -f wavevm_node_master 2>/dev/null || true; pkill -f wavevm_node_slave 2>/dev/null || true; pkill -f wavevm_gateway 2>/dev/null || true; pkill -f qemu-system-x86_64 2>/dev/null || true' EXIT
+trap 'mv /dev/kvm.off /dev/kvm 2>/dev/null || true' EXIT
 
 QPATH="$ROOT/wavevm-qemu/build-native:$PATH"
 
@@ -77,8 +77,8 @@ echo "=== Starting QEMU (TCG mode, no KVM) ==="
   -serial file:"$ART_DIR/vm-serial.log" -monitor none) >"$ART_DIR/vm.log" 2>&1 &
 Q=$!
 
-echo "=== Waiting 300s (5 min) for QEMU TCG boot ==="
-for i in 1 2 3 4 5; do
+echo "=== Waiting 1200s (20 min) for QEMU TCG boot ==="
+for i in $(seq 1 20); do
   sleep 60
   echo "  ${i}m elapsed — Q alive: $(kill -0 $Q 2>/dev/null && echo yes || echo NO)"
 done

@@ -1,9 +1,0 @@
-[Hybrid] Using Physical Cores: 4
-[Init] WaveVM Hybrid Slave V28.0 (Swarm Edition)
-[Init] Config: Port=19205, Cores=1, RAM=1024 MB, BaseID=1, VM=0
-[Hybrid] KVM: Kernel module not found. Using SHM File: /wvm_fract_node1
-[Slave BootVCPU] create fd=5 errno=0 vm=4 kvm=3 id=0
-[Slave BootVCPU] mmap_size=12288 errno=0
-[Hybrid] KVM Hardware Acceleration Active (RAM: 1024 MB).
-[Hybrid] Mode: KVM FAST PATH. Listening on 0.0.0.0:19205
-[SenderThread] KVM Dirty Page Sender is running.
