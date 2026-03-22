@@ -1,0 +1,174 @@
+[KVM-MEM] listener_register kml=0x57e1510ca0e0 as=0x57e127c8ecc0 as_id=0 nr_slots=32764
+[WaveVM] KVM bootstrap OK (mode=user), keep wavevm vCPU control (kvm_enabled=1)
+qemu-system-x86_64: -accel wavevm: WaveVM: defer user mem init until first RAM block is registered
+[KVM-MEM] region_add cb mr=kvm-apic-msi gpa=0xfee00000 size=0x100000
+[WaveVM] region_add gpa=0 size=0x80000000 count=1
+[WaveVM-User] ram_block hva=0x76c03be00000..0x76c0bbe00000 gpa=0 size=0x80000000 blocks=1
+[WaveVM] dedup region_add gpa=0 size=0x80000000 count=1
+[KVM-MEM] region_add cb mr=ram0 gpa=0 size=0x80000000
+[KVM-MEM] region_add mr=ram0 gpa=0 size=0x80000000 offset_as=0 offset_mr=0
+[KVM-MEM] set_user_memory slot=0 as_id=0 new=1 gpa=0 size=0x80000000 hva=0x76c03be00000 flags=0x1 old_flags=0
+[WaveVM] KVM detected: PROT_NONE path bypassed, migration dirty log enabled.
+[KVM-MEM] region_add cb mr=ram0 gpa=0 size=0x80000000
+[KVM-MEM] region_add mr=ram0 gpa=0 size=0x80000000 offset_as=0 offset_mr=0
+[KVM-MEM] log_start mr=ram0 gpa=0 size=0x80000000 old=0 new=0x4
+[WaveVM] region_add gpa=0x100000000 size=0x40000000 count=2
+[WaveVM-User] ram_block hva=0x76bffbc00000..0x76c03bc00000 gpa=0x100000000 size=0x40000000 blocks=2
+[KVM-MEM] region_add cb mr=ram1 gpa=0x100000000 size=0x40000000
+[KVM-MEM] region_add mr=ram1 gpa=0x100000000 size=0x40000000 offset_as=0x100000000 offset_mr=0
+[KVM-MEM] set_user_memory slot=1 as_id=0 new=1 gpa=0x100000000 size=0x40000000 hva=0x76bffbc00000 flags=0x1 old_flags=0
+[KVM-MEM] region_add cb mr=pc.bios gpa=0xfffc0000 size=0x40000
+[KVM-MEM] region_add mr=pc.bios gpa=0xfffc0000 size=0x40000 offset_as=0xfffc0000 offset_mr=0
+[KVM-MEM] set_user_memory slot=2 as_id=0 new=1 gpa=0xfffc0000 size=0x40000 hva=0x76c0cc400000 flags=0x3 old_flags=0
+[WaveVM] region_add gpa=0xfeda0000 size=0x20000 count=3
+[WaveVM-User] ram_block hva=0x76c03bea0000..0x76c03bec0000 gpa=0xfeda0000 size=0x20000 blocks=3
+[KVM-MEM] region_add cb mr=ram0 gpa=0xfeda0000 size=0x20000
+[KVM-MEM] region_add mr=ram0 gpa=0xfeda0000 size=0x20000 offset_as=0xfeda0000 offset_mr=0xa0000
+[KVM-MEM] set_user_memory slot=3 as_id=0 new=1 gpa=0xfeda0000 size=0x20000 hva=0x76c03bea0000 flags=0x1 old_flags=0
+[KVM-MEM] region_del cb mr=ram0 gpa=0xfeda0000 size=0x20000
+[KVM-MEM] set_user_memory slot=3 as_id=0 new=0 gpa=0xfeda0000 size=0 hva=0x76c03bea0000 flags=0 old_flags=0x1
+[KVM-MEM] region_add cb mr=kvm-ioapic gpa=0xfec00000 size=0x1000
+[KVM-MEM] region_add cb mr=hpet gpa=0xfed00000 size=0x400
+[KVM-MEM] listener_register kml=0x57e127c8b100 as=0x57e127c8b0a0 as_id=1 nr_slots=32764
+[KVM-MEM] region_add cb mr=ram0 gpa=0 size=0x80000000
+[KVM-MEM] region_add mr=ram0 gpa=0 size=0x80000000 offset_as=0 offset_mr=0
+[KVM-MEM] set_user_memory slot=65536 as_id=1 new=1 gpa=0 size=0x80000000 hva=0x76c03be00000 flags=0x1 old_flags=0
+[KVM-MEM] log_start mr=ram0 gpa=0 size=0x80000000 old=0 new=0x4
+[KVM-MEM] region_add cb mr=kvm-ioapic gpa=0xfec00000 size=0x1000
+[KVM-MEM] region_add cb mr=hpet gpa=0xfed00000 size=0x400
+[KVM-MEM] region_add cb mr=ram0 gpa=0xfeda0000 size=0x20000
+[KVM-MEM] region_add mr=ram0 gpa=0xfeda0000 size=0x20000 offset_as=0xfeda0000 offset_mr=0xa0000
+[KVM-MEM] set_user_memory slot=65537 as_id=1 new=1 gpa=0xfeda0000 size=0x20000 hva=0x76c03bea0000 flags=0x1 old_flags=0
+[KVM-MEM] log_start mr=ram0 gpa=0xfeda0000 size=0x20000 old=0 new=0x4
+[KVM-MEM] region_add cb mr=kvm-apic-msi gpa=0xfee00000 size=0x100000
+[KVM-MEM] region_add cb mr=pc.bios gpa=0xfffc0000 size=0x40000
+[KVM-MEM] region_add mr=pc.bios gpa=0xfffc0000 size=0x40000 offset_as=0xfffc0000 offset_mr=0
+[KVM-MEM] set_user_memory slot=65538 as_id=1 new=1 gpa=0xfffc0000 size=0x40000 hva=0x76c0cc400000 flags=0x3 old_flags=0
+[KVM-MEM] log_start mr=pc.bios gpa=0xfffc0000 size=0x40000 old=0 new=0x4
+[KVM-MEM] region_add cb mr=ram1 gpa=0x100000000 size=0x40000000
+[KVM-MEM] region_add mr=ram1 gpa=0x100000000 size=0x40000000 offset_as=0x100000000 offset_mr=0
+[KVM-MEM] set_user_memory slot=65539 as_id=1 new=1 gpa=0x100000000 size=0x40000000 hva=0x76bffbc00000 flags=0x1 old_flags=0
+[KVM-MEM] log_start mr=ram1 gpa=0x100000000 size=0x40000000 old=0 new=0x4
+[KVM-MEM] region_del cb mr=ram0 gpa=0 size=0x80000000
+[KVM-MEM] set_user_memory slot=0 as_id=0 new=0 gpa=0 size=0 hva=0x76c03be00000 flags=0 old_flags=0x1
+[WaveVM] region_add gpa=0 size=0xc0000 count=4
+[WaveVM-User] ram_block hva=0x76c03be00000..0x76c03bec0000 gpa=0 size=0xc0000 blocks=4
+[KVM-MEM] region_add cb mr=ram0 gpa=0 size=0xc0000
+[KVM-MEM] region_add mr=ram0 gpa=0 size=0xc0000 offset_as=0 offset_mr=0
+[KVM-MEM] set_user_memory slot=0 as_id=0 new=1 gpa=0 size=0xc0000 hva=0x76c03be00000 flags=0x1 old_flags=0
+[KVM-MEM] region_add cb mr=pc.rom gpa=0xc0000 size=0x20000
+[KVM-MEM] region_add mr=pc.rom gpa=0xc0000 size=0x20000 offset_as=0xc0000 offset_mr=0
+[KVM-MEM] set_user_memory slot=3 as_id=0 new=1 gpa=0xc0000 size=0x20000 hva=0x76c0cc200000 flags=0x3 old_flags=0
+[KVM-MEM] region_add cb mr=pc.bios gpa=0xe0000 size=0x20000
+[KVM-MEM] region_add mr=pc.bios gpa=0xe0000 size=0x20000 offset_as=0xe0000 offset_mr=0x20000
+[KVM-MEM] set_user_memory slot=4 as_id=0 new=1 gpa=0xe0000 size=0x20000 hva=0x76c0cc420000 flags=0x3 old_flags=0
+[WaveVM] region_add gpa=0x100000 size=0x7ff00000 count=5
+[WaveVM-User] ram_block hva=0x76c03bf00000..0x76c0bbe00000 gpa=0x100000 size=0x7ff00000 blocks=5
+[KVM-MEM] region_add cb mr=ram0 gpa=0x100000 size=0x7ff00000
+[KVM-MEM] region_add mr=ram0 gpa=0x100000 size=0x7ff00000 offset_as=0x100000 offset_mr=0x100000
+[KVM-MEM] set_user_memory slot=5 as_id=0 new=1 gpa=0x100000 size=0x7ff00000 hva=0x76c03bf00000 flags=0x1 old_flags=0
+[KVM-MEM] region_del cb mr=ram0 gpa=0 size=0x80000000
+[KVM-MEM] set_user_memory slot=65536 as_id=1 new=0 gpa=0 size=0 hva=0x76c03be00000 flags=0 old_flags=0x1
+[KVM-MEM] region_add cb mr=ram0 gpa=0 size=0xc0000
+[KVM-MEM] region_add mr=ram0 gpa=0 size=0xc0000 offset_as=0 offset_mr=0
+[KVM-MEM] set_user_memory slot=65536 as_id=1 new=1 gpa=0 size=0xc0000 hva=0x76c03be00000 flags=0x1 old_flags=0
+[KVM-MEM] region_add cb mr=pc.rom gpa=0xc0000 size=0x20000
+[KVM-MEM] region_add mr=pc.rom gpa=0xc0000 size=0x20000 offset_as=0xc0000 offset_mr=0
+[KVM-MEM] set_user_memory slot=65540 as_id=1 new=1 gpa=0xc0000 size=0x20000 hva=0x76c0cc200000 flags=0x3 old_flags=0
+[KVM-MEM] region_add cb mr=pc.bios gpa=0xe0000 size=0x20000
+[KVM-MEM] region_add mr=pc.bios gpa=0xe0000 size=0x20000 offset_as=0xe0000 offset_mr=0x20000
+[KVM-MEM] set_user_memory slot=65541 as_id=1 new=1 gpa=0xe0000 size=0x20000 hva=0x76c0cc420000 flags=0x3 old_flags=0
+[KVM-MEM] region_add cb mr=ram0 gpa=0x100000 size=0x7ff00000
+[KVM-MEM] region_add mr=ram0 gpa=0x100000 size=0x7ff00000 offset_as=0x100000 offset_mr=0x100000
+[KVM-MEM] set_user_memory slot=65542 as_id=1 new=1 gpa=0x100000 size=0x7ff00000 hva=0x76c03bf00000 flags=0x1 old_flags=0
+[KVM-MEM] region_del cb mr=ram0 gpa=0xfeda0000 size=0x20000
+[KVM-MEM] set_user_memory slot=65537 as_id=1 new=0 gpa=0xfeda0000 size=0 hva=0x76c03bea0000 flags=0 old_flags=0x1
+[WVM-DBG] cpu=2 kvm_enabled=1 vcpu_sock=21 split=1
+[KVM-MEM] region_del cb mr=ram0 gpa=0 size=0xc0000
+[KVM-MEM] set_user_memory slot=0 as_id=0 new=0 gpa=0 size=0 hva=0x76c03be00000 flags=0 old_flags=0x1
+[KVM-MEM] region_del cb mr=pc.rom gpa=0xc0000 size=0x20000
+[KVM-MEM] set_user_memory slot=3 as_id=0 new=0 gpa=0xc0000 size=0 hva=0x76c0cc200000 flags=0 old_flags=0x3
+[KVM-MEM] region_del cb mr=pc.bios gpa=0xe0000 size=0x20000
+[KVM-MEM] set_user_memory slot=4 as_id=0 new=0 gpa=0xe0000 size=0 hva=0x76c0cc420000 flags=0 old_flags=0x3
+[KVM-MEM] region_del cb mr=ram0 gpa=0x100000 size=0x7ff00000
+[KVM-MEM] set_user_memory slot=5 as_id=0 new=0 gpa=0x100000 size=0 hva=0x76c03bf00000 flags=0 old_flags=0x1
+[WaveVM] region_add gpa=0 size=0xd8000 count=6
+[WaveVM-User] ram_block hva=0x76c03be00000..0x76c03bed8000 gpa=0 size=0xd8000 blocks=6
+[KVM-MEM] region_add cb mr=ram0 gpa=0 size=0xd8000
+[KVM-MEM] region_add mr=ram0 gpa=0 size=0xd8000 offset_as=0 offset_mr=0
+[KVM-MEM] set_user_memory slot=0 as_id=0 new=1 gpa=0 size=0xd8000 hva=0x76c03be00000 flags=0x1 old_flags=0
+[KVM-MEM] region_add cb mr=pc.rom gpa=0xd8000 size=0x8000
+[KVM-MEM] region_add mr=pc.rom gpa=0xd8000 size=0x8000 offset_as=0xd8000 offset_mr=0x18000
+[KVM-MEM] set_user_memory slot=3 as_id=0 new=1 gpa=0xd8000 size=0x8000 hva=0x76c0cc218000 flags=0x3 old_flags=0
+[KVM-MEM] region_add cb mr=pc.bios gpa=0xe0000 size=0x10000
+[KVM-MEM] region_add mr=pc.bios gpa=0xe0000 size=0x10000 offset_as=0xe0000 offset_mr=0x20000
+[KVM-MEM] set_user_memory slot=4 as_id=0 new=1 gpa=0xe0000 size=0x10000 hva=0x76c0cc420000 flags=0x3 old_flags=0
+[WaveVM] region_add gpa=0xf0000 size=0x7ff10000 count=7
+[WaveVM-User] ram_block hva=0x76c03bef0000..0x76c0bbe00000 gpa=0xf0000 size=0x7ff10000 blocks=7
+[KVM-MEM] region_add cb mr=ram0 gpa=0xf0000 size=0x7ff10000
+[KVM-MEM] region_add mr=ram0 gpa=0xf0000 size=0x7ff10000 offset_as=0xf0000 offset_mr=0xf0000
+[KVM-MEM] set_user_memory slot=5 as_id=0 new=1 gpa=0xf0000 size=0x7ff10000 hva=0x76c03bef0000 flags=0x1 old_flags=0
+[KVM-MEM] region_del cb mr=ram0 gpa=0 size=0xc0000
+[KVM-MEM] set_user_memory slot=65536 as_id=1 new=0 gpa=0 size=0 hva=0x76c03be00000 flags=0 old_flags=0x1
+[KVM-MEM] region_del cb mr=pc.rom gpa=0xc0000 size=0x20000
+[KVM-MEM] set_user_memory slot=65540 as_id=1 new=0 gpa=0xc0000 size=0 hva=0x76c0cc200000 flags=0 old_flags=0x3
+[KVM-MEM] region_del cb mr=pc.bios gpa=0xe0000 size=0x20000
+[KVM-MEM] set_user_memory slot=65541 as_id=1 new=0 gpa=0xe0000 size=0 hva=0x76c0cc420000 flags=0 old_flags=0x3
+[KVM-MEM] region_del cb mr=ram0 gpa=0x100000 size=0x7ff00000
+[KVM-MEM] set_user_memory slot=65542 as_id=1 new=0 gpa=0x100000 size=0 hva=0x76c03bf00000 flags=0 old_flags=0x1
+[KVM-MEM] region_add cb mr=ram0 gpa=0 size=0xd8000
+[KVM-MEM] region_add mr=ram0 gpa=0 size=0xd8000 offset_as=0 offset_mr=0
+[KVM-MEM] set_user_memory slot=65536 as_id=1 new=1 gpa=0 size=0xd8000 hva=0x76c03be00000 flags=0x1 old_flags=0
+[KVM-MEM] region_add cb mr=pc.rom gpa=0xd8000 size=0x8000
+[KVM-MEM] region_add mr=pc.rom gpa=0xd8000 size=0x8000 offset_as=0xd8000 offset_mr=0x18000
+[KVM-MEM] set_user_memory slot=65537 as_id=1 new=1 gpa=0xd8000 size=0x8000 hva=0x76c0cc218000 flags=0x3 old_flags=0
+[KVM-MEM] region_add cb mr=pc.bios gpa=0xe0000 size=0x10000
+[KVM-MEM] region_add mr=pc.bios gpa=0xe0000 size=0x10000 offset_as=0xe0000 offset_mr=0x20000
+[KVM-MEM] set_user_memory slot=65540 as_id=1 new=1 gpa=0xe0000 size=0x10000 hva=0x76c0cc420000 flags=0x3 old_flags=0
+[KVM-MEM] region_add cb mr=ram0 gpa=0xf0000 size=0x7ff10000
+[KVM-MEM] region_add mr=ram0 gpa=0xf0000 size=0x7ff10000 offset_as=0xf0000 offset_mr=0xf0000
+[KVM-MEM] set_user_memory slot=65541 as_id=1 new=1 gpa=0xf0000 size=0x7ff10000 hva=0x76c03bef0000 flags=0x1 old_flags=0
+[KVM-MEM] region_del cb mr=ram0 gpa=0 size=0xd8000
+[KVM-MEM] set_user_memory slot=0 as_id=0 new=0 gpa=0 size=0 hva=0x76c03be00000 flags=0 old_flags=0x1
+[KVM-MEM] region_del cb mr=pc.rom gpa=0xd8000 size=0x8000
+[KVM-MEM] set_user_memory slot=3 as_id=0 new=0 gpa=0xd8000 size=0 hva=0x76c0cc218000 flags=0 old_flags=0x3
+[KVM-MEM] region_del cb mr=pc.bios gpa=0xe0000 size=0x10000
+[KVM-MEM] set_user_memory slot=4 as_id=0 new=0 gpa=0xe0000 size=0 hva=0x76c0cc420000 flags=0 old_flags=0x3
+[KVM-MEM] region_del cb mr=ram0 gpa=0xf0000 size=0x7ff10000
+[KVM-MEM] set_user_memory slot=5 as_id=0 new=0 gpa=0xf0000 size=0 hva=0x76c03bef0000 flags=0 old_flags=0x1
+[WaveVM] dedup region_add gpa=0 size=0x80000000 count=7
+[KVM-MEM] region_add cb mr=ram0 gpa=0 size=0x80000000
+[KVM-MEM] region_add mr=ram0 gpa=0 size=0x80000000 offset_as=0 offset_mr=0
+[KVM-MEM] set_user_memory slot=0 as_id=0 new=1 gpa=0 size=0x80000000 hva=0x76c03be00000 flags=0x1 old_flags=0
+[KVM-MEM] region_del cb mr=ram0 gpa=0 size=0xd8000
+[KVM-MEM] set_user_memory slot=65536 as_id=1 new=0 gpa=0 size=0 hva=0x76c03be00000 flags=0 old_flags=0x1
+[KVM-MEM] region_del cb mr=pc.rom gpa=0xd8000 size=0x8000
+[KVM-MEM] set_user_memory slot=65537 as_id=1 new=0 gpa=0xd8000 size=0 hva=0x76c0cc218000 flags=0 old_flags=0x3
+[KVM-MEM] region_del cb mr=pc.bios gpa=0xe0000 size=0x10000
+[KVM-MEM] set_user_memory slot=65540 as_id=1 new=0 gpa=0xe0000 size=0 hva=0x76c0cc420000 flags=0 old_flags=0x3
+[KVM-MEM] region_del cb mr=ram0 gpa=0xf0000 size=0x7ff10000
+[KVM-MEM] set_user_memory slot=65541 as_id=1 new=0 gpa=0xf0000 size=0 hva=0x76c03bef0000 flags=0 old_flags=0x1
+[KVM-MEM] region_add cb mr=ram0 gpa=0 size=0x80000000
+[KVM-MEM] region_add mr=ram0 gpa=0 size=0x80000000 offset_as=0 offset_mr=0
+[KVM-MEM] set_user_memory slot=65536 as_id=1 new=1 gpa=0 size=0x80000000 hva=0x76c03be00000 flags=0x1 old_flags=0
+[KVM-MEM] region_add cb mr=pcie-mmcfg-mmio gpa=0xb0000000 size=0x10000000
+[KVM-MEM] region_add cb mr=pcie-mmcfg-mmio gpa=0xb0000000 size=0x10000000
+[KVM-MEM] region_add cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_add cb mr=e1000-mmio gpa=0xfebc0000 size=0x20000
+[KVM-MEM] region_add cb mr=msix-table gpa=0xfebe0000 size=0x40
+[KVM-MEM] region_add cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_add cb mr=msix-table gpa=0xfebe0000 size=0x40
+[KVM-MEM] region_add cb mr=msix-pba gpa=0xfebe0800 size=0x8
+[KVM-MEM] region_add cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-common gpa=0xfebfc000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-isr gpa=0xfebfd000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-device gpa=0xfebfe000 size=0x1000
+[KVM-MEM] region_add cb mr=virtio-pci-notify gpa=0xfebff000 size=0x1000
+[KVM-MEM] region_add cb mr=lpc-rcrb-mmio gpa=0xfed1c000 size=0x4000
+[KVM-MEM] region_add cb mr=lpc-rcrb-mmio gpa=0xfed1c000 size=0x4000
+[KVM-MEM] region_add cb mr=ahci gpa=0xfebe1000 size=0x1000
+[KVM-MEM] region_add cb mr=ahci gpa=0xfebe1000 size=0x1000
+qemu-system-x86_64: terminating on signal 15 from pid 1311 (bash)

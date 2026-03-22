@@ -1,0 +1,31 @@
+[Warning] Failed to open /dev/wavevm (Kernel Mode disabled?): No such file or directory
+[*] WaveVM Swarm V30.0 'Wavelet' Node Daemon (PhysID: 0, VM: 0)
+[GW-FINAL] id=0 ip=127.0.0.1 port=9000
+[Backend] V29.5 Logic Core Sharded Pool Ready: 100032 items.
+[TX-SOCK] bound port=19100
+[Config] Parsing Swarm Topology (Heterogeneous Mode)...
+[GW-SET] id=0 ip=127.0.0.1 port=19120
+[GW-SET] id=1 ip=127.0.0.1 port=19220
+[Config] DHT Ring Size: 2 Virtual Nodes (from 2 Physical).
+[Config] CPU Routing Table Initialized (Weighted by Cores).
+[+] Starting 8 Wavelet Broadcast Engines...
+[+] All Wavelet Broadcast Engines started.
+[Check] Resource verified: Alloc 2048 MB >= Config 1 GB.
+[Init] Identity Mapped: PhysID 0 -> VirtualID 0 (Primary)
+[System] Initializing SHM: /wvm_fract_node0 (Size: 2048 MB)
+[+] Memory Ready at 0x733537b74000
+[System] Control Socket: /tmp/wvm_user_0.sock
+[+] WaveVM V29 Node Ready. Waiting for QEMU...
+[Swarm] New neighbor discovered: 1
+[Lifecycle] Transition to WARMING
+[TX-HDR] msg=40 len=52 payload=16 target=1 slave=0 req=0
+[TX-HDR] msg=40 len=52 payload=16 target=1 slave=0 req=0
+[TX-HDR] msg=40 len=52 payload=16 target=1 slave=0 req=0
+[Autonomous] Node started in SHADOW mode. Auto-scaling into cluster...
+[Lifecycle] Transition to ACTIVE. Participating in Owner Set.
+[TX-HDR] msg=40 len=52 payload=16 target=1 slave=0 req=0
+[TX-HDR] msg=40 len=52 payload=16 target=1 slave=0 req=0
+[TX-HDR] msg=40 len=52 payload=16 target=1 slave=0 req=0
+[TX-HDR] msg=40 len=52 payload=16 target=1 slave=0 req=0
+[TX-HDR] msg=40 len=52 payload=16 target=1 slave=0 req=0
+[TX-HDR] msg=40 len=52 payload=16 target=1 slave=0 req=0

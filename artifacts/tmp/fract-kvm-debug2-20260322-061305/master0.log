@@ -1,0 +1,108 @@
+[Warning] Failed to open /dev/wavevm (Kernel Mode disabled?): No such file or directory
+[GW-FINAL] id=0 ip=127.0.0.1 port=9000
+[TX-SOCK] bound port=19100
+[GW-SET] id=0 ip=127.0.0.1 port=19120
+[GW-SET] id=1 ip=127.0.0.1 port=19220
+[Swarm] New neighbor discovered: 1
+[Lifecycle] Transition to WARMING
+[TX-HDR] msg=40 len=52 payload=16 target=1 slave=0 req=0
+[TX-HDR] msg=40 len=52 payload=16 target=1 slave=0 req=0
+[TX-HDR] msg=40 len=52 payload=16 target=1 slave=0 req=0
+[IPC] client connected fd=5
+[IPC] fd=5 registered as async push client
+[IPC] client connected fd=6
+[IPC] fd=6 treated as sync RPC client only
+[IPC] client connected fd=7
+[IPC] fd=7 treated as sync RPC client only
+[IPC] client connected fd=8
+[IPC] fd=8 treated as sync RPC client only
+[IPC] client connected fd=9
+[IPC] fd=9 treated as sync RPC client only
+[IPC VCPU_RUN] vcpu=2 mode=0 slave_id=4294967295
+[RPC-CALL] msg=5 len=704 target=0
+[IPC VCPU_RUN] vcpu=1 mode=0 slave_id=4294967295
+[PTA-DBG] target=0 raw=0 ip=127.0.0.1 port=19120 sock=3 len=740
+[RPC-CALL] msg=5 len=704 target=1
+[TX-HDR] msg=5 len=740 payload=704 target=0 slave=0 req=1
+[PTA-DBG] sent=740 errno=0
+[PTA-DBG] target=1 raw=1 ip=127.0.0.1 port=19120 sock=3 len=740
+[TX-HDR] msg=5 len=740 payload=704 target=1 slave=0 req=2
+[Slave Forward] msg=5 src_port=19120 dst_port=19105 len=740[PTA-DBG] sent=740 errno=0
+
+[RX VCPU_EXIT] src_port=19105 from_local=1 target=0 slave=0 req=1
+[Slave Return] msg=6 src_port=19105 rid=1 return_target=0
+[RX VCPU_EXIT] src_port=19105 rid=1 idx=1 p_len=712
+[RX VCPU_EXIT] slot idx=1 full_id=1 has_buf=1
+[RX VCPU_EXIT] matched rid=1 -> status=1
+[IPC VCPU_RUN] vcpu=2 mode=0 slave_id=4294967295
+[RPC-CALL] msg=5 len=704 target=0
+[PTA-DBG] target=0 raw=0 ip=127.0.0.1 port=19120 sock=3 len=740
+[TX-HDR] msg=5 len=740 payload=704 target=0 slave=0 req=3
+[PTA-DBG] sent=740 errno=0
+[Slave Forward] msg=5 src_port=19120 dst_port=19105 len=740
+[PTA-DBG] target=1 raw=1 ip=127.0.0.1 port=19120 sock=3 len=740
+[TX-HDR] msg=5 len=740 payload=704 target=1 slave=0 req=2
+[RX VCPU_EXIT] src_port=19105 from_local=1 target=0 slave=0 req=3
+[PTA-DBG] sent=740 errno=0
+[TX-HDR] msg=3 len=36 payload=0 target=0 slave=0 req=0
+[Slave Return] msg=6 src_port=19105 rid=3 return_target=0
+[RX VCPU_EXIT] src_port=19105 rid=3 idx=3 p_len=712
+[RX VCPU_EXIT] slot idx=3 full_id=3 has_buf=1
+[RX VCPU_EXIT] matched rid=3 -> status=1
+[IPC VCPU_RUN] vcpu=2 mode=0 slave_id=4294967295
+[RPC-CALL] msg=5 len=704 target=0
+[PTA-DBG] target=0 raw=0 ip=127.0.0.1 port=19120 sock=3 len=740
+[TX-HDR] msg=5 len=740 payload=704 target=0 slave=0 req=4
+[PTA-DBG] sent=740 errno=0
+[PTA-DBG] target=0 raw=0 ip=127.0.0.1 port=19120 sock=3 len=740
+[TX-HDR] msg=5 len=740 payload=704 target=0 slave=0 req=4
+[PTA-DBG] sent=740 errno=0
+[PTA-DBG] target=1 raw=1 ip=127.0.0.1 port=19120 sock=3 len=740
+[PTA-DBG] sent=740 errno=0
+[PTA-DBG] target=0 raw=0 ip=127.0.0.1 port=19120 sock=3 len=740
+[PTA-DBG] sent=740 errno=0
+[PTA-DBG] target=0 raw=0 ip=127.0.0.1 port=19120 sock=3 len=740
+[PTA-DBG] sent=740 errno=0
+[PTA-DBG] target=1 raw=1 ip=127.0.0.1 port=19120 sock=3 len=740
+[PTA-DBG] sent=740 errno=0
+[Lifecycle] Transition to ACTIVE. Participating in Owner Set.
+[RPC Timeout] Type: 5, Target: 1, RID: 2
+[IPC VCPU_RUN] vcpu=1 mode=0 slave_id=4294967295
+[RPC-CALL] msg=5 len=704 target=1
+[RPC Timeout] Type: 5, Target: 0, RID: 4
+[IPC VCPU_RUN] vcpu=2 mode=0 slave_id=4294967295
+[RPC-CALL] msg=5 len=704 target=0
+[RPC Timeout] Type: 5, Target: 1, RID: 5
+[IPC VCPU_RUN] vcpu=1 mode=0 slave_id=4294967295
+[RPC-CALL] msg=5 len=704 target=1
+[RPC Timeout] Type: 5, Target: 0, RID: 6
+[IPC VCPU_RUN] vcpu=2 mode=0 slave_id=4294967295
+[RPC-CALL] msg=5 len=704 target=0
+[RPC Timeout] Type: 5, Target: 1, RID: 7
+[IPC VCPU_RUN] vcpu=1 mode=0 slave_id=4294967295
+[RPC-CALL] msg=5 len=704 target=1
+[RPC Timeout] Type: 5, Target: 0, RID: 8
+[IPC VCPU_RUN] vcpu=2 mode=0 slave_id=4294967295
+[RPC-CALL] msg=5 len=704 target=0
+[RPC Timeout] Type: 5, Target: 1, RID: 9
+[RPC Timeout] Type: 5, Target: 0, RID: 10
+[RPC Timeout] Type: 5, Target: 1, RID: 11
+[RPC Timeout] Type: 5, Target: 0, RID: 12
+[RPC Timeout] Type: 5, Target: 1, RID: 13
+[RPC Timeout] Type: 5, Target: 0, RID: 14
+[RPC Timeout] Type: 5, Target: 1, RID: 15
+[RPC Timeout] Type: 5, Target: 0, RID: 16
+[RPC Timeout] Type: 5, Target: 1, RID: 17
+[RPC Timeout] Type: 5, Target: 0, RID: 18
+[RPC Timeout] Type: 5, Target: 1, RID: 19
+[RPC Timeout] Type: 5, Target: 0, RID: 20
+[RPC Timeout] Type: 5, Target: 1, RID: 21
+[RPC Timeout] Type: 5, Target: 0, RID: 22
+[RPC Timeout] Type: 5, Target: 1, RID: 23
+[RPC Timeout] Type: 5, Target: 0, RID: 24
+[RPC Timeout] Type: 5, Target: 1, RID: 25
+[RPC Timeout] Type: 5, Target: 0, RID: 26
+[RPC Timeout] Type: 5, Target: 1, RID: 27
+[RPC Timeout] Type: 5, Target: 0, RID: 28
+[RPC Timeout] Type: 5, Target: 1, RID: 29
+[RPC Timeout] Type: 5, Target: 0, RID: 30

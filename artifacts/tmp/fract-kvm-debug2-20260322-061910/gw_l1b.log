@@ -1,0 +1,13 @@
+[Gateway] sockfd=4 reuseport=0
+[Gateway] bind ok port=19420 fd=4 local=0.0.0.0:19420
+[Gateway] rx len=52 magic=0x57564d58
+[GW-PUSH] node NOT FOUND sid=0
+[Gateway] rx-stats big=0 small=1
+[Gateway] rx-stats big=0 small=1
+[Gateway] rx-stats big=0 small=1
+[Gateway] rx len=52 magic=0x57564d58
+[GW-PUSH] node NOT FOUND sid=0
+[Gateway] rx-stats big=0 small=2
+[Gateway] rx len=52 magic=0x57564d58
+[GW-PUSH] node NOT FOUND sid=0
+[Gateway] rx-stats big=0 small=3

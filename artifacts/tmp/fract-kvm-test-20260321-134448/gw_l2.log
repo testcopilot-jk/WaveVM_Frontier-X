@@ -1,0 +1,192 @@
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19521
+[Gateway] Loaded 2 route groups.
+[Gateway] System has 4 cores (allowed=4). Scaling out 1 RX workers...
+[Gateway] Debug RX opts: single=1 disable_reuseport=1 recvfrom=1 single_fd=0
+[Gateway] Control Plane Active on Port 19521 (Static)
+[Gateway] sockfd=4 reuseport=0
+[Gateway] bind ok port=19520 fd=4 local=0.0.0.0:19520
+[Gateway] rx-stats big=0 small=0
+[Gateway] rx-stats big=0 small=0
+[Gateway] rx-stats big=0 small=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=740 src=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=740 src=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=740 src=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=740 src=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx-stats big=4 small=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=740 src=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=740 src=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx-stats big=6 small=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=740 src=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=740 src=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx-stats big=8 small=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=740 src=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=740 src=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx-stats big=10 small=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=740 src=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=740 src=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx-stats big=12 small=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=740 src=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=740 src=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx-stats big=14 small=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=740 src=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=740 src=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx-stats big=16 small=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=740 src=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=740 src=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=740 src=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx-stats big=19 small=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=740 src=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx-stats big=21 small=0
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx-stats big=22 small=0
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx-stats big=24 small=0
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx-stats big=26 small=0
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx-stats big=28 small=0
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] rx-stats big=31 small=0
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:19420
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=6 route=0 src=127.0.0.1:48005 dst=127.0.0.1:40573
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] rx-stats big=65 small=0
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] rx-stats big=67 small=0
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] rx-stats big=68 small=0
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] rx-stats big=70 small=0
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] rx-stats big=73 small=0
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] rx-stats big=78 small=0
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] rx-stats big=80 small=0
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] rx-stats big=83 small=0
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] rx-stats big=85 small=0
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] rx-stats big=87 small=0
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] rx-stats big=89 small=0
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] rx-stats big=91 small=0
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] rx-stats big=93 small=0
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:40573 dst=127.0.0.1:48005
+[Gateway] rx-stats big=94 small=0

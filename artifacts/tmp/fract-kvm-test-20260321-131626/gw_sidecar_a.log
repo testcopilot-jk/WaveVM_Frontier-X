@@ -1,0 +1,10 @@
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19121
+[Gateway] Loaded 1 route groups.
+[Gateway] System has 4 cores (allowed=4). Scaling out 1 RX workers...
+[Gateway] Debug RX opts: single=1 disable_reuseport=1 recvfrom=0 single_fd=0
+[Gateway] sockfd=4 reuseport=0
+[Gateway] bind ok port=19120 fd=4 local=0.0.0.0:19120
+[Gateway] Control Plane Active on Port 19121 (Static)
+[Gateway] rx-stats big=0 small=0
+[Gateway] rx-stats big=0 small=0
+[Gateway] rx-stats big=0 small=0

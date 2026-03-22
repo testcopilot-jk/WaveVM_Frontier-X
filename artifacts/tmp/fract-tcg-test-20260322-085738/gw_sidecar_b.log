@@ -1,0 +1,245 @@
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19221
+[Gateway] Loaded 1 route groups.
+[Gateway] System has 4 cores (allowed=4). Scaling out 3 RX workers...
+[Gateway] sockfd=4 reuseport=0
+[Gateway] bind ok port=19220 fd=4 local=0.0.0.0:19220
+[Gateway] Control Plane Active on Port 19221 (Static)
+[Gateway] sockfd=6 reuseport=0
+[Gateway] sockfd=7 reuseport=0
+[Gateway] rx-stats big=0 small=0
+[Gateway] rx-stats big=0 small=0
+[Gateway] rx-stats big=0 small=0
+[Gateway] rx len=52 magic=0x57564d58
+[GW-PUSH] node NOT FOUND sid=0
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] rx len=532 magic=0x57564d58
+[Gateway] rx-big len=532 magic=0x57564d58
+[TRACE] post-magic msg=5 len=532
+[TRACE] pre-route target=1 src=0 msg=5 valid=1
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route msg=5 target=1 route=1 r=532 src=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] rx len=532 magic=0x57564d58
+[Gateway] rx-big len=532 magic=0x57564d58
+[TRACE] post-magic msg=5 len=532
+[TRACE] pre-route target=1 src=0 msg=5 valid=1
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route msg=5 target=1 route=1 r=532 src=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] rx len=532 magic=0x57564d58
+[Gateway] rx-big len=532 magic=0x57564d58
+[TRACE] post-magic msg=5 len=532
+[TRACE] pre-route target=1 src=0 msg=5 valid=1
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route msg=5 target=1 route=1 r=532 src=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] rx len=532 magic=0x57564d58
+[Gateway] rx-big len=532 magic=0x57564d58
+[TRACE] post-magic msg=5 len=532
+[TRACE] pre-route target=1 src=0 msg=5 valid=1
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route msg=5 target=1 route=1 r=532 src=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] rx len=532 magic=0x57564d58
+[Gateway] rx-big len=532 magic=0x57564d58
+[TRACE] post-magic msg=5 len=532
+[TRACE] pre-route target=1 src=0 msg=5 valid=1
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route msg=5 target=1 route=1 r=532 src=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] rx len=532 magic=0x57564d58
+[Gateway] rx-big len=532 magic=0x57564d58
+[TRACE] post-magic msg=5 len=532
+[TRACE] pre-route target=1 src=0 msg=5 valid=1
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route msg=5 target=1 route=1 r=532 src=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] rx len=532 magic=0x57564d58
+[Gateway] rx-big len=532 magic=0x57564d58
+[TRACE] post-magic msg=5 len=532
+[TRACE] pre-route target=1 src=0 msg=5 valid=1
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route msg=5 target=1 route=1 r=532 src=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] rx len=532 magic=0x57564d58
+[Gateway] rx-big len=532 magic=0x57564d58
+[TRACE] post-magic msg=5 len=532
+[TRACE] pre-route target=1 src=0 msg=5 valid=1
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route msg=5 target=1 route=1 r=532 src=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] rx len=532 magic=0x57564d58
+[Gateway] rx-big len=532 magic=0x57564d58
+[TRACE] post-magic msg=5 len=532
+[TRACE] pre-route target=1 src=0 msg=5 valid=1
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route msg=5 target=1 route=1 r=532 src=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] rx len=532 magic=0x57564d58
+[Gateway] rx-big len=532 magic=0x57564d58
+[TRACE] post-magic msg=5 len=532
+[TRACE] pre-route target=1 src=0 msg=5 valid=1
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route msg=5 target=1 route=1 r=532 src=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] rx len=532 magic=0x57564d58
+[Gateway] rx-big len=532 magic=0x57564d58
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route msg=5 target=1 route=1 r=532 src=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] rx len=532 magic=0x57564d58
+[Gateway] rx-big len=532 magic=0x57564d58
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route msg=5 target=1 route=1 r=532 src=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] rx len=532 magic=0x57564d58
+[Gateway] rx-big len=532 magic=0x57564d58
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route msg=5 target=1 route=1 r=532 src=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] rx len=532 magic=0x57564d58
+[Gateway] rx-big len=532 magic=0x57564d58
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route msg=5 target=1 route=1 r=532 src=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] rx len=532 magic=0x57564d58
+[Gateway] rx-big len=532 magic=0x57564d58
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route msg=5 target=1 route=1 r=532 src=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] rx len=532 magic=0x57564d58
+[Gateway] rx-big len=532 magic=0x57564d58
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route msg=5 target=1 route=1 r=532 src=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] rx-big len=532 magic=0x57564d58
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route msg=5 target=1 route=1 r=532 src=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] rx-big len=532 magic=0x57564d58
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route msg=5 target=1 route=1 r=532 src=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] rx-big len=532 magic=0x57564d58
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route msg=5 target=1 route=1 r=532 src=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] rx-big len=532 magic=0x57564d58
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route msg=5 target=1 route=1 r=532 src=127.0.0.1:19420
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[GW-PRE-PUSH] route_id=1 target=1 src_id=0 msg=5 len=532 valid=1
+[GW-VCPU-PUSH] sid=1 mt=5 len=532 dst=127.0.0.1:19200 ret=532 errno=0
+[GW-POST-PUSH] route_id=1 r=532 len=532
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] route->local msg=5 route=1 src=127.0.0.1:19420 dst=127.0.0.1:19200
+[Gateway] rx-stats big=60 small=4

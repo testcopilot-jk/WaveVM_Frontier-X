@@ -1,0 +1,12 @@
+[Slave BootVCPU] create fd=5 errno=0 vm=4 kvm=3 id=0
+[Slave BootVCPU] mmap_size=12288 errno=0
+[SLAVE-BIND] port=19105 ok
+[SLAVE-RX] src=127.0.0.1:19100 len=740 type=5 target=0 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19100 len=740 type=5
+[VCPU-RUN] mode=0 vcpu=0 req=1 src=127.0.0.1:19100 target=0 slave=0
+[Slave VCPU Init] enter vm=4 kvm=3 boot_fd=5 boot_run=0x79958d1eb000 req_vcpu=0
+[Slave Ack] ret=748 errno=0 req=1 dst=127.0.0.1:19100 exit=17
+[SLAVE-RX] src=127.0.0.1:19100 len=740 type=5 target=0 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19100 len=740 type=5
+[VCPU-RUN] mode=0 vcpu=0 req=3 src=127.0.0.1:19100 target=0 slave=0
+[Slave Ack] ret=748 errno=0 req=3 dst=127.0.0.1:19100 exit=8

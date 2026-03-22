@@ -1,0 +1,76 @@
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19221
+[Gateway] Loaded 1 route groups.
+[Gateway] System has 4 cores (allowed=4). Scaling out 1 RX workers...
+[Gateway] Debug RX opts: single=1 disable_reuseport=1 recvfrom=1 single_fd=0
+[Gateway] Control Plane Active on Port 19221 (Static)
+[Gateway] sockfd=4 reuseport=0
+[Gateway] bind ok port=19220 fd=4 local=0.0.0.0:19220
+[Gateway] SO_RCVTIMEO set to 50ms on fd=4
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] internal_push: node NOT FOUND id=0 len=52
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=3
+[Gateway] rx-stats big=0 small=3
+[Gateway] rx-stats big=0 small=3
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] internal_push: node NOT FOUND id=0 len=52
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=6
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] internal_push: node NOT FOUND id=0 len=52
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=9
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] internal_push: node NOT FOUND id=0 len=52
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=12
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] internal_push: node NOT FOUND id=0 len=52
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=15
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] internal_push: node NOT FOUND id=0 len=52
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=18
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] internal_push: node NOT FOUND id=0 len=52
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=21
+[Gateway] internal_push: node NOT FOUND id=0 len=52
+[Gateway] drop heartbeat rate-limit
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=24
+[Gateway] internal_push: node NOT FOUND id=0 len=52
+[Gateway] drop heartbeat rate-limit
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=27
+[Gateway] internal_push: node NOT FOUND id=0 len=52
+[Gateway] drop heartbeat rate-limit
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=30
+[Gateway] internal_push: node NOT FOUND id=0 len=52
+[Gateway] rx-stats big=0 small=33
+[Gateway] internal_push: node NOT FOUND id=0 len=52
+[Gateway] rx-stats big=0 small=36
+[Gateway] internal_push: node NOT FOUND id=0 len=52
+[Gateway] rx-stats big=0 small=39

@@ -1,0 +1,50 @@
+[Slave BootVCPU] create fd=5 errno=0 vm=4 kvm=3 id=0
+[Slave BootVCPU] mmap_size=12288 errno=0
+[Hybrid] BIOS ROM mapped at GPA 0xffff0000 -> HVA g_phy_ram+0xF0000
+[SLAVE-BIND] port=19205 ok
+[SLAVE-RX] src=127.0.0.1:19200 len=740 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=740 type=5
+[VCPU-RUN] mode=0 vcpu=0 req=2 src=127.0.0.1:19200 target=16777216 slave=0
+[Slave VCPU Init] enter vm=4 kvm=3 boot_fd=5 boot_run=0x71376e917000 req_vcpu=0
+[VCPU-STATE] rip=0xfff0 cr0=0x60000010 cr3=0 cr4=0 efer=0 cs.base=0xffff0000 cs.sel=0xf000 rflags=0x2 rsp=0 exit_reason_in=0
+[VCPU-EXIT] exit=5 suberror=0 rip=0xffef ret=0 errno=0
+[Slave Ack] ret=748 errno=0 req=2 dst=127.0.0.1:19200 exit=5
+[SLAVE-RX] src=127.0.0.1:19200 len=740 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=740 type=5
+[VCPU-RUN] mode=0 vcpu=0 req=3 src=127.0.0.1:19200 target=16777216 slave=0
+[VCPU-STATE] rip=0xffef cr0=0x60000010 cr3=0 cr4=0 efer=0 cs.base=0 cs.sel=0 rflags=0x96 rsp=0xffee exit_reason_in=5
+[VCPU-EXIT] exit=2 suberror=0 rip=0x2 ret=0 errno=0
+[Slave Ack] ret=748 errno=0 req=3 dst=127.0.0.1:19200 exit=2
+[SLAVE-RX] src=127.0.0.1:19200 len=740 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=740 type=5
+[VCPU-RUN] mode=0 vcpu=0 req=5 src=127.0.0.1:19200 target=16777216 slave=0
+[VCPU-STATE] rip=0x2 cr0=0x60000010 cr3=0 cr4=0 efer=0 cs.base=0 cs.sel=0 rflags=0x406 rsp=0xffe0 exit_reason_in=2
+[VCPU-EXIT] exit=2 suberror=0 rip=0x29a4 ret=0 errno=0
+[Slave Ack] ret=748 errno=0 req=5 dst=127.0.0.1:19200 exit=2
+[SLAVE-RX] src=127.0.0.1:19200 len=740 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=740 type=5
+[VCPU-RUN] mode=0 vcpu=0 req=5 src=127.0.0.1:19200 target=16777216 slave=0
+[VCPU-STATE] rip=0x2 cr0=0x60000010 cr3=0 cr4=0 efer=0 cs.base=0 cs.sel=0 rflags=0x406 rsp=0xffe0 exit_reason_in=2
+[VCPU-EXIT] exit=2 suberror=0 rip=0x29a4 ret=0 errno=0
+[Slave Ack] ret=748 errno=0 req=5 dst=127.0.0.1:19200 exit=2
+[SLAVE-RX] src=127.0.0.1:19200 len=740 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=740 type=5
+[VCPU-RUN] mode=0 vcpu=0 req=5 src=127.0.0.1:19200 target=16777216 slave=0
+[VCPU-STATE] rip=0x2 cr0=0x60000010 cr3=0 cr4=0 efer=0 cs.base=0 cs.sel=0 rflags=0x406 rsp=0xffe0 exit_reason_in=2
+[VCPU-EXIT] exit=2 suberror=0 rip=0x29a4 ret=0 errno=0
+[Slave Ack] ret=748 errno=0 req=5 dst=127.0.0.1:19200 exit=2
+[SLAVE-RX] src=127.0.0.1:19200 len=740 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=740 type=5
+[VCPU-RUN] mode=0 vcpu=0 req=6 src=127.0.0.1:19200 target=16777216 slave=0
+[Slave Ack] ret=748 errno=0 req=6 dst=127.0.0.1:19200 exit=2
+[SLAVE-RX] src=127.0.0.1:19200 len=740 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=740 type=5
+[VCPU-RUN] mode=0 vcpu=0 req=7 src=127.0.0.1:19200 target=16777216 slave=0
+[Slave Ack] ret=748 errno=0 req=7 dst=127.0.0.1:19200 exit=2
+[SLAVE-RX] src=127.0.0.1:19200 len=740 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=740 type=5
+[VCPU-RUN] mode=0 vcpu=0 req=8 src=127.0.0.1:19200 target=16777216 slave=0
+[Slave Ack] ret=748 errno=0 req=8 dst=127.0.0.1:19200 exit=2
+[SLAVE-RX] src=127.0.0.1:19200 len=740 type=5 target=1 slave=0
+[SLAVE-RX-BIG] src=127.0.0.1:19200 len=740 type=5
+[VCPU-RUN] mode=0 vcpu=0 req=9 src=127.0.0.1:19200 target=16777216 slave=0

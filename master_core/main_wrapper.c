@@ -246,15 +246,20 @@ static void handle_ipc_cpu_run(int qemu_fd, struct wvm_ipc_cpu_run_req* req) {
     }
     if (!WVM_IS_VALID_TARGET(req->slave_id)) {
         ack.status = -ENODEV;
+    } else if (req->mode_tcg) {
+        /* TCG: 保持旧行为 — slave payload (status+mode_tcg+ctx) 写入 &ack.ctx，
+         * 前 8 字节被覆盖，但 TCG 引擎容错可运行。
+         * TODO: 修 QEMU 端 NULL deref 后统一用 KVM 路径。 */
+        ack.status = wvm_rpc_call(MSG_VCPU_RUN, &req->ctx,
+            sizeof(req->ctx.tcg),
+            req->slave_id, &ack.ctx, sizeof(ack.ctx));
+        ack.mode_tcg = req->mode_tcg;
     } else {
-        /* [FIX] rx_buffer 必须是 &ack (完整 ack 结构体)，而不是 &ack.ctx。
-         * slave 返回的 UDP payload = status(4) + mode_tcg(4) + ctx，
-         * 旧代码传 &ack.ctx 导致 status/mode_tcg 写入 ctx 开头，所有寄存器偏移 8 字节。 */
+        /* [FIX] KVM: rx_buffer = &ack (完整结构体)，修复 8 字节偏移。 */
         int rpc_ret = wvm_rpc_call(MSG_VCPU_RUN, &req->ctx,
-            req->mode_tcg ? sizeof(req->ctx.tcg) : sizeof(req->ctx.kvm),
+            sizeof(req->ctx.kvm),
             req->slave_id, &ack, sizeof(ack));
         if (rpc_ret < 0) ack.status = rpc_ret;
-        /* ack.mode_tcg 已由 slave 响应填充 */
     }
     write_exact(qemu_fd, &ack, sizeof(ack));
 }

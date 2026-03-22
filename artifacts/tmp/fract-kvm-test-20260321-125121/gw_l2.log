@@ -1,0 +1,6 @@
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19521
+[Gateway] Loaded 2 route groups.
+[Gateway] System has 4 cores (allowed=4). Scaling out 3 RX workers...
+[Gateway] Debug RX opts: single=0 disable_reuseport=0 recvfrom=0 single_fd=1
+[Gateway] sockfd=4 reuseport=0
+[Gateway] bind ok port=19520 fd=4 local=0.0.0.0:19520

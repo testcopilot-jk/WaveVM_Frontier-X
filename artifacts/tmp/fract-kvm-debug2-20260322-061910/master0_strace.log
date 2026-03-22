@@ -1,0 +1,74 @@
+5852  rt_sigaction(SIGPIPE, {sa_handler=SIG_IGN, sa_mask=[PIPE], sa_flags=SA_RESTORER|SA_RESTART, sa_restorer=0x7e21fe9e1330}, {sa_handler=SIG_DFL, sa_mask=[], sa_flags=0}, 8) = 0
+5852  rt_sigaction(SIGRT_1, {sa_handler=0x7e21fea35530, sa_mask=[], sa_flags=SA_RESTORER|SA_ONSTACK|SA_RESTART|SA_SIGINFO, sa_restorer=0x7e21fe9e1330}, NULL, 8) = 0
+5852  rt_sigprocmask(SIG_UNBLOCK, [RTMIN RT_1], NULL, 8) = 0
+5852  rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+5852  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5865  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5852  rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+5852  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5867  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5852  rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+5852  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5868  rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+5852  rt_sigprocmask(SIG_BLOCK, ~[],  <unfinished ...>
+5868  <... rt_sigprocmask resumed>NULL, 8) = 0
+5852  <... rt_sigprocmask resumed>[], 8) = 0
+5852  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5869  rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+5852  rt_sigprocmask(SIG_BLOCK, ~[],  <unfinished ...>
+5869  <... rt_sigprocmask resumed>NULL, 8) = 0
+5852  <... rt_sigprocmask resumed>[], 8) = 0
+5852  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5870  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5852  rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+5852  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5871  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5852  rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+5852  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5872  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5852  rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+5852  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5873  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5852  rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+5852  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5874  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5852  rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+5852  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5875  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5852  rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+5852  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5876  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5852  rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+5852  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5907  rt_sigprocmask(SIG_SETMASK, [],  <unfinished ...>
+5852  rt_sigprocmask(SIG_BLOCK, ~[],  <unfinished ...>
+5907  <... rt_sigprocmask resumed>NULL, 8) = 0
+5852  <... rt_sigprocmask resumed>[], 8) = 0
+5852  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5908  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5852  rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+5852  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5910  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5852  rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+5852  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5913  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5852  rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
+5852  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5914  rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
+5913  +++ killed by SIGKILL +++
+5876  +++ killed by SIGKILL +++
+5872  +++ killed by SIGKILL +++
+5870  +++ killed by SIGKILL +++
+5868  +++ killed by SIGKILL +++
+5908  +++ killed by SIGKILL +++
+5874  +++ killed by SIGKILL +++
+5914  +++ killed by SIGKILL +++
+5875  +++ killed by SIGKILL +++
+5871  +++ killed by SIGKILL +++
+5873  +++ killed by SIGKILL +++
+5869  +++ killed by SIGKILL +++
+5865  +++ killed by SIGKILL +++
+5867  +++ killed by SIGKILL +++
+5910  +++ killed by SIGKILL +++
+5907  +++ killed by SIGKILL +++
+5852  +++ killed by SIGKILL +++

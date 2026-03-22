@@ -1,0 +1,317 @@
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19121
+[Gateway] Loaded 1 route groups.
+[Gateway] System has 4 cores (allowed=4). Scaling out 1 RX workers...
+[Gateway] Debug RX opts: single=1 disable_reuseport=1 recvfrom=1 single_fd=0
+[Gateway] Control Plane Active on Port 19121 (Static)
+[Gateway] sockfd=5 reuseport=0
+[Gateway] bind ok port=19120 fd=5 local=0.0.0.0:19120
+[Gateway] SO_RCVTIMEO set to 50ms on fd=5
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] internal_push: node NOT FOUND id=1 len=52
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=3
+[Gateway] rx-stats big=0 small=3
+[Gateway] rx-stats big=0 small=3
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:19100
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=0 route=0 r=740 src=127.0.0.1:19100
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:19100
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=0 route=0 r=740 src=127.0.0.1:19100
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:19100
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=0 route=0 r=740 src=127.0.0.1:19100
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:19100
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=0 route=0 r=740 src=127.0.0.1:19100
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx-stats big=8 small=3
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:19100
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=0 route=0 r=740 src=127.0.0.1:19100
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:19100
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=0 route=0 r=740 src=127.0.0.1:19100
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx-stats big=12 small=3
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:19100
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=0 route=0 r=740 src=127.0.0.1:19100
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:19100
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=0 route=0 r=740 src=127.0.0.1:19100
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx-stats big=16 small=3
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:19100
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=0 route=0 r=740 src=127.0.0.1:19100
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=0 route=0 r=740 src=127.0.0.1:19100
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:19100
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] rx-stats big=20 small=3
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx-stats big=25 small=3
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] rx-stats big=29 small=3
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx-stats big=33 small=3
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx-stats big=38 small=3
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx-stats big=43 small=3
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] rx-stats big=47 small=3
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx-stats big=52 small=3
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] rx-stats big=57 small=3
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] rx-stats big=61 small=3
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] rx-stats big=69 small=3
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] rx-stats big=73 small=3
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx-stats big=78 small=3
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx-stats big=82 small=3
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx-stats big=86 small=3
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] rx-stats big=90 small=3
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx-stats big=98 small=3
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx-stats big=102 small=3
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx-stats big=106 small=3
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx-stats big=110 small=3
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx-stats big=114 small=3
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx-stats big=119 small=3
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] internal_push: node NOT FOUND id=1 len=740
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx-stats big=125 small=3
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] internal_push: node NOT FOUND id=1 len=52
+[Gateway] drop heartbeat rate-limit
+[Gateway] drop heartbeat rate-limit
+[Gateway] internal_push: node NOT FOUND id=1 len=52
+[Gateway] drop heartbeat rate-limit
+[Gateway] drop heartbeat rate-limit
+[Gateway] internal_push: node NOT FOUND id=1 len=52
+[Gateway] drop heartbeat rate-limit
+[Gateway] drop heartbeat rate-limit
+[Gateway] internal_push: node NOT FOUND id=1 len=52
+[Gateway] drop heartbeat rate-limit
+[Gateway] drop heartbeat rate-limit
+[Gateway] internal_push: node NOT FOUND id=1 len=52
+[Gateway] drop heartbeat rate-limit
+[Gateway] drop heartbeat rate-limit
+[Gateway] internal_push: node NOT FOUND id=1 len=52
+[Gateway] drop heartbeat rate-limit
+[Gateway] drop heartbeat rate-limit
+[Gateway] internal_push: node NOT FOUND id=1 len=52
+[Gateway] drop heartbeat rate-limit
+[Gateway] drop heartbeat rate-limit
+[Gateway] internal_push: node NOT FOUND id=1 len=52
+[Gateway] drop heartbeat rate-limit
+[Gateway] drop heartbeat rate-limit
+[Gateway] internal_push: node NOT FOUND id=1 len=52
+[Gateway] drop heartbeat rate-limit
+[Gateway] drop heartbeat rate-limit
+[Gateway] internal_push: node NOT FOUND id=1 len=52
+[Gateway] internal_push: node NOT FOUND id=1 len=52
+[Gateway] internal_push: node NOT FOUND id=1 len=52
+[Gateway] internal_push: node NOT FOUND id=1 len=52
+[Gateway] internal_push: node NOT FOUND id=1 len=52

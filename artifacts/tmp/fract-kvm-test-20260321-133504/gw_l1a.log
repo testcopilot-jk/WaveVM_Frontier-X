@@ -1,0 +1,168 @@
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19321
+[Gateway] Loaded 1 route groups.
+[Gateway] System has 4 cores (allowed=4). Scaling out 1 RX workers...
+[Gateway] Debug RX opts: single=1 disable_reuseport=1 recvfrom=1 single_fd=0
+[Gateway] Control Plane Active on Port 19321 (Static)
+[Gateway] sockfd=5 reuseport=0
+[Gateway] bind ok port=19320 fd=5 local=0.0.0.0:19320
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] rx-stats big=0 small=1
+[Gateway] rx-stats big=0 small=1
+[Gateway] rx-stats big=0 small=1
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:46872
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:46872
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:46872
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:46872
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=4 small=1
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:46872
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:46872
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=6 small=1
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:46872
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:46872
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=8 small=1
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:46872
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:46872
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=10 small=1
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:46872
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:46872
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=12 small=1
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:46872
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:46872
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=14 small=1
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:46872
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:46872
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=16 small=1
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:46872
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:46872
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:46872
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=19 small=1
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:46872
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=21 small=1
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=23 small=1
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=25 small=1
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=27 small=1
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=29 small=1
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=31 small=1
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=34 small=1
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=36 small=1
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=39 small=1
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=41 small=1
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=43 small=1
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=49 small=1
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=51 small=1
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=52 small=1
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=55 small=1
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=57 small=1
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=59 small=1
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=61 small=1
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=64 small=1
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=66 small=1
+[Gateway] route->upstream msg=5 src=127.0.0.1:46872 up=127.0.0.1:19520 ret=740 errno=0
+[Gateway] rx-stats big=67 small=1
+[Gateway] rx-stats big=67 small=2
+[Gateway] rx-stats big=67 small=3

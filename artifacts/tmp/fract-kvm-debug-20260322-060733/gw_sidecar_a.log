@@ -1,0 +1,42 @@
+[Gateway] sockfd=4 reuseport=0
+[Gateway] bind ok port=19120 fd=4 local=0.0.0.0:19120
+[Gateway] rx len=52 magic=0x57564d58
+[GW-PUSH] node NOT FOUND sid=1
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=3
+[Gateway] rx-stats big=0 small=3
+[Gateway] rx-stats big=0 small=3
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[GW-PUSH] node NOT FOUND sid=1
+[Gateway] route msg=5 target=1 route=1 r=-1 src=127.0.0.1:19100
+[Gateway] route->upstream msg=5 src=127.0.0.1:19100 up=127.0.0.1:19320 ret=740 errno=0
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[GW-VCPU-PUSH] sid=0 mt=5 len=740 dst=127.0.0.1:19100 ret=740 errno=0
+[Gateway] route msg=5 target=0 route=0 r=740 src=127.0.0.1:19100
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[GW-VCPU-PUSH] sid=0 mt=5 len=740 dst=127.0.0.1:19100 ret=740 errno=0
+[Gateway] route msg=5 target=0 route=0 r=740 src=127.0.0.1:19100
+[Gateway] route->local msg=5 route=0 src=127.0.0.1:19100 dst=127.0.0.1:19100
+[Gateway] rx len=36 magic=0x57564d58
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[Gateway] rx len=52 magic=0x57564d58
+[GW-PUSH] node NOT FOUND sid=1
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[GW-PUSH] node NOT FOUND sid=1
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[WRAPPER] gw_sa exited code=137

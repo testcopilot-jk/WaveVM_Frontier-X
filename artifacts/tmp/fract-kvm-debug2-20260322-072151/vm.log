@@ -1,0 +1,5 @@
+[KVM-MEM] listener_register kml=0x55ef4213a0e0 as=0x55ef264decc0 as_id=0 nr_slots=32764
+[WaveVM] KVM bootstrap OK (mode=user), keep wavevm vCPU control (kvm_enabled=1)
+qemu-system-x86_64: -accel wavevm: WaveVM: defer user mem init until first RAM block is registered
+[WVM] Failed to connect IPC socket for IRQ listening.
+vCPU 0 failed to connect master!

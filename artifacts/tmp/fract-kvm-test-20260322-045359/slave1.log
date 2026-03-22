@@ -1,0 +1,3 @@
+[Slave BootVCPU] create fd=5 errno=0 vm=4 kvm=3 id=0
+[Slave BootVCPU] mmap_size=12288 errno=0
+[SLAVE-BIND] port=19205 ok

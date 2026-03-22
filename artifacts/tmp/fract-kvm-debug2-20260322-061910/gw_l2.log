@@ -1,0 +1,7 @@
+[Gateway] sockfd=4 reuseport=0
+[Gateway] bind ok port=19520 fd=4 local=0.0.0.0:19520
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] rx len=740 magic=0x57564d58
+[Gateway] rx-big len=740 magic=0x57564d58
+[TRACE] post-magic msg=5 len=740

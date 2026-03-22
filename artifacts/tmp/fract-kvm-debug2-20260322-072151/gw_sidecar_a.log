@@ -1,0 +1,5 @@
+[Gateway] sockfd=5 reuseport=0
+[Gateway] bind ok port=19120 fd=5 local=0.0.0.0:19120
+[Gateway] rx-stats big=0 small=0
+[Gateway] rx-stats big=0 small=0
+[Gateway] rx-stats big=0 small=0
