@@ -57,8 +57,8 @@ env WVM_NONBLOCK_RECV=1 WVM_POLL_TIMEOUT_MS=100 PATH="$QPATH" WVM_INSTANCE_ID=0 
   -numa node,memdev=ram1,cpus=2,nodeid=1 \
   -drive file="$ROOT/artifacts/images/cirros-0.6.2-x86_64-disk.img",if=virtio,format=qcow2,snapshot=on \
   -netdev user,id=ne,hostfwd=tcp::2226-:22 -device e1000,netdev=ne \
-  -display none -vga none \
-  -serial file:"$ART_DIR/vm-serial.log" -monitor none >"$ART_DIR/vm.log" 2>&1 &
+  -nographic -vga none \
+  -monitor none >"$ART_DIR/vm.log" 2>&1 &
 QPID=$!
 
 echo "ART_DIR=$ART_DIR" > /tmp/kvm_test_info.txt

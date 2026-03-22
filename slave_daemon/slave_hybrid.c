@@ -1039,9 +1039,9 @@ skip_kvm_run:
     tx_hdr->crc32 = 0;
     tx_hdr->crc32 = htonl(calculate_crc32(tx, sizeof(tx)));
     ssize_t sret = sendto(sockfd, tx, sizeof(tx), 0, (struct sockaddr*)client, sizeof(*client));
-    fprintf(stderr, "[Slave Ack] ret=%zd errno=%d req=%llu dst=%s:%u exit=%u\n",
+    fprintf(stderr, "[Slave Ack] ret=%zd errno=%d req=%llu dst=%s:%u exit=%u port=0x%x dir=%u sz=%u\n",
             sret, (sret < 0) ? errno : 0, (unsigned long long)hdr->req_id,
-            inet_ntoa(client->sin_addr), ntohs(client->sin_port), t_kvm_run->exit_reason);
+            inet_ntoa(client->sin_addr), ntohs(client->sin_port), t_kvm_run->exit_reason, t_kvm_run->io.port, t_kvm_run->io.direction, t_kvm_run->io.size);
 }
 
 /* 
