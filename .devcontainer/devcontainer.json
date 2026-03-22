@@ -12,7 +12,8 @@
   },
   "capAdd": [
     "NET_ADMIN",
-    "NET_RAW"
+    "NET_RAW",
+    "SYS_ADMIN"
   ],
   "securityOpt": [
     "no-new-privileges:false",
@@ -20,7 +21,8 @@
     "apparmor=unconfined"
   ],
   "runArgs": [
-    "--device=/dev/net/tun:/dev/net/tun"
+    "--device=/dev/net/tun:/dev/net/tun",
+    "--device=/dev/kvm:/dev/kvm"
   ],
   "postCreateCommand": "bash -lc 'if ! command -v tailscale >/dev/null 2>&1; then curl -fsSL https://tailscale.com/install.sh | sh; fi'"
 }
