@@ -169,6 +169,7 @@ static int g_allowed_cpus = 0;
 static int g_force_single_rx = 0;
 static int g_disable_reuseport = 0;
 static int g_use_recvfrom = 0;
+static int g_nonblock_recv = 0;
 static int g_force_single_fd = 0;
 static int g_multi_queue = 1;
 
@@ -240,8 +241,9 @@ static inline void gateway_process_packet(int local_fd,
           __rx_big++;
       }
     }
-    if (ntohl(hdr->magic) != WVM_MAGIC) return;
+    if (ntohl(hdr->magic) != WVM_MAGIC) { static int __m=0; if(__m<5){fprintf(stderr,"[TRACE] magic fail\n");__m++;} return; }
     uint16_t msg_type = ntohs(hdr->msg_type);
+    { static int __t1=0; if(__t1<10 && pkt_len>=200){fprintf(stderr,"[TRACE] post-magic msg=%u len=%d\n",msg_type,pkt_len);__t1++;} }
     {
         int rxq = get_rxq_bytes(local_fd);
         if (rxq > WVM_RXQ_DROP_HEARTBEAT && pkt_len < WVM_BIG_PKT_THRESHOLD) {
@@ -250,6 +252,7 @@ static inline void gateway_process_packet(int local_fd,
                 fprintf(stderr, "[Gateway] drop small pkt len=%d rxq=%d\n", pkt_len, rxq);
                 __small_drop++;
             }
+            { static int __d=0; if(__d<5 && pkt_len>=200){fprintf(stderr,"[TRACE] rxq-drop len=%d\n",pkt_len);__d++;} }
             return;
         }
     }
@@ -290,6 +293,7 @@ static inline void gateway_process_packet(int local_fd,
      */
     // [FIX-M7] 当 target_id 无效时不再 fallback 到 source_id，
     // 防止 AUTO_ROUTE 包被回送给发送者形成环路
+    { static int __t2=0; if(__t2<10 && pkt_len>=200){fprintf(stderr,"[TRACE] pre-route target=%u src=%u msg=%u valid=%d\n",target_id,source_id,msg_type,(int)WVM_IS_VALID_TARGET(target_id));__t2++;} }
     uint32_t route_id;
     if (WVM_IS_VALID_TARGET(target_id)) {
         route_id = target_id;
@@ -301,7 +305,21 @@ static inline void gateway_process_packet(int local_fd,
         return;
     }
 
+    { static int __pre_push=0;
+      if (__pre_push < 30 && pkt_len >= 200) {
+          fprintf(stderr, "[GW-PRE-PUSH] route_id=%u target=%u src_id=%u msg=%u len=%d valid=%d\n",
+                  route_id, target_id, source_id, msg_type, pkt_len,
+                  (int)WVM_IS_VALID_TARGET(target_id));
+          __pre_push++;
+      }
+    }
     int r = internal_push(local_fd, route_id, ptr, pkt_len);
+    { static int __post_push=0;
+      if (__post_push < 30 && pkt_len >= 200) {
+          fprintf(stderr, "[GW-POST-PUSH] route_id=%u r=%d len=%d\n", route_id, r, pkt_len);
+          __post_push++;
+      }
+    }
     if (msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT) {
         static int __gw_dbg = 0;
         if (__gw_dbg < 20) {
@@ -471,9 +489,14 @@ static int raw_send_to_downstream(int fd, gateway_node_t *node, void *data, int 
  */
 static int flush_buffer(int fd, gateway_node_t *node) {
     if (!node || !node->buffer || node->buffer->current_len == 0) return 0;
-    
-    int ret = raw_send_to_downstream(fd, node, node->buffer->raw_data, node->buffer->current_len);
-    
+
+    // [FIX] 直接 sendto，不调 raw_send_to_downstream，调用方已持有 node->lock
+    // raw_send_to_downstream 内部会再次 lock node->lock 导致递归死锁
+    struct sockaddr_in addr_snap = node->addr;
+    int ret = (addr_snap.sin_port == 0) ? -EHOSTUNREACH :
+              sendto(fd, node->buffer->raw_data, node->buffer->current_len,
+                     MSG_DONTWAIT, (struct sockaddr*)&addr_snap, sizeof(addr_snap));
+
     if (ret < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
             return -1; // Network congested, tell caller to keep data.
@@ -539,6 +562,7 @@ static int internal_push(int fd, uint32_t slave_id, void *data, int len) {
     }
     if (!node) {
         pthread_rwlock_unlock(&g_map_lock);
+        { static int __nf=0; if (__nf < 10) { fprintf(stderr, "[GW-PUSH] node NOT FOUND sid=%u\n", slave_id); __nf++; } }
         return -1;
     }
     
@@ -577,7 +601,20 @@ static int internal_push(int fd, uint32_t slave_id, void *data, int len) {
                 flush_buffer(fd, node);
             }
             pthread_mutex_unlock(&node->lock);
-            return raw_send_to_downstream(fd, node, data, len);
+            int vcpu_ret = raw_send_to_downstream(fd, node, data, len);
+            { static int __vcpu_push=0;
+              if (__vcpu_push < 30) {
+                  char dst_ip[16]={0}; unsigned dst_port=0;
+                  pthread_mutex_lock(&node->lock);
+                  inet_ntop(AF_INET, &node->addr.sin_addr, dst_ip, sizeof(dst_ip));
+                  dst_port = ntohs(node->addr.sin_port);
+                  pthread_mutex_unlock(&node->lock);
+                  fprintf(stderr, "[GW-VCPU-PUSH] sid=%u mt=%u len=%d dst=%s:%u ret=%d errno=%d\n",
+                          slave_id, mt, len, dst_ip, dst_port, vcpu_ret, (vcpu_ret<0)?errno:0);
+                  __vcpu_push++;
+              }
+            }
+            return vcpu_ret;
         }
     }
 
@@ -668,6 +705,11 @@ void flush_all_buffers(void) {
  * [后果] 这是 WaveVM 能够支撑百万节点的奥秘。它不再依赖人工配置，而是通过“谁发包，我认识谁”实现拓扑的自动收敛。
  */
 static void learn_route(uint32_t slave_id, struct sockaddr_in *addr) {
+    // [FIX] 环境变量禁用 learn_route（用于 L2 等中间网关，防止转发包覆写静态路由）
+    static int disabled = -1;
+    if (disabled == -1) disabled = (getenv("WVM_GATEWAY_DISABLE_LEARN_ROUTE") != NULL);
+    if (disabled) return;
+
     // 1. 快速检查：如果已有路由且未变，直接返回 (无锁读)
     gateway_node_t *node = NULL;
     pthread_rwlock_rdlock(&g_map_lock);
@@ -687,7 +729,11 @@ static void learn_route(uint32_t slave_id, struct sockaddr_in *addr) {
     pthread_rwlock_unlock(&g_map_lock);
 
     // 2. 变更或新增：获取写锁进行更新
-    pthread_rwlock_wrlock(&g_map_lock);
+    // [FIX] trywrlock 防止与 flush_all_buffers 的 rdlock 死锁
+    if (pthread_rwlock_trywrlock(&g_map_lock) != 0) {
+        // 锁竞争，跳过本次更新，下次包到达时再试
+        return;
+    }
     // Double check
     HASH_FIND_INT(g_node_map, &slave_id, node);
     if (!node) {
@@ -810,10 +856,11 @@ static void* gateway_worker(void *arg) {
     while (1) {
         if (g_use_recvfrom) {
             socklen_t slen = sizeof(struct sockaddr_in);
-            int pkt_len = recvfrom(local_fd, buffer_pool, WVM_MAX_PACKET_SIZE, MSG_DONTWAIT,
+            int pkt_len = recvfrom(local_fd, buffer_pool, WVM_MAX_PACKET_SIZE, g_nonblock_recv ? MSG_DONTWAIT : 0,
                                    (struct sockaddr *)&src_addrs[0], &slen);
             if (pkt_len <= 0) {
-                if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) { usleep(100); continue; }
+                if (errno == EINTR) continue;
+                if (g_nonblock_recv && (errno == EAGAIN || errno == EWOULDBLOCK)) { usleep(100); continue; }
                 if (core_id == 0) {
                     int rxq = get_rxq_bytes(local_fd);
                     fprintf(stderr, "[Gateway] recvfrom err=%d rxq=%d\n", errno, rxq);
@@ -843,9 +890,10 @@ static void* gateway_worker(void *arg) {
             continue;
         }
 
-        int n = recvmmsg(local_fd, msgs, BATCH_SIZE, MSG_DONTWAIT, NULL);
+        int n = recvmmsg(local_fd, msgs, BATCH_SIZE, g_nonblock_recv ? MSG_DONTWAIT : 0, NULL);
         if (n <= 0) {
-            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) { usleep(100); continue; }
+            if (errno == EINTR) continue;
+                if (g_nonblock_recv && (errno == EAGAIN || errno == EWOULDBLOCK)) { usleep(100); continue; }
             if (core_id == 0) {
                 int rxq = get_rxq_bytes(local_fd);
                 fprintf(stderr, "[Gateway] recvmmsg err=%d rxq=%d\n", errno, rxq);
@@ -989,6 +1037,7 @@ int init_aggregator(int local_port, const char *upstream_ip, int upstream_port, 
     g_force_single_rx = (getenv("WVM_GATEWAY_SINGLE_RX") != NULL);
     g_disable_reuseport = (getenv("WVM_GATEWAY_DISABLE_REUSEPORT") != NULL);
     g_use_recvfrom = (getenv("WVM_GATEWAY_USE_RECVFROM") != NULL);
+    g_nonblock_recv = (getenv("WVM_NONBLOCK_RECV") != NULL);
     {
         const char *mq = getenv("WVM_GATEWAY_MULTI_QUEUE");
         if (mq && mq[0] == '0') g_multi_queue = 0;

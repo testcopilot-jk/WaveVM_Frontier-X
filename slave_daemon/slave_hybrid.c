@@ -41,6 +41,7 @@
 
 // --- 全局配置变量 ---
 static int g_service_port = 9000;
+static int g_nonblock_recv = 0;
 static long g_num_cores = 0;
 static int g_ram_mb = 1024;
 static uint64_t g_slave_ram_size = 1024UL * 1024 * 1024;
@@ -1270,8 +1271,8 @@ void* kvm_worker_thread(void *arg) {
     for(int i=0;i<BATCH_SIZE;i++) { iov[i].iov_base=bufs[i]; iov[i].iov_len=POOL_ITEM_SIZE; msgs[i].msg_hdr.msg_iov=&iov[i]; msgs[i].msg_hdr.msg_iovlen=1; msgs[i].msg_hdr.msg_name=&c[i]; msgs[i].msg_hdr.msg_namelen=sizeof(c[i]); }
 
     while(1) {
-        int n = recvmmsg(s, msgs, BATCH_SIZE, MSG_DONTWAIT, NULL);
-        if (n<=0) { if (errno == EAGAIN || errno == EWOULDBLOCK) usleep(100); continue; }
+        int n = recvmmsg(s, msgs, BATCH_SIZE, g_nonblock_recv ? MSG_DONTWAIT : 0, NULL);
+        if (n<=0) { if (g_nonblock_recv && (errno == EAGAIN || errno == EWOULDBLOCK)) usleep(100); continue; }
         for(int i=0;i<n;i++) {
             struct wvm_header *h = (struct wvm_header*)bufs[i];
             if (h->magic != htonl(WVM_MAGIC)) continue;
@@ -1505,8 +1506,8 @@ void* tcg_proxy_thread(void *arg) {
     printf("[Proxy] Tri-Channel NAT Active (CMD/REQ/PUSH) + MESI Support.\n");
 
     while(1) {
-        int n = recvmmsg(sockfd, msgs, BATCH_SIZE, MSG_DONTWAIT, NULL);
-        if (n <= 0) { if (errno == EAGAIN || errno == EWOULDBLOCK) usleep(100); continue; }
+        int n = recvmmsg(sockfd, msgs, BATCH_SIZE, g_nonblock_recv ? MSG_DONTWAIT : 0, NULL);
+        if (n <= 0) { if (g_nonblock_recv && (errno == EAGAIN || errno == EWOULDBLOCK)) usleep(100); continue; }
 
         for (int i=0; i<n; i++) {
             struct wvm_header *hdr = (struct wvm_header *)buffers[i];
@@ -1617,6 +1618,8 @@ void* tcg_proxy_thread(void *arg) {
 }
 
 int main(int argc, char **argv) {
+    g_nonblock_recv = (getenv("WVM_NONBLOCK_RECV") != NULL);
+
     // 启动时自动创建存储目录
     struct stat st = {0};
     if (stat("/var/lib/wavevm", &st) == -1) {

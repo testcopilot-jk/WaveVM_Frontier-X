@@ -114,6 +114,10 @@ struct u_req_ctx_t {
     pthread_mutex_t lock;
 };
 static struct u_req_ctx_t g_u_req_ctx[MAX_INFLIGHT_REQS];
+static int g_nonblock_recv = 0;
+static int g_poll_timeout_ms = -1;
+static int g_rx_thread_count = 4;
+static int g_disable_reuseport = 0;
 static uint64_t g_id_counter = 0;
 
 // --- 内存池 (Slab Allocator) ---
@@ -753,7 +757,7 @@ static void* rx_thread_loop(void *arg) {
     // 开启端口复用
     int opt = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+    if (!g_disable_reuseport) setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
 
     struct sockaddr_in bind_addr = { 
         .sin_family=AF_INET, 
@@ -804,10 +808,10 @@ static void* rx_thread_loop(void *arg) {
     pfd.events = POLLIN;
 
     while (1) {
-        if (poll(&pfd, 1, -1) <= 0) continue;
+        if (poll(&pfd, 1, g_poll_timeout_ms) <= 0) continue;
 
-        int n = recvmmsg(sockfd, msgs, BATCH_SIZE, MSG_DONTWAIT, NULL);
-        if (n <= 0) { if (errno == EAGAIN || errno == EWOULDBLOCK) usleep(100); continue; }
+        int n = recvmmsg(sockfd, msgs, BATCH_SIZE, g_nonblock_recv ? MSG_DONTWAIT : 0, NULL);
+        if (n <= 0) { if (g_nonblock_recv && (errno == EAGAIN || errno == EWOULDBLOCK)) usleep(100); continue; }
 
         for (int i = 0; i < n; i++) {        
             uint8_t *base_ptr = (uint8_t *)iovecs[i].iov_base; // 基准地址
@@ -1144,8 +1148,20 @@ int user_backend_init(int my_node_id, int port) {
     queue_init(&g_fast_queue);
     queue_init(&g_slow_queue);
 
+    // Test parameters
+    g_nonblock_recv = (getenv("WVM_NONBLOCK_RECV") != NULL);
+    g_disable_reuseport = (getenv("WVM_DISABLE_REUSEPORT") != NULL);
+    {
+        const char *pt = getenv("WVM_POLL_TIMEOUT_MS");
+        if (pt) g_poll_timeout_ms = atoi(pt);
+    }
+    {
+        const char *rc = getenv("WVM_RX_THREAD_COUNT");
+        if (rc) { int v = atoi(rc); if (v >= 1 && v <= 16) g_rx_thread_count = v; }
+    }
+
     // 启动 RX 线程 (根据 CPU 核心数动态调整，这里演示用 4)
-    for (long i = 0; i < RX_THREAD_COUNT; i++) {
+    for (long i = 0; i < g_rx_thread_count; i++) {
         pthread_t th;
         if (pthread_create(&th, NULL, rx_thread_loop, (void*)i) != 0) {
             perror("Failed to create RX thread");
