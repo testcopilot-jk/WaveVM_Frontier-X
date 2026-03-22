@@ -1,0 +1,109 @@
+[*] WaveVM Gateway V16 (Chain Mode) | CtrlPort: 19221
+[Gateway] Loaded 1 route groups.
+[Gateway] System has 4 cores (allowed=4). Scaling out 1 RX workers...
+[Gateway] Debug RX opts: single=1 disable_reuseport=1 recvfrom=1 single_fd=0
+[Gateway] Control Plane Active on Port 19221 (Static)
+[Gateway] sockfd=5 reuseport=0
+[Gateway] bind ok port=19220 fd=5 local=0.0.0.0:19220
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] rx len=52 magic=0x57564d58
+[GW-PUSH] node NOT FOUND sid=0
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=4
+[Gateway] rx-stats big=0 small=4
+[Gateway] rx-stats big=0 small=4
+[Gateway] rx len=52 magic=0x57564d58
+[GW-PUSH] node NOT FOUND sid=0
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=7
+[Gateway] rx len=52 magic=0x57564d58
+[GW-PUSH] node NOT FOUND sid=0
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=10
+[Gateway] rx len=52 magic=0x57564d58
+[GW-PUSH] node NOT FOUND sid=0
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=13
+[Gateway] rx len=52 magic=0x57564d58
+[GW-PUSH] node NOT FOUND sid=0
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=16
+[Gateway] rx len=52 magic=0x57564d58
+[GW-PUSH] node NOT FOUND sid=0
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx len=52 magic=0x57564d58
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=19
+[Gateway] rx len=52 magic=0x57564d58
+[GW-PUSH] node NOT FOUND sid=0
+[Gateway] drop heartbeat rate-limit
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=22
+[GW-PUSH] node NOT FOUND sid=0
+[Gateway] drop heartbeat rate-limit
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=25
+[GW-PUSH] node NOT FOUND sid=0
+[Gateway] drop heartbeat rate-limit
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=28
+[GW-PUSH] node NOT FOUND sid=0
+[Gateway] drop heartbeat rate-limit
+[Gateway] drop heartbeat rate-limit
+[Gateway] rx-stats big=0 small=31
+[Gateway] rx-stats big=0 small=34
+[Gateway] rx-stats big=0 small=37
+[Gateway] rx-stats big=0 small=40
+[Gateway] rx-stats big=0 small=43
+[Gateway] rx-stats big=0 small=46
+[Gateway] rx-stats big=0 small=49
+[Gateway] rx-stats big=0 small=52
+[Gateway] rx-stats big=0 small=55
+[Gateway] rx-stats big=0 small=58
+[Gateway] rx-stats big=0 small=61
+[Gateway] rx-stats big=0 small=64
+[Gateway] rx-stats big=0 small=67
+[Gateway] rx-stats big=0 small=70
+[Gateway] rx-stats big=0 small=73
+[Gateway] rx-stats big=0 small=76
+[Gateway] rx-stats big=0 small=79
+[Gateway] rx-stats big=0 small=82
+[Gateway] rx-stats big=0 small=85
+[Gateway] rx-stats big=0 small=88
+[Gateway] rx-stats big=0 small=91
+[Gateway] rx-stats big=0 small=94
+[Gateway] rx-stats big=0 small=97
+[Gateway] rx-stats big=0 small=100
+[Gateway] rx-stats big=0 small=103
+[Gateway] rx-stats big=0 small=106
+[Gateway] rx-stats big=0 small=109
+[Gateway] rx-stats big=0 small=112
+[Gateway] rx-stats big=0 small=115
+[Gateway] rx-stats big=0 small=118
+[Gateway] rx-stats big=0 small=121
+[Gateway] rx-stats big=0 small=124
+[Gateway] rx-stats big=0 small=127
+[Gateway] rx-stats big=0 small=130
+[Gateway] rx-stats big=0 small=133
+[Gateway] rx-stats big=0 small=136
+[Gateway] rx-stats big=0 small=139
+[Gateway] rx-stats big=0 small=142
+[Gateway] rx-stats big=0 small=145
+[Gateway] rx-stats big=0 small=148
+[Gateway] rx-stats big=0 small=151
