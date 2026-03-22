@@ -1,5 +1,6 @@
 
 #include "qemu/osdep.h"
+#include "qemu-common.h"
 #include "cpu.h"
 #include "sysemu/cpus.h"
 #include "sysemu/hw_accel.h"
