@@ -86,6 +86,9 @@
     #include <stdatomic.h>
     #include <stdbool.h>
     #include <unistd.h>
+#ifndef ATOMIC_VAR_INIT
+#define ATOMIC_VAR_INIT(v) (v)
+#endif
 #endif
 
 // --- 全局状态 ---
