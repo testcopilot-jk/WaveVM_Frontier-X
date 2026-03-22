@@ -806,8 +806,8 @@ static void* rx_thread_loop(void *arg) {
     while (1) {
         if (poll(&pfd, 1, -1) <= 0) continue;
 
-        int n = recvmmsg(sockfd, msgs, BATCH_SIZE, 0, NULL);
-        if (n <= 0) continue;
+        int n = recvmmsg(sockfd, msgs, BATCH_SIZE, MSG_DONTWAIT, NULL);
+        if (n <= 0) { if (errno == EAGAIN || errno == EWOULDBLOCK) usleep(100); continue; }
 
         for (int i = 0; i < n; i++) {        
             uint8_t *base_ptr = (uint8_t *)iovecs[i].iov_base; // 基准地址

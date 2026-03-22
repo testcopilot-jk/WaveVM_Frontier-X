@@ -566,6 +566,21 @@ static int internal_push(int fd, uint32_t slave_id, void *data, int len) {
         return ret; // 返回发送结果 (可能 EAGAIN)
     }
 
+
+    // [FIX] VCPU_RUN/EXIT bypass aggregation buffer (latency-sensitive sync RPC)
+    // Single RPC packet (740B < MTU 1400) would stall in buffer waiting to fill up
+    if (len >= (int)sizeof(struct wvm_header)) {
+        struct wvm_header *hdr = (struct wvm_header *)data;
+        uint16_t mt = ntohs(hdr->msg_type);
+        if (mt == MSG_VCPU_RUN || mt == MSG_VCPU_EXIT) {
+            if (node->buffer && node->buffer->current_len > 0) {
+                flush_buffer(fd, node);
+            }
+            pthread_mutex_unlock(&node->lock);
+            return raw_send_to_downstream(fd, node, data, len);
+        }
+    }
+
     // --- 常规小包聚合逻辑 ---
     
     // Lazy allocation
@@ -795,10 +810,10 @@ static void* gateway_worker(void *arg) {
     while (1) {
         if (g_use_recvfrom) {
             socklen_t slen = sizeof(struct sockaddr_in);
-            int pkt_len = recvfrom(local_fd, buffer_pool, WVM_MAX_PACKET_SIZE, 0,
+            int pkt_len = recvfrom(local_fd, buffer_pool, WVM_MAX_PACKET_SIZE, MSG_DONTWAIT,
                                    (struct sockaddr *)&src_addrs[0], &slen);
             if (pkt_len <= 0) {
-                if (errno == EINTR) continue;
+                if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) { usleep(100); continue; }
                 if (core_id == 0) {
                     int rxq = get_rxq_bytes(local_fd);
                     fprintf(stderr, "[Gateway] recvfrom err=%d rxq=%d\n", errno, rxq);
@@ -828,9 +843,9 @@ static void* gateway_worker(void *arg) {
             continue;
         }
 
-        int n = recvmmsg(local_fd, msgs, BATCH_SIZE, 0, NULL);
+        int n = recvmmsg(local_fd, msgs, BATCH_SIZE, MSG_DONTWAIT, NULL);
         if (n <= 0) {
-            if (errno == EINTR) continue;
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) { usleep(100); continue; }
             if (core_id == 0) {
                 int rxq = get_rxq_bytes(local_fd);
                 fprintf(stderr, "[Gateway] recvmmsg err=%d rxq=%d\n", errno, rxq);

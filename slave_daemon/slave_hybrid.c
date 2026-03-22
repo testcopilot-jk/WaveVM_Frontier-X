@@ -1270,8 +1270,8 @@ void* kvm_worker_thread(void *arg) {
     for(int i=0;i<BATCH_SIZE;i++) { iov[i].iov_base=bufs[i]; iov[i].iov_len=POOL_ITEM_SIZE; msgs[i].msg_hdr.msg_iov=&iov[i]; msgs[i].msg_hdr.msg_iovlen=1; msgs[i].msg_hdr.msg_name=&c[i]; msgs[i].msg_hdr.msg_namelen=sizeof(c[i]); }
 
     while(1) {
-        int n = recvmmsg(s, msgs, BATCH_SIZE, 0, NULL);
-        if (n<=0) continue;
+        int n = recvmmsg(s, msgs, BATCH_SIZE, MSG_DONTWAIT, NULL);
+        if (n<=0) { if (errno == EAGAIN || errno == EWOULDBLOCK) usleep(100); continue; }
         for(int i=0;i<n;i++) {
             struct wvm_header *h = (struct wvm_header*)bufs[i];
             if (h->magic != htonl(WVM_MAGIC)) continue;
@@ -1505,8 +1505,8 @@ void* tcg_proxy_thread(void *arg) {
     printf("[Proxy] Tri-Channel NAT Active (CMD/REQ/PUSH) + MESI Support.\n");
 
     while(1) {
-        int n = recvmmsg(sockfd, msgs, BATCH_SIZE, 0, NULL);
-        if (n <= 0) continue;
+        int n = recvmmsg(sockfd, msgs, BATCH_SIZE, MSG_DONTWAIT, NULL);
+        if (n <= 0) { if (errno == EAGAIN || errno == EWOULDBLOCK) usleep(100); continue; }
 
         for (int i=0; i<n; i++) {
             struct wvm_header *hdr = (struct wvm_header *)buffers[i];
