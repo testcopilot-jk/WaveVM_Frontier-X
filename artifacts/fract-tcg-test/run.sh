@@ -54,19 +54,22 @@ trap 'mv /dev/kvm.off /dev/kvm 2>/dev/null || true; pkill -f wavevm_node_master 
 
 QPATH="$ROOT/wavevm-qemu/build-native:$PATH"
 
+# === Gateway env vars (proven in KVM fractal test) ===
+export WVM_GATEWAY_SINGLE_RX=1 WVM_GATEWAY_DISABLE_REUSEPORT=1 WVM_GATEWAY_USE_RECVFROM=1 WVM_GATEWAY_MULTI_QUEUE=0
+
 # === Start 5 gateways (top-down: L2 → L1a/L1b → sidecar_a/sidecar_b) ===
 
 echo "=== Starting L2 gateway (top, full table) ==="
 # L2: listen 19520, upstream 19599 (dummy/none), ctrl 19521
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19520 127.0.0.1 19599 "$ART_DIR/l2_routes.txt" 19521) >"$ART_DIR/gw_l2.log" 2>&1 &
+(env PATH="$QPATH" WVM_GATEWAY_DISABLE_LEARN_ROUTE=1 stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19520 127.0.0.1 19599 "$ART_DIR/l2_routes.txt" 19521) >"$ART_DIR/gw_l2.log" 2>&1 &
 GL2=$!
 
 echo "=== Starting L1 gateways ==="
 # L1a: listen 19320, upstream L2:19520, ctrl 19321
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19320 127.0.0.1 19520 "$ART_DIR/l1a_routes.txt" 19321) >"$ART_DIR/gw_l1a.log" 2>&1 &
+(env PATH="$QPATH" WVM_GATEWAY_DISABLE_LEARN_ROUTE=1 stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19320 127.0.0.1 19520 "$ART_DIR/l1a_routes.txt" 19321) >"$ART_DIR/gw_l1a.log" 2>&1 &
 GL1A=$!
 # L1b: listen 19420, upstream L2:19520, ctrl 19421
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19420 127.0.0.1 19520 "$ART_DIR/l1b_routes.txt" 19421) >"$ART_DIR/gw_l1b.log" 2>&1 &
+(env PATH="$QPATH" WVM_GATEWAY_DISABLE_LEARN_ROUTE=1 stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19420 127.0.0.1 19520 "$ART_DIR/l1b_routes.txt" 19421) >"$ART_DIR/gw_l1b.log" 2>&1 &
 GL1B=$!
 
 echo "=== Starting sidecar gateways ==="
@@ -77,17 +80,21 @@ GSA=$!
 (env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19220 127.0.0.1 19420 "$ART_DIR/sidecar_b_routes.txt" 19221) >"$ART_DIR/gw_sidecar_b.log" 2>&1 &
 GSB=$!
 
-echo "=== Starting slaves ==="
-(env PATH="$QPATH" WVM_SHM_FILE=/wvm_fract_node0 stdbuf -oL -eL "$ROOT/slave_daemon/wavevm_node_slave" 19105 2 2048 0 19121) >"$ART_DIR/slave0.log" 2>&1 &
-S0=$!
-(env PATH="$QPATH" WVM_SHM_FILE=/wvm_fract_node1 stdbuf -oL -eL "$ROOT/slave_daemon/wavevm_node_slave" 19205 1 1024 1 19221) >"$ART_DIR/slave1.log" 2>&1 &
-S1=$!
-
-echo "=== Starting masters ==="
+echo "=== Starting masters (先于 slaves，创建 SHM) ==="
+export WVM_POLL_TIMEOUT_MS=100 WVM_RX_THREAD_COUNT=1 WVM_DISABLE_REUSEPORT=1
 (env PATH="$QPATH" WVM_INSTANCE_ID=0 WVM_SHM_FILE=/wvm_fract_node0 stdbuf -oL -eL "$ROOT/master_core/wavevm_node_master" 2048 19100 "$CFG" 0 19121 19105 1) >"$ART_DIR/master0.log" 2>&1 &
 M0=$!
 (env PATH="$QPATH" WVM_INSTANCE_ID=1 WVM_SHM_FILE=/wvm_fract_node1 stdbuf -oL -eL "$ROOT/master_core/wavevm_node_master" 1024 19200 "$CFG" 1 19221 19205 1) >"$ART_DIR/master1.log" 2>&1 &
 M1=$!
+
+sleep 2  # 等 master 创建 SHM
+
+echo "=== Starting slaves ==="
+export WVM_NONBLOCK_RECV=1
+(env PATH="$QPATH" WVM_SHM_FILE=/wvm_fract_node0 stdbuf -oL -eL "$ROOT/slave_daemon/wavevm_node_slave" 19105 2 2048 0 19121) >"$ART_DIR/slave0.log" 2>&1 &
+S0=$!
+(env PATH="$QPATH" WVM_SHM_FILE=/wvm_fract_node1 stdbuf -oL -eL "$ROOT/slave_daemon/wavevm_node_slave" 19205 1 1024 1 19221) >"$ART_DIR/slave1.log" 2>&1 &
+S1=$!
 
 echo "=== Waiting 8s for convergence ==="
 sleep 8
