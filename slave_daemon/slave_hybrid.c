@@ -505,6 +505,23 @@ void init_kvm_global() {
         }
     }
 
+    /* Slot 3: BIOS ROM 高地址映射 [0xFFFF0000, 0x100000000)
+     * x86 reset vector 在 GPA 0xFFFFFFF0，需要这段映射才能执行 BIOS。
+     * 直接用 g_phy_ram + 0xF0000 (SHM mmap)，QEMU 写入后 slave 立即可见。 */
+    if (g_slave_ram_size >= 0x100000ULL) {
+        uint64_t bios_gpa  = 0xFFFF0000ULL;
+        uint64_t bios_size = 0x10000ULL;  /* 64KB */
+        if (wvm_kvm_add_memslot(g_vm_fd, 3, bios_gpa, bios_size,
+                                g_phy_ram + 0xF0000, 0, false) < 0) {
+            fprintf(stderr, "[Hybrid] BIOS ROM slot failed\n");
+        } else {
+            fprintf(stderr, "[Hybrid] BIOS ROM slot 3: GPA [0x%llx, 0x%llx) -> HVA %p\n",
+                    (unsigned long long)bios_gpa,
+                    (unsigned long long)(bios_gpa + bios_size),
+                    (void*)(g_phy_ram + 0xF0000));
+        }
+    }
+
     g_kvm_available = 1;
     pthread_spin_init(&g_master_lock, 0);
 
@@ -858,6 +875,14 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         }
     }
 
+    /* [FIX] HLT 快速返回：slave 无本地中断源（PIT/APIC timer），
+     * 若上一轮 exit 是 HLT，再次 KVM_RUN 会死等中断永远阻塞。
+     * 直接返回 HLT exit，让 QEMU 侧注入定时器中断后再下发。 */
+    if (!req->mode_tcg && req->ctx.kvm.exit_reason == KVM_EXIT_HLT) {
+        t_kvm_run->exit_reason = KVM_EXIT_HLT;
+        goto skip_kvm_run;
+    }
+
     int ret;
     do {
         ret = ioctl(t_vcpu_fd, KVM_RUN, 0);
@@ -867,13 +892,14 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
                     t_kvm_run->mmio.data,
                     t_kvm_run->mmio.len,
                     t_kvm_run->mmio.is_write)) {
-                continue; 
+                continue;
             }
         }
         if (ret == 0) break;
     } while (ret == -1 && errno == EINTR);
 
-    if (g_wvm_dev_fd < 0) { 
+skip_kvm_run:
+    if (g_wvm_dev_fd < 0) {
         // [V28.5 FIXED] KVM Dirty Log Sync (Full Implementation)
         // 完整实现：获取位图 -> 遍历 -> 封包 -> 发送
         struct kvm_dirty_log log = { .slot = 0 };

@@ -247,11 +247,15 @@ static void handle_ipc_cpu_run(int qemu_fd, struct wvm_ipc_cpu_run_req* req) {
     if (!WVM_IS_VALID_TARGET(req->slave_id)) {
         ack.status = -ENODEV;
     } else {
-        ack.status = wvm_rpc_call(MSG_VCPU_RUN, &req->ctx,
+        /* [FIX] rx_buffer 必须是 &ack (完整 ack 结构体)，而不是 &ack.ctx。
+         * slave 返回的 UDP payload = status(4) + mode_tcg(4) + ctx，
+         * 旧代码传 &ack.ctx 导致 status/mode_tcg 写入 ctx 开头，所有寄存器偏移 8 字节。 */
+        int rpc_ret = wvm_rpc_call(MSG_VCPU_RUN, &req->ctx,
             req->mode_tcg ? sizeof(req->ctx.tcg) : sizeof(req->ctx.kvm),
-            req->slave_id, &ack.ctx, sizeof(ack.ctx));
+            req->slave_id, &ack, sizeof(ack));
+        if (rpc_ret < 0) ack.status = rpc_ret;
+        /* ack.mode_tcg 已由 slave 响应填充 */
     }
-    ack.mode_tcg = req->mode_tcg;
     write_exact(qemu_fd, &ack, sizeof(ack));
 }
 
