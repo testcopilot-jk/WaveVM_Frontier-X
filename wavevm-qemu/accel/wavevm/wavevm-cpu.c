@@ -260,11 +260,18 @@ static void wavevm_remote_exec(CPUState *cpu) {
     /* [FIX] Don't send AP vCPUs until they receive SIPI.
      * KVM internally tracks MP state: BSP starts as RUNNABLE,
      * APs start as UNINITIALIZED/INIT_RECEIVED and wait for SIPI.
-     * Without this check, the slave would execute AP vCPUs from
-     * the reset vector, corrupting shared memory with BSP. */
+     * SIPI_RECEIVED (3) means SIPI was delivered but KVM_RUN hasn't
+     * been called yet to transition to RUNNABLE. We signal the caller
+     * to handle this with a local kvm_cpu_exec() first. */
     if (kvm_enabled()) {
         struct kvm_mp_state mp;
         if (ioctl(cpu->kvm_fd, KVM_GET_MP_STATE, &mp) == 0) {
+            if (mp.mp_state == 3) { /* KVM_MP_STATE_SIPI_RECEIVED */
+                /* Signal caller: need local KVM_RUN to handle SIPI transition */
+                cpu->halted = 1;
+                cpu->exception_index = 0x10003; /* magic: SIPI_RECEIVED */
+                return;
+            }
             if (mp.mp_state != KVM_MP_STATE_RUNNABLE) {
                 cpu->halted = 1;
                 return;
@@ -661,6 +668,22 @@ static void *wavevm_cpu_thread_fn(void *arg) {
                  * Release iothread lock so main loop can process PIT timers.
                  * PIT fires at ~18.2Hz; poll every 1ms for interrupt_request. */
                 if (cpu->halted) {
+                    /* Check if remote_exec signaled SIPI_RECEIVED via magic */
+                    if (cpu->exception_index == 0x10003) {
+                        cpu->exception_index = 0;
+                        cpu->halted = 0;
+                        /* SIPI received: do local KVM_RUN to let KVM handle
+                         * the SIPI->RUNNABLE transition. KVM will start the
+                         * vCPU at the SIPI vector address. After this, the AP
+                         * executes the BIOS trampoline locally until HLT. */
+                        fprintf(stderr, "[WVM-SIPI] cpu=%d doing local kvm_cpu_exec for SIPI transition\n",
+                                cpu->cpu_index);
+                        int sipi_r = kvm_cpu_exec(cpu);
+                        fprintf(stderr, "[WVM-SIPI] cpu=%d kvm_cpu_exec returned %d halted=%d\n",
+                                cpu->cpu_index, sipi_r, cpu->halted);
+                        /* Let main loop re-enter; next iteration AP is RUNNABLE */
+                        continue;
+                    }
                     /* Check MP state: AP in SIPI-wait should stay halted
                      * until SIPI is delivered. Only clear halted for
                      * guest HLT (waiting for timer interrupt). */
@@ -675,11 +698,20 @@ static void *wavevm_cpu_thread_fn(void *arg) {
                             continue;
                         }
                     }
-                    /* Guest HLT: wait one PIT tick then retry */
-                    qemu_mutex_unlock_iothread();
-                    g_usleep(55000);  /* 55ms = one PIT tick */
-                    qemu_mutex_lock_iothread();
-                    cpu->halted = 0;
+                    /* Guest HLT from remote AP: keep halted, poll for state change.
+                     * After BIOS SMP init, APs HLT and should stay halted until
+                     * the OS sends INIT+SIPI. Only wake if MP state changes
+                     * (SIPI received) or if there's an interrupt pending. */
+                    if (cpu->interrupt_request & CPU_INTERRUPT_HARD) {
+                        /* External interrupt pending: wake up */
+                        cpu->halted = 0;
+                    } else {
+                        /* No interrupt: stay halted, poll every 50ms */
+                        qemu_mutex_unlock_iothread();
+                        g_usleep(50000);
+                        qemu_mutex_lock_iothread();
+                        continue;
+                    }
                 }
             }
             /* Local vCPU: 复用 QEMU 原生 kvm_cpu_exec()
@@ -694,9 +726,18 @@ static void *wavevm_cpu_thread_fn(void *arg) {
                             cpu->exit_request, cpu->kvm_run ? cpu->kvm_run->exit_reason : -1);
                 }
                 int r = kvm_cpu_exec(cpu);
-                if (bsp_dbg_count < 20) {
-                    fprintf(stderr, "[BSP-DBG] cpu=%d iter=%d kvm_cpu_exec returned %d\n",
-                            cpu->cpu_index, bsp_dbg_count, r);
+                if (bsp_dbg_count < 200) {
+                    struct kvm_regs bsp_kr;
+                    struct kvm_sregs bsp_sr;
+                    ioctl(cpu->kvm_fd, KVM_GET_REGS, &bsp_kr);
+                    ioctl(cpu->kvm_fd, KVM_GET_SREGS, &bsp_sr);
+                    fprintf(stderr, "[BSP-DBG] cpu=%d iter=%d ret=%d rip=0x%llx cs=0x%x/0x%llx rfl=0x%llx rax=0x%llx halted=%d\n",
+                            cpu->cpu_index, bsp_dbg_count, r,
+                            (unsigned long long)bsp_kr.rip,
+                            bsp_sr.cs.selector, (unsigned long long)bsp_sr.cs.base,
+                            (unsigned long long)bsp_kr.rflags,
+                            (unsigned long long)bsp_kr.rax,
+                            cpu->halted);
                     bsp_dbg_count++;
                 }
                 if (r == EXCP_DEBUG) {

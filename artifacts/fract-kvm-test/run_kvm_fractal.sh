@@ -41,7 +41,7 @@ sleep 8
 
 # QEMU
 WVM_INSTANCE_ID=0 $ROOT/wavevm-qemu/build-native/qemu-system-x86_64 \
-  -accel wavevm -machine q35 -m 3072 -smp 3 \
+  -accel wavevm -machine q35,smm=off -m 3072 -smp 3 \
   -object memory-backend-ram,id=ram0,size=2048M \
   -object memory-backend-ram,id=ram1,size=1024M \
   -numa node,memdev=ram0,cpus=0-1,nodeid=0 \

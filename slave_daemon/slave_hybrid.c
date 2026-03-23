@@ -1059,8 +1059,41 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         }
     }
 
-    ioctl(t_vcpu_fd, KVM_SET_SREGS, &ksregs);
-    ioctl(t_vcpu_fd, KVM_SET_REGS, &kregs);
+    /* SET_REGS first, then SET_MP_STATE.
+     * KVM_SET_MP_STATE(RUNNABLE) on a fresh vCPU can trigger an internal
+     * reset that wipes registers. Setting regs FIRST then MP state avoids
+     * this; alternatively we only set MP state once at init. */
+    {
+        int sr_ret = ioctl(t_vcpu_fd, KVM_SET_SREGS, &ksregs);
+        int rr_ret = ioctl(t_vcpu_fd, KVM_SET_REGS, &kregs);
+        /* Only set MP_STATE to RUNNABLE once per vCPU lifetime */
+        static __thread int mp_state_set = 0;
+        if (!mp_state_set) {
+            struct kvm_mp_state mps = { .mp_state = 0 }; /* RUNNABLE */
+            int mp_ret = ioctl(t_vcpu_fd, KVM_SET_MP_STATE, &mps);
+            fprintf(stderr, "[DBG-MP] KVM_SET_MP_STATE(RUNNABLE) ret=%d errno=%d vcpu_fd=%d (one-time)\n",
+                    mp_ret, (mp_ret < 0) ? errno : 0, t_vcpu_fd);
+            mp_state_set = 1;
+            /* Re-set regs AFTER mp_state in case the transition wiped them */
+            sr_ret = ioctl(t_vcpu_fd, KVM_SET_SREGS, &ksregs);
+            rr_ret = ioctl(t_vcpu_fd, KVM_SET_REGS, &kregs);
+        }
+        static int set_dbg = 0;
+        if (set_dbg < 10) {
+            /* Verify registers actually stuck by reading back */
+            struct kvm_regs kr_verify;
+            struct kvm_sregs ks_verify;
+            ioctl(t_vcpu_fd, KVM_GET_REGS, &kr_verify);
+            ioctl(t_vcpu_fd, KVM_GET_SREGS, &ks_verify);
+            fprintf(stderr, "[DBG-SET] SET sr=%d rr=%d | VERIFY rip=0x%llx cs_base=0x%llx cs_sel=0x%x rflags=0x%llx\n",
+                    sr_ret, rr_ret,
+                    (unsigned long long)kr_verify.rip,
+                    (unsigned long long)ks_verify.cs.base,
+                    (unsigned)ks_verify.cs.selector,
+                    (unsigned long long)kr_verify.rflags);
+            set_dbg++;
+        }
+    }
 
     /* [DBG] Print RAW incoming ctx BEFORE assignment */
     {
