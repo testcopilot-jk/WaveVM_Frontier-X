@@ -34,6 +34,8 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <stdbool.h>
+#include <signal.h>
+#include <sys/syscall.h>
 #include "uthash.h"
 #include "slave_vfio.h"
 
@@ -66,6 +68,14 @@ static int g_master_ready = 0;
 static struct sockaddr_in g_master_addr;
 static char *g_vfio_config_path = NULL; 
 int g_ctrl_port = 9001; // 真实定义，供应给 wavevm_node_slave
+
+// --- KVM_RUN alarm timeout (thread-directed) ---
+static __thread volatile sig_atomic_t t_kvm_alarm_fired = 0;
+
+static void kvm_alarm_handler(int sig) {
+    (void)sig;
+    t_kvm_alarm_fired = 1;
+}
 
 // MPSC 队列数据结构
 
@@ -388,22 +398,104 @@ void init_kvm_global() {
         printf("[Hybrid] KVM: Detected /dev/wavevm. Enabling On-Demand Paging (Fast Path).\n");
         g_phy_ram = mmap(NULL, g_slave_ram_size, PROT_READ|PROT_WRITE, MAP_SHARED, g_wvm_dev_fd, 0);
     } else {
-        // [FIXED] 优先使用 SHM 文件，方便单机测试隔离
-        const char *shm_path = getenv("WVM_SHM_FILE");
-        if (shm_path) {
-            printf("[Hybrid] KVM: Kernel module not found. Using SHM File: %s\n", shm_path);
-            int shm_fd = shm_open(shm_path, O_CREAT | O_RDWR, 0666);
-            if (shm_fd >= 0) {
-                ftruncate(shm_fd, g_slave_ram_size);
-                g_phy_ram = mmap(NULL, g_slave_ram_size, PROT_READ|PROT_WRITE, MAP_SHARED, shm_fd, 0);
-                close(shm_fd);
+        /* [FIX] NUMA-aware multi-SHM mapping.
+         * WVM_NUMA_MAP="size_mb:shm_path,size_mb:shm_path,..."
+         * Entries are ordered by GPA. Each slave maps ALL regions so the
+         * full guest physical address space is accessible.
+         * Falls back to WVM_SHM_FILE (single region at GPA 0) if unset. */
+        const char *numa_map = getenv("WVM_NUMA_MAP");
+        if (numa_map) {
+            /* --- Phase 1: parse entries, compute total size --- */
+            #define WVM_NUMA_MAX_NODES 16
+            struct { uint64_t size; char path[256]; } nodes[WVM_NUMA_MAX_NODES];
+            int n_nodes = 0;
+            uint64_t total_size = 0;
+            {
+                char buf[2048];
+                strncpy(buf, numa_map, sizeof(buf) - 1);
+                buf[sizeof(buf) - 1] = 0;
+                char *saveptr = NULL;
+                for (char *tok = strtok_r(buf, ",", &saveptr);
+                     tok && n_nodes < WVM_NUMA_MAX_NODES;
+                     tok = strtok_r(NULL, ",", &saveptr))
+                {
+                    char *colon = strchr(tok, ':');
+                    if (!colon) continue;
+                    *colon = 0;
+                    uint64_t sz_mb = (uint64_t)atol(tok);
+                    const char *path = colon + 1;
+                    if (sz_mb == 0 || !path[0]) continue;
+                    nodes[n_nodes].size = sz_mb * 1024ULL * 1024ULL;
+                    strncpy(nodes[n_nodes].path, path, sizeof(nodes[n_nodes].path) - 1);
+                    nodes[n_nodes].path[sizeof(nodes[n_nodes].path) - 1] = 0;
+                    total_size += nodes[n_nodes].size;
+                    n_nodes++;
+                }
+            }
+            if (n_nodes > 0 && total_size > 0) {
+                /* --- Phase 2: reserve contiguous VA, then MAP_FIXED each SHM --- */
+                g_phy_ram = mmap(NULL, total_size,
+                                 PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+                if (g_phy_ram && g_phy_ram != MAP_FAILED) {
+                    uint64_t gpa_off = 0;
+                    int ok = 1;
+                    for (int i = 0; i < n_nodes; i++) {
+                        int fd = shm_open(nodes[i].path, O_CREAT | O_RDWR, 0666);
+                        if (fd < 0) {
+                            fprintf(stderr, "[Hybrid] NUMA: shm_open(%s) failed: %s\n",
+                                    nodes[i].path, strerror(errno));
+                            ok = 0; break;
+                        }
+                        ftruncate(fd, nodes[i].size);
+                        void *m = mmap(g_phy_ram + gpa_off, nodes[i].size,
+                                       PROT_READ | PROT_WRITE,
+                                       MAP_SHARED | MAP_FIXED, fd, 0);
+                        close(fd);
+                        if (m == MAP_FAILED) {
+                            fprintf(stderr, "[Hybrid] NUMA: mmap(%s, %llu MB at GPA 0x%llx) failed: %s\n",
+                                    nodes[i].path,
+                                    (unsigned long long)(nodes[i].size / (1024*1024)),
+                                    (unsigned long long)gpa_off, strerror(errno));
+                            ok = 0; break;
+                        }
+                        fprintf(stderr, "[Hybrid] NUMA: node %d  %s  %llu MB  GPA [0x%llx, 0x%llx)\n",
+                                i, nodes[i].path,
+                                (unsigned long long)(nodes[i].size / (1024*1024)),
+                                (unsigned long long)gpa_off,
+                                (unsigned long long)(gpa_off + nodes[i].size));
+                        gpa_off += nodes[i].size;
+                    }
+                    if (ok) {
+                        g_slave_ram_size = total_size;
+                        fprintf(stderr, "[Hybrid] NUMA: %d nodes mapped, total %llu MB\n",
+                                n_nodes, (unsigned long long)(total_size / (1024*1024)));
+                    } else {
+                        munmap(g_phy_ram, total_size);
+                        g_phy_ram = NULL;
+                    }
+                }
+            }
+            #undef WVM_NUMA_MAX_NODES
+        }
+
+        /* Legacy single-SHM fallback */
+        if (!g_phy_ram || g_phy_ram == MAP_FAILED) {
+            const char *shm_path = getenv("WVM_SHM_FILE");
+            if (shm_path) {
+                printf("[Hybrid] KVM: Using SHM File: %s\n", shm_path);
+                int shm_fd = shm_open(shm_path, O_CREAT | O_RDWR, 0666);
+                if (shm_fd >= 0) {
+                    ftruncate(shm_fd, g_slave_ram_size);
+                    g_phy_ram = mmap(NULL, g_slave_ram_size, PROT_READ|PROT_WRITE, MAP_SHARED, shm_fd, 0);
+                    close(shm_fd);
+                }
             }
         }
-        
-        // 如果 SHM 失败或未设置，回退到匿名内存
+
+        // 如果以上都失败，回退到匿名内存
         if (!g_phy_ram || g_phy_ram == MAP_FAILED) {
             printf("[Hybrid] KVM: Using Anonymous RAM.\n");
-            g_phy_ram = mmap(NULL, g_slave_ram_size, PROT_READ|PROT_WRITE, 
+            g_phy_ram = mmap(NULL, g_slave_ram_size, PROT_READ|PROT_WRITE,
                              MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
         }
     }
@@ -450,6 +542,7 @@ void init_kvm_global() {
     __u64 map_addr = WVM_KVM_IDMAP_ADDR;
     ioctl(g_vm_fd, KVM_SET_IDENTITY_MAP_ADDR, &map_addr);
     ioctl(g_vm_fd, KVM_CREATE_IRQCHIP, 0);
+
 
     g_kvm_slot_count = 0;
 
@@ -520,6 +613,8 @@ void init_kvm_global() {
                     (unsigned long long)(bios_gpa + bios_size),
                     (void*)(g_phy_ram + 0xF0000));
         }
+
+
     }
 
     g_kvm_available = 1;
@@ -846,8 +941,87 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         ksregs.efer = remote_sregs->efer;
     }
 
+    /* [FIX] Lazy BIOS ROM load: on first request, if BIOS area is empty,
+     * load directly from bios.bin file. No timing dependency on QEMU. */
+    {
+        static volatile int bios_copied = 0;
+        if (!bios_copied) {
+            uint32_t *bc = (uint32_t *)(g_phy_ram + 0xFFFF0);
+            if (bc[0] == 0) {
+                /* Try loading from bios.bin file (last 64KB = physical 0xF0000-0xFFFFF) */
+                const char *bios_paths[] = {
+                    getenv("WVM_BIOS_FILE"),
+                    "/workspaces/WaveVM_Frontier-X/wavevm-qemu/pc-bios/bios.bin",
+                    "/usr/share/seabios/bios.bin",
+                    NULL
+                };
+                int loaded = 0;
+                for (int i = 0; i < 3 && !loaded; i++) {
+                    if (!bios_paths[i]) continue;
+                    FILE *bf = fopen(bios_paths[i], "rb");
+                    if (bf) {
+                        fseek(bf, 0, SEEK_END);
+                        long bsz = ftell(bf);
+                        /* Read last 64KB of BIOS image -> physical 0xF0000 */
+                        long off = (bsz > 0x10000) ? (bsz - 0x10000) : 0;
+                        long rdsz = (bsz > 0x10000) ? 0x10000 : bsz;
+                        fseek(bf, off, SEEK_SET);
+                        size_t rd = fread(g_phy_ram + 0xF0000, 1, rdsz, bf);
+                        fclose(bf);
+                        if (rd == (size_t)rdsz) {
+                            fprintf(stderr, "[Hybrid] BIOS ROM loaded from %s (%ld bytes at 0xF0000): reset=%08x\n",
+                                    bios_paths[i], rdsz, *(uint32_t*)(g_phy_ram + 0xFFFF0));
+                            loaded = 1;
+                        }
+                    }
+                }
+                if (!loaded) {
+                    fprintf(stderr, "[Hybrid] WARN: BIOS ROM area empty and no bios.bin found!\n");
+                }
+            }
+            bios_copied = 1;
+        }
+    }
+
     ioctl(t_vcpu_fd, KVM_SET_SREGS, &ksregs);
     ioctl(t_vcpu_fd, KVM_SET_REGS, &kregs);
+
+    /* [DBG] Print RAW incoming ctx BEFORE assignment */
+    {
+        static int dbg_raw = 0;
+        if (dbg_raw < 50) {
+            wvm_kvm_context_t *rctx = &req->ctx.kvm;
+            struct kvm_sregs *rs = (struct kvm_sregs *)rctx->sregs_data;
+            fprintf(stderr, "[DBG-RAW] req=%llu rip=0x%llx rax=0x%llx cs_base=0x%llx cs_sel=0x%x exit=%u\n",
+                (unsigned long long)hdr->req_id,
+                (unsigned long long)rctx->rip,
+                (unsigned long long)rctx->rax,
+                (unsigned long long)rs->cs.base,
+                (unsigned)rs->cs.selector,
+                (unsigned)rctx->exit_reason);
+            dbg_raw++;
+        }
+    }
+
+    /* [DBG] Print registers before KVM_RUN for first 10 requests */
+    {
+        static int dbg_count = 0;
+        if (dbg_count < 10) {
+            wvm_kvm_context_t *dctx = &req->ctx.kvm;
+            fprintf(stderr, "[DBG-REGS] req=%llu rip=0x%llx cs_base=0x%llx cs_sel=0x%x rflags=0x%llx rax=0x%llx exit=%u io_port=0x%x io_dir=%u io_sz=%u\n",
+                (unsigned long long)hdr->req_id,
+                (unsigned long long)kregs.rip,
+                (unsigned long long)ksregs.cs.base,
+                (unsigned)ksregs.cs.selector,
+                (unsigned long long)kregs.rflags,
+                (unsigned long long)kregs.rax,
+                (unsigned)dctx->exit_reason,
+                (unsigned)dctx->io.port,
+                (unsigned)dctx->io.direction,
+                (unsigned)dctx->io.size);
+            dbg_count++;
+        }
+    }
 
     /* [FIX] 恢复上一轮 IO IN / MMIO READ 的设备读结果：
      * Master 已在本地执行 address_space_rw 读取设备并填入 kctx->io.data / mmio.data，
@@ -875,15 +1049,34 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         }
     }
 
-    /* [FIX] HLT 快速返回：slave 无本地中断源（PIT/APIC timer），
-     * 若上一轮 exit 是 HLT，再次 KVM_RUN 会死等中断永远阻塞。
-     * 直接返回 HLT exit，让 QEMU 侧注入定时器中断后再下发。 */
-    if (!req->mode_tcg && req->ctx.kvm.exit_reason == KVM_EXIT_HLT) {
-        t_kvm_run->exit_reason = KVM_EXIT_HLT;
-        goto skip_kvm_run;
-    }
+    /* [REMOVED] HLT fast-return disabled: rely on alarm timeout instead.
+     * The fast-return was short-circuiting ALL subsequent KVM_RUNs after
+     * the first HLT, preventing the guest from ever making progress. */
 
     int ret;
+
+    /* --- Thread-directed alarm: 50ms timeout for KVM_RUN --- */
+    t_kvm_alarm_fired = 0;
+    struct sigaction sa_new, sa_old;
+    memset(&sa_new, 0, sizeof(sa_new));
+    sa_new.sa_handler = kvm_alarm_handler;
+    sa_new.sa_flags = 0; /* no SA_RESTART so ioctl gets EINTR */
+    sigaction(SIGALRM, &sa_new, &sa_old);
+
+    timer_t ktimer;
+    struct sigevent sev;
+    memset(&sev, 0, sizeof(sev));
+    sev.sigev_notify = SIGEV_THREAD_ID;
+    sev._sigev_un._tid = (pid_t)syscall(__NR_gettid);
+    sev.sigev_signo = SIGALRM;
+    timer_create(CLOCK_MONOTONIC, &sev, &ktimer);
+
+    struct itimerspec its = {
+        .it_value = { .tv_sec = 0, .tv_nsec = 50000000 }, /* 50ms */
+        .it_interval = { 0, 0 }
+    };
+    timer_settime(ktimer, 0, &its, NULL);
+
     do {
         ret = ioctl(t_vcpu_fd, KVM_RUN, 0);
         if (ret == 0 && t_kvm_run->exit_reason == KVM_EXIT_MMIO) {
@@ -896,7 +1089,91 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
             }
         }
         if (ret == 0) break;
-    } while (ret == -1 && errno == EINTR);
+    } while (ret == -1 && errno == EINTR && !t_kvm_alarm_fired);
+
+    /* [DBG] Print KVM_RUN result for first 20 requests */
+    {
+        static int dbg_out = 0;
+        if (dbg_out < 20) {
+            fprintf(stderr, "[DBG-EXIT] ret=%d exit=%u rip_after=?  io_port=0x%x io_dir=%u io_sz=%u alarm=%d\n",
+                ret, (unsigned)t_kvm_run->exit_reason,
+                (unsigned)t_kvm_run->io.port,
+                (unsigned)t_kvm_run->io.direction,
+                (unsigned)t_kvm_run->io.size,
+                (int)t_kvm_alarm_fired);
+            dbg_out++;
+        }
+    }
+
+    /* Disarm and clean up */
+    memset(&its, 0, sizeof(its));
+    timer_settime(ktimer, 0, &its, NULL);
+    timer_delete(ktimer);
+    sigaction(SIGALRM, &sa_old, NULL);
+
+    /* If alarm fired, synthesize HLT exit */
+    if (t_kvm_alarm_fired) {
+        fprintf(stderr, "[Slave] KVM_RUN timeout (50ms) -- synthesizing HLT exit\n");
+        t_kvm_run->exit_reason = KVM_EXIT_HLT;
+    }
+
+    /* [DBG] Log KVM_EXIT_INTERNAL_ERROR and SHUTDOWN details */
+    if (t_kvm_run->exit_reason == 17) {
+        static int dbg_ie = 0;
+        if (dbg_ie < 20) {
+            fprintf(stderr, "[DBG-INTERR] req=%u suberror=%u ndata=%u",
+                    hdr->req_id, t_kvm_run->internal.suberror, t_kvm_run->internal.ndata);
+            for (uint32_t di = 0; di < t_kvm_run->internal.ndata && di < 8; di++)
+                fprintf(stderr, " d[%u]=%llx", di, (unsigned long long)t_kvm_run->internal.data[di]);
+            fprintf(stderr, "\n");
+            struct kvm_regs kr2; struct kvm_sregs ks2;
+            ioctl(t_vcpu_fd, KVM_GET_REGS, &kr2);
+            ioctl(t_vcpu_fd, KVM_GET_SREGS, &ks2);
+            fprintf(stderr, "[DBG-INTERR] rip=0x%llx rflags=0x%llx cs=0x%x cs_base=0x%llx cr0=0x%llx cr4=0x%llx efer=0x%llx\n",
+                    (unsigned long long)kr2.rip, (unsigned long long)kr2.rflags,
+                    ks2.cs.selector, (unsigned long long)ks2.cs.base,
+                    (unsigned long long)ks2.cr0, (unsigned long long)ks2.cr4,
+                    (unsigned long long)ks2.efer);
+            dbg_ie++;
+        }
+    }
+    if (t_kvm_run->exit_reason == 8) {
+        fprintf(stderr, "[DBG-SHUTDOWN] req=%u -- triple fault!\n", hdr->req_id);
+        struct kvm_regs kr2; struct kvm_sregs ks2;
+        ioctl(t_vcpu_fd, KVM_GET_REGS, &kr2);
+        ioctl(t_vcpu_fd, KVM_GET_SREGS, &ks2);
+        fprintf(stderr, "[DBG-SHUTDOWN] after: rip=0x%llx rsp=0x%llx rflags=0x%llx\n",
+                (unsigned long long)kr2.rip, (unsigned long long)kr2.rsp,
+                (unsigned long long)kr2.rflags);
+        fprintf(stderr, "[DBG-SHUTDOWN] after: cs=0x%x/0x%llx ds=0x%x ss=0x%x\n",
+                ks2.cs.selector, (unsigned long long)ks2.cs.base,
+                ks2.ds.selector, ks2.ss.selector);
+        fprintf(stderr, "[DBG-SHUTDOWN] after: cr0=0x%llx cr3=0x%llx cr4=0x%llx efer=0x%llx\n",
+                (unsigned long long)ks2.cr0, (unsigned long long)ks2.cr3,
+                (unsigned long long)ks2.cr4, (unsigned long long)ks2.efer);
+        fprintf(stderr, "[DBG-SHUTDOWN] after: idt_base=0x%llx idt_limit=0x%x gdt_base=0x%llx gdt_limit=0x%x\n",
+                (unsigned long long)ks2.idt.base, ks2.idt.limit,
+                (unsigned long long)ks2.gdt.base, ks2.gdt.limit);
+        /* Dump what we SET before KVM_RUN (the incoming state from QEMU) */
+        wvm_kvm_context_t *sctx = &req->ctx.kvm;
+        struct kvm_sregs *in_s = (struct kvm_sregs *)sctx->sregs_data;
+        fprintf(stderr, "[DBG-SHUTDOWN] input: rip=0x%llx rsp=0x%llx rflags=0x%llx exit=%u\n",
+                (unsigned long long)sctx->rip, (unsigned long long)sctx->rsp,
+                (unsigned long long)sctx->rflags, sctx->exit_reason);
+        fprintf(stderr, "[DBG-SHUTDOWN] input: cs=0x%x/0x%llx ds=0x%x ss=0x%x\n",
+                in_s->cs.selector, (unsigned long long)in_s->cs.base,
+                in_s->ds.selector, in_s->ss.selector);
+        fprintf(stderr, "[DBG-SHUTDOWN] input: cr0=0x%llx cr3=0x%llx cr4=0x%llx efer=0x%llx\n",
+                (unsigned long long)in_s->cr0, (unsigned long long)in_s->cr3,
+                (unsigned long long)in_s->cr4, (unsigned long long)in_s->efer);
+        fprintf(stderr, "[DBG-SHUTDOWN] input: idt_base=0x%llx idt_limit=0x%x gdt_base=0x%llx gdt_limit=0x%x\n",
+                (unsigned long long)in_s->idt.base, in_s->idt.limit,
+                (unsigned long long)in_s->gdt.base, in_s->gdt.limit);
+        /* Check BIOS integrity at 0xFFFF0 */
+        fprintf(stderr, "[DBG-SHUTDOWN] bios@0xFFFF0=%08x bios@0xF0000=%08x\n",
+                *(uint32_t*)(g_phy_ram + 0xFFFF0),
+                *(uint32_t*)(g_phy_ram + 0xF0000));
+    }
 
 skip_kvm_run:
     if (g_wvm_dev_fd < 0) {
@@ -987,6 +1264,21 @@ skip_kvm_run:
     }
     // 导出寄存器状态并回包
     ioctl(t_vcpu_fd, KVM_GET_REGS, &kregs); ioctl(t_vcpu_fd, KVM_GET_SREGS, &ksregs);
+    
+    /* [DBG] Print registers AFTER KVM_RUN (what we send back) */
+    {
+        static int dbg_ack = 0;
+        if (dbg_ack < 15) {
+            fprintf(stderr, "[DBG-ACK] req=%llu rip=0x%llx cs_base=0x%llx cs_sel=0x%x rflags=0x%llx exit=%u\n",
+                (unsigned long long)hdr->req_id,
+                (unsigned long long)kregs.rip,
+                (unsigned long long)ksregs.cs.base,
+                (unsigned)ksregs.cs.selector,
+                (unsigned long long)kregs.rflags,
+                (unsigned)t_kvm_run->exit_reason);
+            dbg_ack++;
+        }
+    }
     
     struct wvm_header ack_hdr;
     memset(&ack_hdr, 0, sizeof(ack_hdr));

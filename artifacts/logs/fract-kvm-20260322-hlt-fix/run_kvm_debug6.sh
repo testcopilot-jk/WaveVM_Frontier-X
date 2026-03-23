@@ -36,8 +36,8 @@ sleep 2  # 等 master 创建 SHM
 
 # Slaves (打开 master 已创建的 SHM)
 export WVM_NONBLOCK_RECV=1
-WVM_SHM_FILE=/wvm_fract_node0 strace -f -e trace=signal -o "$ART_DIR/slave0_strace.log" $SL 19105 2 2048 0 19121 >"$ART_DIR/slave0.log" 2>&1 &
-WVM_SHM_FILE=/wvm_fract_node1 $SL 19205 1 1024 1 19221 >"$ART_DIR/slave1.log" 2>&1 &
+WVM_NUMA_MAP=2048:/wvm_fract_node0,1024:/wvm_fract_node1 WVM_SHM_FILE=/wvm_fract_node0 strace -f -e trace=signal -o "$ART_DIR/slave0_strace.log" $SL 19105 2 2048 0 19121 >"$ART_DIR/slave0.log" 2>&1 &
+WVM_NUMA_MAP=2048:/wvm_fract_node0,1024:/wvm_fract_node1 WVM_SHM_FILE=/wvm_fract_node1 $SL 19205 1 1024 1 19221 >"$ART_DIR/slave1.log" 2>&1 &
 
 sleep 6
 
