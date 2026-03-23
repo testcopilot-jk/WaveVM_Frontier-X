@@ -291,6 +291,14 @@ static void ntoh_header(struct wvm_header *hdr) {
 static int g_kvm_fd = -1;
 static int g_vm_fd = -1;
 static uint8_t *g_phy_ram = NULL;
+
+/* NUMA node info for memslot setup (populated by WVM_NUMA_MAP) */
+#define WVM_NUMA_MAX_NODES 16
+static struct {
+    uint64_t gpa;
+    uint64_t size;
+} g_numa_nodes[WVM_NUMA_MAX_NODES];
+static int g_numa_node_count = 0;
 static __thread int t_vcpu_fd = -1;
 static __thread struct kvm_run *t_kvm_run = NULL;
 static int g_boot_vcpu_fd = -1;
@@ -406,10 +414,15 @@ void init_kvm_global() {
         const char *numa_map = getenv("WVM_NUMA_MAP");
         if (numa_map) {
             /* --- Phase 1: parse entries, compute total size --- */
+            /* Parse WVM_NUMA_MAP: "gpa_hex:size_mb:shm_path,..."
+             * e.g. "0:2048:/wvm_fract_node0,100000000:1024:/wvm_fract_node1"
+             * gpa_hex = guest physical address in hex (no 0x prefix)
+             * size_mb = region size in MB
+             * shm_path = POSIX SHM name for shm_open() */
             #define WVM_NUMA_MAX_NODES 16
-            struct { uint64_t size; char path[256]; } nodes[WVM_NUMA_MAX_NODES];
+            struct { uint64_t gpa; uint64_t size; char path[256]; } nodes[WVM_NUMA_MAX_NODES];
             int n_nodes = 0;
-            uint64_t total_size = 0;
+            uint64_t va_end = 0; /* highest GPA + size = total VA needed */
             {
                 char buf[2048];
                 strncpy(buf, numa_map, sizeof(buf) - 1);
@@ -419,25 +432,35 @@ void init_kvm_global() {
                      tok && n_nodes < WVM_NUMA_MAX_NODES;
                      tok = strtok_r(NULL, ",", &saveptr))
                 {
-                    char *colon = strchr(tok, ':');
-                    if (!colon) continue;
-                    *colon = 0;
-                    uint64_t sz_mb = (uint64_t)atol(tok);
-                    const char *path = colon + 1;
+                    /* Parse "gpa_hex:size_mb:shm_path" */
+                    char *c1 = strchr(tok, ':');
+                    if (!c1) continue;
+                    *c1 = 0;
+                    char *c2 = strchr(c1 + 1, ':');
+                    if (!c2) continue;
+                    *c2 = 0;
+                    uint64_t gpa = strtoull(tok, NULL, 16);
+                    uint64_t sz_mb = (uint64_t)atol(c1 + 1);
+                    const char *path = c2 + 1;
                     if (sz_mb == 0 || !path[0]) continue;
+                    nodes[n_nodes].gpa = gpa;
                     nodes[n_nodes].size = sz_mb * 1024ULL * 1024ULL;
                     strncpy(nodes[n_nodes].path, path, sizeof(nodes[n_nodes].path) - 1);
                     nodes[n_nodes].path[sizeof(nodes[n_nodes].path) - 1] = 0;
-                    total_size += nodes[n_nodes].size;
+                    uint64_t end = gpa + nodes[n_nodes].size;
+                    if (end > va_end) va_end = end;
+                    /* Store in global for memslot setup */
+                    g_numa_nodes[n_nodes].gpa = gpa;
+                    g_numa_nodes[n_nodes].size = nodes[n_nodes].size;
                     n_nodes++;
                 }
             }
-            if (n_nodes > 0 && total_size > 0) {
-                /* --- Phase 2: reserve contiguous VA, then MAP_FIXED each SHM --- */
-                g_phy_ram = mmap(NULL, total_size,
+            if (n_nodes > 0 && va_end > 0) {
+                /* Reserve contiguous VA covering [0, va_end), then
+                 * MAP_FIXED each SHM at its correct GPA offset. */
+                g_phy_ram = mmap(NULL, va_end,
                                  PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
                 if (g_phy_ram && g_phy_ram != MAP_FAILED) {
-                    uint64_t gpa_off = 0;
                     int ok = 1;
                     for (int i = 0; i < n_nodes; i++) {
                         int fd = shm_open(nodes[i].path, O_CREAT | O_RDWR, 0666);
@@ -447,7 +470,7 @@ void init_kvm_global() {
                             ok = 0; break;
                         }
                         ftruncate(fd, nodes[i].size);
-                        void *m = mmap(g_phy_ram + gpa_off, nodes[i].size,
+                        void *m = mmap(g_phy_ram + nodes[i].gpa, nodes[i].size,
                                        PROT_READ | PROT_WRITE,
                                        MAP_SHARED | MAP_FIXED, fd, 0);
                         close(fd);
@@ -455,22 +478,22 @@ void init_kvm_global() {
                             fprintf(stderr, "[Hybrid] NUMA: mmap(%s, %llu MB at GPA 0x%llx) failed: %s\n",
                                     nodes[i].path,
                                     (unsigned long long)(nodes[i].size / (1024*1024)),
-                                    (unsigned long long)gpa_off, strerror(errno));
+                                    (unsigned long long)nodes[i].gpa, strerror(errno));
                             ok = 0; break;
                         }
                         fprintf(stderr, "[Hybrid] NUMA: node %d  %s  %llu MB  GPA [0x%llx, 0x%llx)\n",
                                 i, nodes[i].path,
                                 (unsigned long long)(nodes[i].size / (1024*1024)),
-                                (unsigned long long)gpa_off,
-                                (unsigned long long)(gpa_off + nodes[i].size));
-                        gpa_off += nodes[i].size;
+                                (unsigned long long)nodes[i].gpa,
+                                (unsigned long long)(nodes[i].gpa + nodes[i].size));
                     }
                     if (ok) {
-                        g_slave_ram_size = total_size;
-                        fprintf(stderr, "[Hybrid] NUMA: %d nodes mapped, total %llu MB\n",
-                                n_nodes, (unsigned long long)(total_size / (1024*1024)));
+                        g_slave_ram_size = va_end;
+                        g_numa_node_count = n_nodes;
+                        fprintf(stderr, "[Hybrid] NUMA: %d nodes mapped, VA range 0x%llx\n",
+                                n_nodes, (unsigned long long)va_end);
                     } else {
-                        munmap(g_phy_ram, total_size);
+                        munmap(g_phy_ram, va_end);
                         g_phy_ram = NULL;
                     }
                 }
@@ -560,61 +583,114 @@ void init_kvm_global() {
         return;
     }
 
-    /* Slot 0: [0, IDMAP_ADDR) */
-    uint64_t low_size = g_slave_ram_size;
-    if (low_size > WVM_KVM_IDMAP_ADDR) {
-        low_size = WVM_KVM_IDMAP_ADDR;
-    }
-    if (wvm_kvm_add_memslot(g_vm_fd, 0, 0, low_size, g_phy_ram,
-                            KVM_MEM_LOG_DIRTY_PAGES, true) < 0) {
-        close(g_vm_fd);
-        g_vm_fd = -1;
-        close(g_kvm_fd);
-        g_kvm_fd = -1;
-        return;
-    }
+    /* --- KVM Memslot Setup ---
+     * When NUMA mapping is active, create per-node memslots to avoid
+     * mapping PROT_NONE gaps in the VA space. Otherwise, use legacy
+     * single-region layout. */
+    if (g_numa_node_count > 0) {
+        /* NUMA mode: one memslot per node, plus IDMAP reserved slot */
+        int slot_id = 0;
+        for (int ni = 0; ni < g_numa_node_count; ni++) {
+            uint64_t ngpa = g_numa_nodes[ni].gpa;
+            uint64_t nsz  = g_numa_nodes[ni].size;
+            uint64_t nend = ngpa + nsz;
 
-    /* Slot 2: reserved IDMAP/TSS pages. */
-    if (wvm_kvm_add_memslot(g_vm_fd, 2, WVM_KVM_IDMAP_ADDR, WVM_KVM_RESERVED_SIZE,
-                            g_kvm_reserved_hva, 0, false) < 0) {
-        close(g_vm_fd);
-        g_vm_fd = -1;
-        close(g_kvm_fd);
-        g_kvm_fd = -1;
-        return;
-    }
+            /* If this node spans the IDMAP reserved area, split around it */
+            uint64_t idmap_start = WVM_KVM_IDMAP_ADDR;
+            uint64_t idmap_end   = WVM_KVM_IDMAP_ADDR + WVM_KVM_RESERVED_SIZE;
 
-    /* Slot 1: (IDMAP_ADDR + reserved, ram_end] */
-    uint64_t hole_end = WVM_KVM_IDMAP_ADDR + WVM_KVM_RESERVED_SIZE;
-    if (g_slave_ram_size > hole_end) {
-        uint64_t high_size = g_slave_ram_size - hole_end;
-        if (wvm_kvm_add_memslot(g_vm_fd, 1, hole_end, high_size, g_phy_ram + hole_end,
+            if (ngpa < idmap_start && nend > idmap_end) {
+                /* Part before IDMAP */
+                uint64_t sz1 = idmap_start - ngpa;
+                wvm_kvm_add_memslot(g_vm_fd, slot_id++, ngpa, sz1,
+                                    g_phy_ram + ngpa, KVM_MEM_LOG_DIRTY_PAGES, true);
+                /* Part after IDMAP */
+                uint64_t sz2 = nend - idmap_end;
+                wvm_kvm_add_memslot(g_vm_fd, slot_id++, idmap_end, sz2,
+                                    g_phy_ram + idmap_end, KVM_MEM_LOG_DIRTY_PAGES, true);
+            } else if (ngpa < idmap_start && nend > idmap_start) {
+                /* Ends in IDMAP region */
+                uint64_t sz1 = idmap_start - ngpa;
+                wvm_kvm_add_memslot(g_vm_fd, slot_id++, ngpa, sz1,
+                                    g_phy_ram + ngpa, KVM_MEM_LOG_DIRTY_PAGES, true);
+            } else if (ngpa >= idmap_start && ngpa < idmap_end) {
+                /* Starts in IDMAP region */
+                if (nend > idmap_end) {
+                    uint64_t sz2 = nend - idmap_end;
+                    wvm_kvm_add_memslot(g_vm_fd, slot_id++, idmap_end, sz2,
+                                        g_phy_ram + idmap_end, KVM_MEM_LOG_DIRTY_PAGES, true);
+                }
+            } else {
+                /* No overlap with IDMAP */
+                wvm_kvm_add_memslot(g_vm_fd, slot_id++, ngpa, nsz,
+                                    g_phy_ram + ngpa, KVM_MEM_LOG_DIRTY_PAGES, true);
+            }
+            fprintf(stderr, "[Hybrid] NUMA memslot: node %d GPA [0x%llx, 0x%llx)\n",
+                    ni, (unsigned long long)ngpa, (unsigned long long)nend);
+        }
+
+        /* IDMAP/TSS reserved slot */
+        wvm_kvm_add_memslot(g_vm_fd, slot_id++, WVM_KVM_IDMAP_ADDR,
+                            WVM_KVM_RESERVED_SIZE, g_kvm_reserved_hva, 0, false);
+
+        /* BIOS ROM slot: only if not already covered by a node memslot.
+         * GPA 0xFFFF0000-0xFFFFFFFF maps to g_phy_ram + 0xF0000.
+         * Skip if any node covers this GPA range. */
+        int bios_covered = 0;
+        for (int ni = 0; ni < g_numa_node_count; ni++) {
+            if (g_numa_nodes[ni].gpa <= 0xFFFF0000ULL &&
+                g_numa_nodes[ni].gpa + g_numa_nodes[ni].size > 0xFFFF0000ULL) {
+                bios_covered = 1;
+                break;
+            }
+        }
+        if (!bios_covered && g_numa_nodes[0].size >= 0x100000ULL) {
+            uint64_t bios_gpa  = 0xFFFF0000ULL;
+            uint64_t bios_size = 0x10000ULL;
+            if (wvm_kvm_add_memslot(g_vm_fd, slot_id++, bios_gpa, bios_size,
+                                    g_phy_ram + 0xF0000, 0, false) < 0) {
+                fprintf(stderr, "[Hybrid] BIOS ROM slot failed\n");
+            } else {
+                fprintf(stderr, "[Hybrid] BIOS ROM slot: GPA [0x%llx, 0x%llx)\n",
+                        (unsigned long long)bios_gpa,
+                        (unsigned long long)(bios_gpa + bios_size));
+            }
+        }
+    } else {
+        /* Legacy single-region memslot layout */
+        uint64_t low_size = g_slave_ram_size;
+        if (low_size > WVM_KVM_IDMAP_ADDR) {
+            low_size = WVM_KVM_IDMAP_ADDR;
+        }
+        if (wvm_kvm_add_memslot(g_vm_fd, 0, 0, low_size, g_phy_ram,
                                 KVM_MEM_LOG_DIRTY_PAGES, true) < 0) {
-            close(g_vm_fd);
-            g_vm_fd = -1;
-            close(g_kvm_fd);
-            g_kvm_fd = -1;
-            return;
+            close(g_vm_fd); g_vm_fd = -1; close(g_kvm_fd); g_kvm_fd = -1; return;
         }
-    }
-
-    /* Slot 3: BIOS ROM 高地址映射 [0xFFFF0000, 0x100000000)
-     * x86 reset vector 在 GPA 0xFFFFFFF0，需要这段映射才能执行 BIOS。
-     * 直接用 g_phy_ram + 0xF0000 (SHM mmap)，QEMU 写入后 slave 立即可见。 */
-    if (g_slave_ram_size >= 0x100000ULL) {
-        uint64_t bios_gpa  = 0xFFFF0000ULL;
-        uint64_t bios_size = 0x10000ULL;  /* 64KB */
-        if (wvm_kvm_add_memslot(g_vm_fd, 3, bios_gpa, bios_size,
-                                g_phy_ram + 0xF0000, 0, false) < 0) {
-            fprintf(stderr, "[Hybrid] BIOS ROM slot failed\n");
-        } else {
-            fprintf(stderr, "[Hybrid] BIOS ROM slot 3: GPA [0x%llx, 0x%llx) -> HVA %p\n",
-                    (unsigned long long)bios_gpa,
-                    (unsigned long long)(bios_gpa + bios_size),
-                    (void*)(g_phy_ram + 0xF0000));
+        if (wvm_kvm_add_memslot(g_vm_fd, 2, WVM_KVM_IDMAP_ADDR, WVM_KVM_RESERVED_SIZE,
+                                g_kvm_reserved_hva, 0, false) < 0) {
+            close(g_vm_fd); g_vm_fd = -1; close(g_kvm_fd); g_kvm_fd = -1; return;
         }
-
-
+        uint64_t hole_end = WVM_KVM_IDMAP_ADDR + WVM_KVM_RESERVED_SIZE;
+        if (g_slave_ram_size > hole_end) {
+            uint64_t high_size = g_slave_ram_size - hole_end;
+            if (wvm_kvm_add_memslot(g_vm_fd, 1, hole_end, high_size, g_phy_ram + hole_end,
+                                    KVM_MEM_LOG_DIRTY_PAGES, true) < 0) {
+                close(g_vm_fd); g_vm_fd = -1; close(g_kvm_fd); g_kvm_fd = -1; return;
+            }
+        }
+        if (g_slave_ram_size >= 0x100000ULL) {
+            uint64_t bios_gpa  = 0xFFFF0000ULL;
+            uint64_t bios_size = 0x10000ULL;
+            if (wvm_kvm_add_memslot(g_vm_fd, 3, bios_gpa, bios_size,
+                                    g_phy_ram + 0xF0000, 0, false) < 0) {
+                fprintf(stderr, "[Hybrid] BIOS ROM slot failed\n");
+            } else {
+                fprintf(stderr, "[Hybrid] BIOS ROM slot 3: GPA [0x%llx, 0x%llx) -> HVA %p\n",
+                        (unsigned long long)bios_gpa,
+                        (unsigned long long)(bios_gpa + bios_size),
+                        (void*)(g_phy_ram + 0xF0000));
+            }
+        }
     }
 
     g_kvm_available = 1;

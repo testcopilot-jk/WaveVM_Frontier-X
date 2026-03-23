@@ -1,2 +1,0 @@
-qemu-system-x86_64: -drive file=/workspaces/WaveVM_Frontier-X/artifacts/images/cirros-0.6.2-x86_64-disk.img,if=virtio,format=qcow2: Failed to get "write" lock
-Is another process using the image [/workspaces/WaveVM_Frontier-X/artifacts/images/cirros-0.6.2-x86_64-disk.img]?

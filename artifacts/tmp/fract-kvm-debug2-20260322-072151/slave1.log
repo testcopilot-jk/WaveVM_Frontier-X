@@ -1,4 +1,0 @@
-[Slave BootVCPU] create fd=5 errno=0 vm=4 kvm=3 id=0
-[Slave BootVCPU] mmap_size=12288 errno=0
-[Hybrid] BIOS ROM mapped at GPA 0xffff0000 -> HVA g_phy_ram+0xF0000
-[SLAVE-BIND] port=19205 ok

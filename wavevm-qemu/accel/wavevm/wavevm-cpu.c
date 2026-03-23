@@ -256,6 +256,21 @@ static void wavevm_handle_mmio(CPUState *cpu) {
 static void wavevm_remote_exec(CPUState *cpu) {
     // 动态边界检查
     if (cpu->cpu_index >= g_configured_vcpus) return;
+
+    /* [FIX] Don't send AP vCPUs until they receive SIPI.
+     * KVM internally tracks MP state: BSP starts as RUNNABLE,
+     * APs start as UNINITIALIZED/INIT_RECEIVED and wait for SIPI.
+     * Without this check, the slave would execute AP vCPUs from
+     * the reset vector, corrupting shared memory with BSP. */
+    if (kvm_enabled()) {
+        struct kvm_mp_state mp;
+        if (ioctl(cpu->kvm_fd, KVM_GET_MP_STATE, &mp) == 0) {
+            if (mp.mp_state != KVM_MP_STATE_RUNNABLE) {
+                cpu->halted = 1;
+                return;
+            }
+        }
+    }
     
     int vcpu_sock = g_vcpu_socks[cpu->cpu_index];
     if (!g_wvm_debug_once) {
@@ -341,28 +356,57 @@ static void wavevm_remote_exec(CPUState *cpu) {
             run->exit_reason = kctx->exit_reason;
 
             if (kctx->exit_reason == KVM_EXIT_IO) {
+                uint16_t port = kctx->io.port;
+                int is_write = (kctx->io.direction == KVM_EXIT_IO_OUT);
+                uint8_t io_buf[64];
+                size_t io_bytes = (size_t)kctx->io.size * kctx->io.count;
+                if (io_bytes > sizeof(kctx->io.data)) io_bytes = sizeof(kctx->io.data);
+                if (io_bytes > sizeof(io_buf)) io_bytes = sizeof(io_buf);
+                if (is_write) {
+                    memcpy(io_buf, kctx->io.data, io_bytes);
+                }
                 run->io.direction = kctx->io.direction;
                 run->io.size      = kctx->io.size;
                 run->io.port      = kctx->io.port;
                 run->io.count     = kctx->io.count;
-                if (run->io.direction == KVM_EXIT_IO_OUT) {
-                    size_t mmap_size = ioctl(cpu->kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
-                    if (run->io.data_offset + run->io.size * run->io.count <= mmap_size) {
-                        uint8_t *io_ptr = (uint8_t *)run + run->io.data_offset;
-                        size_t io_bytes = run->io.size * run->io.count;
-                        if (io_bytes > sizeof(kctx->io.data)) {
-                            io_bytes = sizeof(kctx->io.data);
-                        }
-                        memcpy(io_ptr, kctx->io.data, io_bytes);
+                if (kctx->io.size != 1 && kctx->io.size != 2 &&
+                    kctx->io.size != 4 && kctx->io.size != 8) { return; }
+                if (kctx->io.count == 0 || kctx->io.count > 8) { return; }
+                qemu_mutex_lock_iothread();
+                for (uint32_t i = 0; i < kctx->io.count; i++) {
+                    address_space_rw(&address_space_io, port, MEMTXATTRS_UNSPECIFIED,
+                                     io_buf + i * kctx->io.size, kctx->io.size, is_write);
+                }
+                qemu_mutex_unlock_iothread();
+                if (!is_write) {
+                    memcpy(kctx->io.data, io_buf, io_bytes);
+                    if (run->io.data_offset >= sizeof(struct kvm_run) &&
+                        run->io.data_offset + io_bytes <= 12288) {
+                        memcpy((uint8_t *)run + run->io.data_offset, io_buf, io_bytes);
                     }
                 }
-                if (!wavevm_valid_io_exit(run)) {
-                    return;
+            } 
+            else if (kctx->exit_reason == KVM_EXIT_MMIO) {
+                uint8_t mmio_buf[8];
+                hwaddr addr = kctx->mmio.phys_addr;
+                int mmio_wr = kctx->mmio.is_write;
+                unsigned len = kctx->mmio.len;
+                if (len != 1 && len != 2 && len != 4 && len != 8) { return; }
+                if (mmio_wr) {
+                    memcpy(mmio_buf, kctx->mmio.data, len);
                 }
                 qemu_mutex_lock_iothread();
-                wavevm_handle_io(cpu);
+                address_space_rw(&address_space_memory, addr, MEMTXATTRS_UNSPECIFIED,
+                                 mmio_buf, len, mmio_wr);
                 qemu_mutex_unlock_iothread();
-            } 
+                if (!mmio_wr) {
+                    memcpy(kctx->mmio.data, mmio_buf, len);
+                    memcpy(run->mmio.data, mmio_buf, len);
+                }
+                run->mmio.phys_addr = addr;
+                run->mmio.len = len;
+                run->mmio.is_write = mmio_wr;
+            }
             else if (kctx->exit_reason == KVM_EXIT_MMIO) {
                 run->mmio.phys_addr = kctx->mmio.phys_addr;
                 run->mmio.len       = kctx->mmio.len;
@@ -482,36 +526,60 @@ static void wavevm_remote_exec(CPUState *cpu) {
         run->exit_reason = kctx->exit_reason;
 
         if (kctx->exit_reason == KVM_EXIT_IO) {
+            /* [FIX] Direct IO replay using kctx->io.data -- bypass run->io.data_offset
+             * which is uninitialized for remote vCPUs (never did local KVM_RUN). */
+            uint16_t port = kctx->io.port;
+            int is_write = (kctx->io.direction == KVM_EXIT_IO_OUT);
+            uint8_t io_buf[64];
+            size_t io_bytes = (size_t)kctx->io.size * kctx->io.count;
+            if (io_bytes > sizeof(kctx->io.data)) io_bytes = sizeof(kctx->io.data);
+            if (io_bytes > sizeof(io_buf)) io_bytes = sizeof(io_buf);
+            if (is_write) {
+                memcpy(io_buf, kctx->io.data, io_bytes);
+            }
             run->io.direction = kctx->io.direction;
             run->io.size      = kctx->io.size;
             run->io.port      = kctx->io.port;
             run->io.count     = kctx->io.count;
-            
-            if (run->io.direction == KVM_EXIT_IO_OUT) {
-                size_t mmap_size = ioctl(cpu->kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
-                if (run->io.data_offset + run->io.size * run->io.count <= mmap_size) {
-                    uint8_t *io_ptr = (uint8_t *)run + run->io.data_offset;
-                    size_t io_bytes = run->io.size * run->io.count;
-                    if (io_bytes > sizeof(kctx->io.data)) {
-                        io_bytes = sizeof(kctx->io.data);
-                    }
-                    memcpy(io_ptr, kctx->io.data, io_bytes);
+            if (kctx->io.size != 1 && kctx->io.size != 2 &&
+                kctx->io.size != 4 && kctx->io.size != 8) { return; }
+            if (kctx->io.count == 0 || kctx->io.count > 8) { return; }
+            for (uint32_t i = 0; i < kctx->io.count; i++) {
+                address_space_rw(&address_space_io, port, MEMTXATTRS_UNSPECIFIED,
+                                 io_buf + i * kctx->io.size, kctx->io.size, is_write);
+            }
+            /* IO IN: copy device response for next request serialization */
+            if (!is_write) {
+                memcpy(kctx->io.data, io_buf, io_bytes);
+                if (run->io.data_offset >= sizeof(struct kvm_run) &&
+                    run->io.data_offset + io_bytes <= 12288) {
+                    memcpy((uint8_t *)run + run->io.data_offset, io_buf, io_bytes);
                 }
             }
-            if (!wavevm_valid_io_exit(run)) {
-                return;
-            }
-            wavevm_handle_io(cpu);
         } 
         else if (kctx->exit_reason == KVM_EXIT_MMIO) {
-            run->mmio.phys_addr = kctx->mmio.phys_addr;
-            run->mmio.len       = kctx->mmio.len;
-            run->mmio.is_write  = kctx->mmio.is_write;
-            memcpy(run->mmio.data, kctx->mmio.data, 8);
-            if (!wavevm_valid_mmio_exit(run)) {
-                return;
+            uint8_t mmio_buf[8];
+            hwaddr addr = kctx->mmio.phys_addr;
+            int mmio_wr = kctx->mmio.is_write;
+            unsigned len = kctx->mmio.len;
+            if (len != 1 && len != 2 && len != 4 && len != 8) { return; }
+            if (mmio_wr) {
+                memcpy(mmio_buf, kctx->mmio.data, len);
             }
-            wavevm_handle_mmio(cpu);
+            address_space_rw(&address_space_memory, addr, MEMTXATTRS_UNSPECIFIED,
+                             mmio_buf, len, mmio_wr);
+            if (!mmio_wr) {
+                memcpy(kctx->mmio.data, mmio_buf, len);
+                memcpy(run->mmio.data, mmio_buf, len);
+            }
+            run->mmio.phys_addr = addr;
+            run->mmio.len = len;
+            run->mmio.is_write = mmio_wr;
+        }
+        /* [FIX] HLT: halt the vCPU so QEMU waits for timer interrupt */
+        else if (kctx->exit_reason == KVM_EXIT_HLT) {
+            cpu->halted = 1;
+            cpu->exception_index = EXCP_HLT;
         }
     }
 }
@@ -576,6 +644,8 @@ static void *wavevm_cpu_thread_fn(void *arg) {
      */
     cpu->exit_request = 1;
 
+    static int bsp_dbg_count = 0;
+    static int bsp_cant_run_count = 0;
     /*
      * Main vCPU loop -- mirrors tcg_cpu_thread_fn (MTTCG) structure.
      * The iothread lock is held at the top of every iteration.
@@ -587,6 +657,30 @@ static void *wavevm_cpu_thread_fn(void *arg) {
                 qemu_mutex_unlock_iothread();
                 wavevm_remote_exec(cpu);
                 qemu_mutex_lock_iothread();
+                /* [FIX] If remote exec returned HLT, wait for timer interrupt.
+                 * Release iothread lock so main loop can process PIT timers.
+                 * PIT fires at ~18.2Hz; poll every 1ms for interrupt_request. */
+                if (cpu->halted) {
+                    /* Check MP state: AP in SIPI-wait should stay halted
+                     * until SIPI is delivered. Only clear halted for
+                     * guest HLT (waiting for timer interrupt). */
+                    if (kvm_enabled()) {
+                        struct kvm_mp_state mp;
+                        if (ioctl(cpu->kvm_fd, KVM_GET_MP_STATE, &mp) == 0 &&
+                            mp.mp_state != KVM_MP_STATE_RUNNABLE) {
+                            /* AP waiting for SIPI - stay halted, poll */
+                            qemu_mutex_unlock_iothread();
+                            g_usleep(10000);  /* 10ms poll */
+                            qemu_mutex_lock_iothread();
+                            continue;
+                        }
+                    }
+                    /* Guest HLT: wait one PIT tick then retry */
+                    qemu_mutex_unlock_iothread();
+                    g_usleep(55000);  /* 55ms = one PIT tick */
+                    qemu_mutex_lock_iothread();
+                    cpu->halted = 0;
+                }
             }
             /* Local vCPU: 复用 QEMU 原生 kvm_cpu_exec()
              * 包含完整的 kvm_arch_pre_run (中断注入/APIC 同步)、
@@ -594,7 +688,17 @@ static void *wavevm_cpu_thread_fn(void *arg) {
              * (脏寄存器推送) 以及全部 exit reason 处理。
              */
             else if (kvm_enabled()) {
+                if (bsp_dbg_count < 20) {
+                    fprintf(stderr, "[BSP-DBG] cpu=%d iter=%d halted=%d stop=%d exit_req=%d run->exit=%d\n",
+                            cpu->cpu_index, bsp_dbg_count, cpu->halted, cpu->stop,
+                            cpu->exit_request, cpu->kvm_run ? cpu->kvm_run->exit_reason : -1);
+                }
                 int r = kvm_cpu_exec(cpu);
+                if (bsp_dbg_count < 20) {
+                    fprintf(stderr, "[BSP-DBG] cpu=%d iter=%d kvm_cpu_exec returned %d\n",
+                            cpu->cpu_index, bsp_dbg_count, r);
+                    bsp_dbg_count++;
+                }
                 if (r == EXCP_DEBUG) {
                     cpu_handle_guest_debug(cpu);
                 }

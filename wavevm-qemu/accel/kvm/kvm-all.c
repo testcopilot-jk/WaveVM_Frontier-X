@@ -2512,6 +2512,10 @@ int kvm_cpu_exec(CPUState *cpu)
 {
     struct kvm_run *run = cpu->kvm_run;
     int ret, run_ret;
+    static int kvm_io_count = 0;
+    static int kvm_mmio_count = 0;
+    static int kvm_other_count = 0;
+    static int kvm_log_counter = 0;
 
     DPRINTF("kvm_cpu_exec()\n");
 
@@ -2586,6 +2590,12 @@ int kvm_cpu_exec(CPUState *cpu)
         switch (run->exit_reason) {
         case KVM_EXIT_IO:
             DPRINTF("handle_io\n");
+            kvm_io_count++;
+            if (kvm_io_count <= 20 || (kvm_io_count % 10000 == 0)) {
+                fprintf(stderr, "[KVM-IO] cpu=%d port=0x%x dir=%d sz=%d cnt=%d total_io=%d mmio=%d other=%d\n",
+                        cpu->cpu_index, run->io.port, run->io.direction, run->io.size, run->io.count,
+                        kvm_io_count, kvm_mmio_count, kvm_other_count);
+            }
             /* Called outside BQL */
             kvm_handle_io(run->io.port, attrs,
                           (uint8_t *)run + run->io.data_offset,
@@ -2596,6 +2606,7 @@ int kvm_cpu_exec(CPUState *cpu)
             break;
         case KVM_EXIT_MMIO:
             DPRINTF("handle_mmio\n");
+            kvm_mmio_count++;
             /* Called outside BQL */
             address_space_rw(&address_space_memory,
                              run->mmio.phys_addr, attrs,

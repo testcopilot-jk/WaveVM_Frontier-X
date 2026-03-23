@@ -1332,9 +1332,9 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
         if (!WVM_IS_VALID_TARGET(target)) return -ENODEV;
 
         int ctx_len = req.mode_tcg ? sizeof(req.ctx.tcg) : sizeof(req.ctx.kvm);
-        int ret = wvm_rpc_call(MSG_VCPU_RUN, &req.ctx, ctx_len, target, &ack.ctx, sizeof(ack.ctx));
-        ack.status = ret;
-        ack.mode_tcg = req.mode_tcg;
+        int ret = wvm_rpc_call(MSG_VCPU_RUN, &req.ctx, ctx_len, target, &ack, sizeof(ack));
+        if (ret < 0) ack.status = ret;
+        /* mode_tcg comes from slave response now */
         if (copy_to_user(argp, &ack, sizeof(ack))) return -EFAULT;
         break;
     }

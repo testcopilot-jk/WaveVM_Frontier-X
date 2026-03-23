@@ -1,8 +1,0 @@
-15124 rt_sigaction(SIGRT_1, {sa_handler=0x794fcc90f530, sa_mask=[], sa_flags=SA_RESTORER|SA_ONSTACK|SA_RESTART|SA_SIGINFO, sa_restorer=0x794fcc8bb330}, NULL, 8) = 0
-15124 rt_sigprocmask(SIG_UNBLOCK, [RTMIN RT_1], NULL, 8) = 0
-15124 rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
-15124 rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
-15141 rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
-15124 rt_sigprocmask(SIG_BLOCK, ~[], [], 8) = 0
-15124 rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0
-15143 rt_sigprocmask(SIG_SETMASK, [], NULL, 8) = 0

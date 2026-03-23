@@ -1,4 +1,0 @@
-[Gateway] sockfd=5 reuseport=0
-[Gateway] bind ok port=19520 fd=5 local=0.0.0.0:19520
-[Gateway] rx len=52 magic=0x57564d58
-[Gateway] rx len=52 magic=0x57564d58
