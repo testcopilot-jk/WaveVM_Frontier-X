@@ -118,7 +118,17 @@ void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa) {
     }
     if (g_block_count >= MAX_RAM_BLOCKS) exit(1);
     if (!kvm_enabled()) {
-        mprotect(hva, size, PROT_NONE);
+        /* V31b: Master TCG uses PROT_READ so BSP reads go directly to SHM
+         * without triggering SIGSEGV → IPC round-trip.  Only writes trigger
+         * SIGSEGV (PROT_READ page + write → handler → mprotect RW + snapshot).
+         * Slave child QEMUs still use PROT_NONE because their memory starts
+         * empty and every page must be fetched on first access.
+         *
+         * V31c-fix: g_is_slave is set in wavevm_user_mem_init() which runs
+         * AFTER this function.  Check env var directly instead. */
+        int is_slave = (getenv("WVM_SOCK_REQ") != NULL);
+        int prot = is_slave ? PROT_NONE : PROT_READ;
+        mprotect(hva, size, prot);
     }
     g_mem_blocks[g_block_count].hva_start = (uintptr_t)hva;
     g_mem_blocks[g_block_count].hva_end   = (uintptr_t)hva + size;
@@ -178,6 +188,7 @@ static __thread int t_lazy_count = 0;
 
 static void flush_lazy_ro_queue(void) {
     if (t_lazy_count == 0) return;
+    if (kvm_enabled()) { t_lazy_count = 0; return; } /* KVM guard: never downgrade under KVM */
     for (int i = 0; i < t_lazy_count; i++) {
         uint64_t gpa = t_lazy_ro_queue[i];
         void *hva = gpa_to_hva_safe(gpa);
@@ -566,6 +577,48 @@ static int ensure_local_shm_shadow(void)
     return 0;
 }
 
+/* [FIX] Sync BIOS shadow region from QEMU's HVA into the SHM backing file.
+ *
+ * Called by wavevm_region_add() when a RAM region covering the BIOS area
+ * (0xC0000-0xFFFFF) is added.  At that point QEMU has already copied the
+ * BIOS ROM content into the HVA, but the SHM file still has zeros.
+ * We memcpy the overlapping portion so slave nodes see correct BIOS code.
+ */
+void wavevm_sync_bios_shadow(uint64_t gpa, uint64_t size, void *hva)
+{
+    if (ensure_local_shm_shadow() < 0) {
+        fprintf(stderr, "[WaveVM-BIOS] sync_bios_shadow: SHM shadow not available\n");
+        return;
+    }
+
+    uint64_t bios_start = 0xC0000;
+    uint64_t bios_end   = 0x100000;  /* 1MB */
+    uint64_t region_end = gpa + size;
+
+    /* Clamp to the BIOS area */
+    uint64_t copy_start = (gpa > bios_start) ? gpa : bios_start;
+    uint64_t copy_end   = (region_end < bios_end) ? region_end : bios_end;
+    if (copy_start >= copy_end) return;
+
+    uint64_t copy_size   = copy_end - copy_start;
+    uint64_t hva_offset  = copy_start - gpa;      /* offset into the HVA region */
+    uint64_t shm_offset  = copy_start;             /* GPA == offset in SHM for ram0 */
+
+    if (shm_offset + copy_size > g_ram_size) {
+        fprintf(stderr, "[WaveVM-BIOS] sync_bios_shadow: SHM too small for GPA 0x%llx+0x%llx\n",
+                (unsigned long long)shm_offset, (unsigned long long)copy_size);
+        return;
+    }
+
+    memcpy((uint8_t *)g_shm_shadow + shm_offset,
+           (uint8_t *)hva + hva_offset,
+           copy_size);
+
+    fprintf(stderr, "[WaveVM-BIOS] synced BIOS shadow GPA [0x%llx, 0x%llx) -> SHM offset 0x%llx (%llu bytes)\n",
+            (unsigned long long)copy_start, (unsigned long long)copy_end,
+            (unsigned long long)shm_offset, (unsigned long long)copy_size);
+}
+
 /* 
  * 以下函数仅为了兼容 QEMU 命令行参数解析。
  * V29 使用 Wavelet 主动推送模型，不再需要 TTL 和手工 Watch 区域。
@@ -657,6 +710,10 @@ static void kvm_proactive_page_fetch(uint64_t gpa) {
 // =============================================================
 
 static int request_page_sync(uintptr_t fault_addr, bool is_write) {
+    /* KVM guard: under KVM, pages are never PROT_NONE so this path should
+     * never be reached.  Return success as defense-in-depth. */
+    if (kvm_enabled()) return 0;
+
     uint64_t gpa = hva_to_gpa_safe(fault_addr);
     if (gpa == (uint64_t)-1) return -1;
     gpa &= ~4095ULL;
@@ -671,9 +728,16 @@ static int request_page_sync(uintptr_t fault_addr, bool is_write) {
         }
     }
     
-    // --- Master Mode (IPC) ---
+    // --- Master Mode ---
     if (!g_is_slave) {
-        if (t_com_sock == -1) { 
+        /* V31b: Master TCG with PROT_READ should only get write faults.
+         * For any read fault (shouldn't happen), just mprotect without IPC
+         * since the data is already in the SHM-backed memory. */
+        if (!is_write) {
+            mprotect((void *)aligned_addr, 4096, PROT_READ);
+            return 0;
+        }
+        if (t_com_sock == -1) {
             t_com_sock = internal_connect_master();
             if (t_com_sock < 0) return -1;
         }
@@ -876,12 +940,14 @@ static inline void wait_on_latch(uint64_t gpa) {
  * [后果] 这是整个前端最繁重的入口。必须保证零 malloc，任何在此处的阻塞（如等待网络）都会直接锁死 vCPU 的流水线。
  */
 static void sigsegv_handler(int sig, siginfo_t *si, void *ucontext) {
+    static volatile int s_fault_count = 0;
+    int fc = __atomic_add_fetch(&s_fault_count, 1, __ATOMIC_RELAXED);
     uintptr_t addr = (uintptr_t)si->si_addr;
-    {
+    if (fc <= 50 || (fc & 0xFFFF) == 0) {
         char msg[192];
         int n = snprintf(msg, sizeof(msg),
-                         "[WaveVM-User] sigsegv addr=%p code=%d\n",
-                         si->si_addr, si->si_code);
+                         "[WaveVM-User] sigsegv addr=%p code=%d (count=%d)\n",
+                         si->si_addr, si->si_code, fc);
         if (n > 0) {
             write(STDERR_FILENO, msg, (size_t)n);
         }
@@ -911,11 +977,11 @@ static void sigsegv_handler(int sig, siginfo_t *si, void *ucontext) {
 
     ucontext_t *ctx = (ucontext_t *)ucontext;
     bool is_write = (ctx->uc_mcontext.gregs[REG_ERR] & 0x2);
-    {
+    if (fc <= 50 || (fc & 0xFFFF) == 0) {
         char msg[224];
         int n = snprintf(msg, sizeof(msg),
-                         "[WaveVM-User] sigsegv hit gpa=%#llx write=%d page=%p\n",
-                         (unsigned long long)gpa, is_write ? 1 : 0, aligned_addr);
+                         "[WaveVM-User] sigsegv hit gpa=%#llx write=%d page=%p (count=%d)\n",
+                         (unsigned long long)gpa, is_write ? 1 : 0, aligned_addr, fc);
         if (n > 0) {
             write(STDERR_FILENO, msg, (size_t)n);
         }
@@ -1120,7 +1186,12 @@ static void *diff_harvester_thread_fn(void *arg) {
     int batch_counter = 0;
 
     while (g_threads_running) {
-        usleep(1000); // 1ms 采集周期
+        /* KVM: 1ms cycle (dirty log is cheap, no mprotect overhead).
+         * TCG: 50ms cycle — mprotect(PROT_READ) re-arms SIGSEGV on every
+         * subsequent write.  At 1ms the harvester re-protects pages so fast
+         * that kernel boot triggers millions of SIGSEGVs (2.3M+ in V32g).
+         * 50ms lets pages stay RW longer, cutting SIGSEGV ~50x. */
+        usleep(kvm_enabled() ? 1000 : 50000);
 
         // KVM 模式：基于脏页日志收割，不依赖 SIGSEGV/PROT_NONE。
         // [FIX] 遍历 g_mem_blocks 而非 flat 0~g_ram_size，

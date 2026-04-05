@@ -20,6 +20,7 @@
 #include <sys/un.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <pthread.h>
@@ -27,6 +28,8 @@
 
 #include "logic_core.h"
 #include "../common_include/wavevm_protocol.h"
+#include "../common_include/wavevm_ioctl.h"
+#include "../common_include/wavevm_config.h"
 
 // --- 全局状态 ---
 extern struct dsm_driver_ops u_ops;
@@ -38,6 +41,38 @@ extern int g_my_node_id;
 uint8_t g_my_vm_id = 0;  // Multi-VM: 默认 0，向后兼容
 
 #define MAX_QEMU_CLIENTS 8
+
+static void inject_cpu_route_table(void) {
+    if (g_dev_fd < 0) return;
+    const uint32_t *table = wvm_get_cpu_route_table();
+    if (!table) return;
+
+    const uint32_t chunk_size = 1024;
+    size_t buf_size = sizeof(struct wvm_ioctl_route_update) + chunk_size * sizeof(uint32_t);
+    struct wvm_ioctl_route_update *payload = malloc(buf_size);
+    if (!payload) {
+        fprintf(stderr, "[CPU-ROUTE] malloc failed\n");
+        return;
+    }
+
+    for (uint32_t i = 0; i < WVM_CPU_ROUTE_TABLE_SIZE; i += chunk_size) {
+        uint32_t count = chunk_size;
+        if (i + count > WVM_CPU_ROUTE_TABLE_SIZE) count = WVM_CPU_ROUTE_TABLE_SIZE - i;
+
+        payload->start_index = i;
+        payload->count = count;
+        memcpy(payload->entries, &table[i], count * sizeof(uint32_t));
+
+        if (ioctl(g_dev_fd, IOCTL_UPDATE_CPU_ROUTE, payload) < 0) {
+            fprintf(stderr, "[CPU-ROUTE] inject failed at %u (errno=%d)\n", i, errno);
+            free(payload);
+            return;
+        }
+    }
+
+    fprintf(stderr, "[CPU-ROUTE] injected %u entries\n", (unsigned)WVM_CPU_ROUTE_TABLE_SIZE);
+    free(payload);
+}
 #define NUM_BCAST_WORKERS 8
 
 /* [FIX-G2] 坚如磐石的循环读取，处理 Partial Read 和 EINTR */
@@ -567,6 +602,9 @@ int main(int argc, char **argv) {
     // 4. 加载 Swarm 拓扑
     // 这会将所有物理 IP 展开为虚拟节点，并注入 Backend 和 Logic Core
     load_swarm_config(config_file);
+
+    // 4.1 将 CPU 路由表注入内核（Mode A）
+    inject_cpu_route_table();
 
     // 5. 启动 V29.5 核心推送引擎的多线程广播线程
     printf("[+] Starting %d Wavelet Broadcast Engines...\n", NUM_BCAST_WORKERS);

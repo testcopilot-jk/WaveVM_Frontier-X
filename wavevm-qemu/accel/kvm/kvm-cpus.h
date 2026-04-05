@@ -11,11 +11,14 @@
 #define KVM_CPUS_H
 
 #include "sysemu/cpus.h"
+#include <signal.h>
 
 extern const CpusAccel kvm_cpus;
 
 int kvm_init_vcpu(CPUState *cpu, Error **errp);
 int kvm_cpu_exec(CPUState *cpu);
+int kvm_cpu_exec_halt_wake(CPUState *cpu, int max_exits);
+int kvm_set_signal_mask(CPUState *cpu, const sigset_t *sigset);
 void kvm_destroy_vcpu(CPUState *cpu);
 void kvm_cpu_synchronize_post_reset(CPUState *cpu);
 void kvm_cpu_synchronize_post_init(CPUState *cpu);

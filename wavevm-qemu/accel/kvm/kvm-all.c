@@ -2591,7 +2591,7 @@ int kvm_cpu_exec(CPUState *cpu)
         case KVM_EXIT_IO:
             DPRINTF("handle_io\n");
             kvm_io_count++;
-            if (kvm_io_count <= 20 || (kvm_io_count % 10000 == 0)) {
+            if (kvm_io_count <= 500 || (kvm_io_count % 10000 == 0)) {
                 fprintf(stderr, "[KVM-IO] cpu=%d port=0x%x dir=%d sz=%d cnt=%d total_io=%d mmio=%d other=%d\n",
                         cpu->cpu_index, run->io.port, run->io.direction, run->io.size, run->io.count,
                         kvm_io_count, kvm_mmio_count, kvm_other_count);
@@ -2621,6 +2621,15 @@ int kvm_cpu_exec(CPUState *cpu)
             break;
         case KVM_EXIT_SHUTDOWN:
             DPRINTF("shutdown\n");
+            {
+                struct kvm_regs sd_kr; struct kvm_sregs sd_sr;
+                ioctl(cpu->kvm_fd, KVM_GET_REGS, &sd_kr);
+                ioctl(cpu->kvm_fd, KVM_GET_SREGS, &sd_sr);
+                fprintf(stderr, "[KVM-SHUTDOWN] cpu=%d rip=0x%llx cs=0x%x/0x%llx rfl=0x%llx io=%d mmio=%d\n",
+                        cpu->cpu_index, (unsigned long long)sd_kr.rip,
+                        sd_sr.cs.selector, (unsigned long long)sd_sr.cs.base,
+                        (unsigned long long)sd_kr.rflags, kvm_io_count, kvm_mmio_count);
+            }
             qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
             ret = EXCP_INTERRUPT;
             break;
@@ -2669,6 +2678,130 @@ int kvm_cpu_exec(CPUState *cpu)
         cpu_dump_state(cpu, stderr, CPU_DUMP_CODE);
         vm_stop(RUN_STATE_INTERNAL_ERROR);
     }
+
+    qatomic_set(&cpu->exit_request, 0);
+    return ret;
+}
+
+/*
+ * kvm_cpu_exec_halt_wake: Limited version of kvm_cpu_exec for WaveVM
+ * HALT-WAKE. Runs KVM_RUN but breaks out after max_exits I/O or MMIO
+ * exits instead of looping. This prevents APs from executing too much
+ * guest code locally when we only need KVM to process a pending IPI.
+ *
+ * Returns: EXCP_INTERRUPT if broken out after I/O exits,
+ *          EXCP_HLT if vCPU halted, or same as kvm_cpu_exec otherwise.
+ */
+int kvm_cpu_exec_halt_wake(CPUState *cpu, int max_exits)
+{
+    struct kvm_run *run = cpu->kvm_run;
+    int ret, run_ret;
+    int io_exits = 0;
+
+    if (kvm_arch_process_async_events(cpu)) {
+        qatomic_set(&cpu->exit_request, 0);
+        return EXCP_HLT;
+    }
+
+    qemu_mutex_unlock_iothread();
+    cpu_exec_start(cpu);
+
+    do {
+        MemTxAttrs attrs;
+
+        if (cpu->vcpu_dirty) {
+            kvm_arch_put_registers(cpu, KVM_PUT_RUNTIME_STATE);
+            cpu->vcpu_dirty = false;
+        }
+
+        kvm_arch_pre_run(cpu, run);
+        if (qatomic_read(&cpu->exit_request)) {
+            kvm_cpu_kick_self();
+        }
+
+        smp_rmb();
+
+        run_ret = kvm_vcpu_ioctl(cpu, KVM_RUN, 0);
+
+        attrs = kvm_arch_post_run(cpu, run);
+
+        if (run_ret < 0) {
+            if (run_ret == -EINTR || run_ret == -EAGAIN) {
+                kvm_eat_signals(cpu);
+                ret = EXCP_INTERRUPT;
+                break;
+            }
+            fprintf(stderr, "error: kvm halt-wake run failed %s\n",
+                    strerror(-run_ret));
+            ret = -1;
+            break;
+        }
+
+        switch (run->exit_reason) {
+        case KVM_EXIT_IO:
+            kvm_handle_io(run->io.port, attrs,
+                          (uint8_t *)run + run->io.data_offset,
+                          run->io.direction,
+                          run->io.size,
+                          run->io.count);
+            io_exits++;
+            if (io_exits >= max_exits) {
+                ret = EXCP_INTERRUPT;
+            } else {
+                ret = 0;
+            }
+            break;
+        case KVM_EXIT_MMIO:
+            address_space_rw(&address_space_memory,
+                             run->mmio.phys_addr, attrs,
+                             run->mmio.data,
+                             run->mmio.len,
+                             run->mmio.is_write);
+            io_exits++;
+            if (io_exits >= max_exits) {
+                ret = EXCP_INTERRUPT;
+            } else {
+                ret = 0;
+            }
+            break;
+        case KVM_EXIT_IRQ_WINDOW_OPEN:
+            ret = EXCP_INTERRUPT;
+            break;
+        case KVM_EXIT_SHUTDOWN:
+            qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+            ret = EXCP_INTERRUPT;
+            break;
+        case KVM_EXIT_UNKNOWN:
+            fprintf(stderr, "KVM halt-wake: unknown exit %" PRIx64 "\n",
+                    (uint64_t)run->hw.hardware_exit_reason);
+            ret = -1;
+            break;
+        case KVM_EXIT_INTERNAL_ERROR:
+            ret = kvm_handle_internal_error(cpu, run);
+            break;
+        case KVM_EXIT_SYSTEM_EVENT:
+            switch (run->system_event.type) {
+            case KVM_SYSTEM_EVENT_SHUTDOWN:
+                qemu_system_shutdown_request(SHUTDOWN_CAUSE_GUEST_SHUTDOWN);
+                ret = EXCP_INTERRUPT;
+                break;
+            case KVM_SYSTEM_EVENT_RESET:
+                qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
+                ret = EXCP_INTERRUPT;
+                break;
+            default:
+                ret = kvm_arch_handle_exit(cpu, run);
+                break;
+            }
+            break;
+        default:
+            ret = kvm_arch_handle_exit(cpu, run);
+            break;
+        }
+    } while (ret == 0);
+
+    cpu_exec_end(cpu);
+    qemu_mutex_lock_iothread();
 
     qatomic_set(&cpu->exit_request, 0);
     return ret;
@@ -3026,7 +3159,7 @@ void kvm_remove_all_breakpoints(CPUState *cpu)
 }
 #endif /* !KVM_CAP_SET_GUEST_DEBUG */
 
-static int kvm_set_signal_mask(CPUState *cpu, const sigset_t *sigset)
+int kvm_set_signal_mask(CPUState *cpu, const sigset_t *sigset)
 {
     KVMState *s = kvm_state;
     struct kvm_signal_mask *sigmask;

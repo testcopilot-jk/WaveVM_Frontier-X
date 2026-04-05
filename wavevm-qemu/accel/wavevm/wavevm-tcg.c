@@ -32,7 +32,7 @@ void wvm_tcg_get_state(CPUState *cpu, wvm_tcg_context_t *ctx) {
     }
     ctx->mxcsr = env->mxcsr;
     
-    ctx->exit_reason = 0; 
+    ctx->exit_reason = 0;
 
     ctx->fs_base = env->segs[R_FS].base;
     ctx->gs_base = env->segs[R_GS].base;
@@ -40,6 +40,23 @@ void wvm_tcg_get_state(CPUState *cpu, wvm_tcg_context_t *ctx) {
     ctx->gdt_limit = env->gdt.limit;
     ctx->idt_base = env->idt.base;
     ctx->idt_limit = env->idt.limit;
+
+    /* V31: Full segment register state — critical for real/protected mode */
+    for (int i = 0; i < 6; i++) {
+        ctx->segs[i].base     = env->segs[i].base;
+        ctx->segs[i].limit    = env->segs[i].limit;
+        ctx->segs[i].selector = env->segs[i].selector;
+        ctx->segs[i].flags    = env->segs[i].flags;
+    }
+    ctx->ldt.base     = env->ldt.base;
+    ctx->ldt.limit    = env->ldt.limit;
+    ctx->ldt.selector = env->ldt.selector;
+    ctx->ldt.flags    = env->ldt.flags;
+    ctx->tr.base      = env->tr.base;
+    ctx->tr.limit     = env->tr.limit;
+    ctx->tr.selector  = env->tr.selector;
+    ctx->tr.flags     = env->tr.flags;
+    ctx->efer         = env->efer;
 }
 
 // Import state from network packet to QEMU TCG
@@ -68,6 +85,64 @@ void wvm_tcg_set_state(CPUState *cpu, wvm_tcg_context_t *ctx) {
     // Critical: Flush TB cache to force recompilation with new state
     tb_flush(cpu);
 
+    /* V31: Full segment register state — must be set AFTER tb_flush */
+    for (int i = 0; i < 6; i++) {
+        env->segs[i].base     = ctx->segs[i].base;
+        env->segs[i].limit    = ctx->segs[i].limit;
+        env->segs[i].selector = ctx->segs[i].selector;
+        env->segs[i].flags    = ctx->segs[i].flags;
+    }
+    env->ldt.base     = ctx->ldt.base;
+    env->ldt.limit    = ctx->ldt.limit;
+    env->ldt.selector = ctx->ldt.selector;
+    env->ldt.flags    = ctx->ldt.flags;
+    env->tr.base      = ctx->tr.base;
+    env->tr.limit     = ctx->tr.limit;
+    env->tr.selector  = ctx->tr.selector;
+    env->tr.flags     = ctx->tr.flags;
+    env->efer         = ctx->efer;
+
+    /* Recompute hflags from the restored segment/CR state so TCG
+     * generates correct code for the current CPU mode (real/prot/long). */
+    env->hflags = 0;
+    if (env->cr[0] & 1) {  /* CR0.PE */
+        env->hflags |= HF_PE_MASK;
+        if (env->eflags & VM_MASK) {
+            env->hflags |= HF_VM_MASK;
+        }
+        if (env->cr[4] & CR4_PAE_MASK) {
+            env->hflags |= HF_LMA_MASK * !!(env->efer & MSR_EFER_LMA);
+        }
+        if (env->efer & MSR_EFER_LMA) {
+            if (env->segs[R_CS].flags & DESC_L_MASK) {
+                env->hflags |= HF_CS64_MASK | HF_CS32_MASK;
+            } else if (env->segs[R_CS].flags & DESC_B_MASK) {
+                env->hflags |= HF_CS32_MASK;
+            }
+            env->hflags |= HF_LMA_MASK;
+        } else {
+            if (env->segs[R_CS].flags & DESC_B_MASK) {
+                env->hflags |= HF_CS32_MASK;
+            }
+            if (env->segs[R_SS].flags & DESC_B_MASK) {
+                env->hflags |= HF_SS32_MASK;
+            }
+        }
+    }
+    if (env->cr[0] & CR0_TS_MASK) {
+        env->hflags |= HF_TS_MASK;
+    }
+    if (env->cr[0] & CR0_EM_MASK) {
+        env->hflags |= HF_EM_MASK;
+    }
+    if (env->cr[0] & CR0_MP_MASK) {
+        env->hflags |= HF_MP_MASK;
+    }
+    if (env->cr[4] & CR4_OSFXSR_MASK) {
+        env->hflags |= HF_OSFXSR_MASK;
+    }
+
+    /* Keep the legacy base fields in sync for backward compatibility */
     env->segs[R_FS].base = ctx->fs_base;
     env->segs[R_GS].base = ctx->gs_base;
     env->gdt.base = ctx->gdt_base;

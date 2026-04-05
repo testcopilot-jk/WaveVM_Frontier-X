@@ -531,7 +531,24 @@ void init_kvm_global() {
     g_vm_fd = ioctl(g_kvm_fd, KVM_CREATE_VM, 0);
     if (g_vm_fd < 0) { close(g_kvm_fd); g_kvm_fd = -1; return; }
 
-    /* On some virtualized hosts, vCPU must be created before full VM wiring. */
+    /* Do NOT create IRQCHIP on the slave.  On GCP nested virt (kernel 6.14),
+     * having two KVM VMs with in-kernel IRQCHIP causes L1 hypervisor
+     * conflicts that break the master's AP bringup:
+     *   Pipeline #70: IRQCHIP ret=0 → APs stuck at mp_state=1
+     *   Pipeline #73: IRQCHIP ret=0 → recursive page fault during SMP init
+     *   Pipeline #71-72: IRQCHIP failed (EINVAL) → APs boot fine
+     *
+     * Without IRQCHIP, LAPIC MMIO (0xfee00xxx) exits to userspace.  We
+     * intercept these in the KVM_RUN loop with proper register emulation
+     * (APIC ID from dispatch context, etc.) instead of returning zeros. */
+    ioctl(g_vm_fd, KVM_SET_TSS_ADDR, WVM_KVM_TSS_ADDR);
+    {
+        __u64 map_addr = WVM_KVM_IDMAP_ADDR;
+        ioctl(g_vm_fd, KVM_SET_IDENTITY_MAP_ADDR, &map_addr);
+    }
+    fprintf(stderr, "[Slave] No IRQCHIP (avoiding nested virt conflict)\n");
+
+    /* Create boot vCPU eagerly (fast path for init_thread_local_vcpu). */
     errno = 0;
     int boot_vcpu_id = 0;
     g_boot_vcpu_fd = ioctl(g_vm_fd, KVM_CREATE_VCPU, boot_vcpu_id);
@@ -542,30 +559,19 @@ void init_kvm_global() {
                 boot_vcpu_id = try_id;
                 break;
             }
-            if (errno != EEXIST) {
-                break;
-            }
+            if (errno != EEXIST) break;
         }
     }
-    fprintf(stderr, "[Slave BootVCPU] create fd=%d errno=%d vm=%d kvm=%d id=%d\n",
+    fprintf(stderr, "[Slave BootVCPU] fd=%d errno=%d vm=%d kvm=%d id=%d\n",
             g_boot_vcpu_fd, errno, g_vm_fd, g_kvm_fd, boot_vcpu_id);
     if (g_boot_vcpu_fd >= 0) {
         int mmap_size = ioctl(g_kvm_fd, KVM_GET_VCPU_MMAP_SIZE, 0);
-        fprintf(stderr, "[Slave BootVCPU] mmap_size=%d errno=%d\n", mmap_size, errno);
         if (mmap_size > 0) {
-            g_boot_kvm_run = mmap(NULL, mmap_size, PROT_READ|PROT_WRITE, MAP_SHARED, g_boot_vcpu_fd, 0);
-            if (g_boot_kvm_run == MAP_FAILED) {
-                fprintf(stderr, "[Slave BootVCPU] mmap failed errno=%d\n", errno);
-                g_boot_kvm_run = NULL;
-            }
+            g_boot_kvm_run = mmap(NULL, mmap_size, PROT_READ|PROT_WRITE,
+                                  MAP_SHARED, g_boot_vcpu_fd, 0);
+            if (g_boot_kvm_run == MAP_FAILED) g_boot_kvm_run = NULL;
         }
     }
-
-    ioctl(g_vm_fd, KVM_SET_TSS_ADDR, WVM_KVM_TSS_ADDR);
-    __u64 map_addr = WVM_KVM_IDMAP_ADDR;
-    ioctl(g_vm_fd, KVM_SET_IDENTITY_MAP_ADDR, &map_addr);
-    ioctl(g_vm_fd, KVM_CREATE_IRQCHIP, 0);
-
 
     g_kvm_slot_count = 0;
 
@@ -1062,22 +1068,28 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     /* SET_REGS first, then SET_MP_STATE.
      * KVM_SET_MP_STATE(RUNNABLE) on a fresh vCPU can trigger an internal
      * reset that wipes registers. Setting regs FIRST then MP state avoids
-     * this; alternatively we only set MP state once at init. */
+     * this. We MUST set RUNNABLE every time because the previous KVM_RUN
+     * may have left the vCPU in HALTED state (guest executed HLT). */
     {
         int sr_ret = ioctl(t_vcpu_fd, KVM_SET_SREGS, &ksregs);
         int rr_ret = ioctl(t_vcpu_fd, KVM_SET_REGS, &kregs);
-        /* Only set MP_STATE to RUNNABLE once per vCPU lifetime */
-        static __thread int mp_state_set = 0;
-        if (!mp_state_set) {
+        /* Always set MP_STATE to RUNNABLE before KVM_RUN.
+         * If the previous execution ended with HLT, the vCPU is now in
+         * HALTED state and KVM_RUN would immediately return KVM_EXIT_HLT
+         * without executing any guest code. */
+        {
             struct kvm_mp_state mps = { .mp_state = 0 }; /* RUNNABLE */
             int mp_ret = ioctl(t_vcpu_fd, KVM_SET_MP_STATE, &mps);
-            fprintf(stderr, "[DBG-MP] KVM_SET_MP_STATE(RUNNABLE) ret=%d errno=%d vcpu_fd=%d (one-time)\n",
-                    mp_ret, (mp_ret < 0) ? errno : 0, t_vcpu_fd);
-            mp_state_set = 1;
-            /* Re-set regs AFTER mp_state in case the transition wiped them */
-            sr_ret = ioctl(t_vcpu_fd, KVM_SET_SREGS, &ksregs);
-            rr_ret = ioctl(t_vcpu_fd, KVM_SET_REGS, &kregs);
+            static __thread int mp_dbg = 0;
+            if (mp_dbg < 5) {
+                fprintf(stderr, "[DBG-MP] KVM_SET_MP_STATE(RUNNABLE) ret=%d errno=%d vcpu_fd=%d\n",
+                        mp_ret, (mp_ret < 0) ? errno : 0, t_vcpu_fd);
+                mp_dbg++;
+            }
         }
+        /* Re-set regs AFTER mp_state in case the transition wiped them */
+        sr_ret = ioctl(t_vcpu_fd, KVM_SET_SREGS, &ksregs);
+        rr_ret = ioctl(t_vcpu_fd, KVM_SET_REGS, &kregs);
         static int set_dbg = 0;
         if (set_dbg < 10) {
             /* Verify registers actually stuck by reading back */
@@ -1095,19 +1107,49 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         }
     }
 
+    /* [V30 TSC 同步] 将 master 传来的 TSC 值注入 slave 本地 vCPU，
+     * 确保 slave KVM_RUN 期间 guest 读到的 TSC 与 master 侧一致。 */
+    if (!req->mode_tcg && req->ctx.kvm.tsc_valid) {
+        struct {
+            struct kvm_msrs info;
+            struct kvm_msr_entry entries[3];
+        } msr_data;
+        memset(&msr_data, 0, sizeof(msr_data));
+        msr_data.info.nmsrs = 3;
+        msr_data.entries[0].index = 0x10;       /* MSR_IA32_TSC */
+        msr_data.entries[0].data  = req->ctx.kvm.tsc_value;
+        msr_data.entries[1].index = 0x6e0;      /* MSR_IA32_TSCDEADLINE */
+        msr_data.entries[1].data  = req->ctx.kvm.tsc_deadline;
+        msr_data.entries[2].index = 0xC0000102;  /* MSR_KERNEL_GS_BASE */
+        msr_data.entries[2].data  = req->ctx.kvm.kernel_gs_base;
+        ioctl(t_vcpu_fd, KVM_SET_MSRS, &msr_data);
+    }
+
     /* [DBG] Print RAW incoming ctx BEFORE assignment */
     {
         static int dbg_raw = 0;
         if (dbg_raw < 50) {
             wvm_kvm_context_t *rctx = &req->ctx.kvm;
             struct kvm_sregs *rs = (struct kvm_sregs *)rctx->sregs_data;
-            fprintf(stderr, "[DBG-RAW] req=%llu rip=0x%llx rax=0x%llx cs_base=0x%llx cs_sel=0x%x exit=%u\n",
+            uint64_t gpa = rs->cs.base + rctx->rip;
+            fprintf(stderr, "[DBG-RAW] req=%llu rip=0x%llx rax=0x%llx rdx=0x%llx cs_base=0x%llx cs_sel=0x%x exit=%u\n",
                 (unsigned long long)hdr->req_id,
                 (unsigned long long)rctx->rip,
                 (unsigned long long)rctx->rax,
+                (unsigned long long)rctx->rdx,
                 (unsigned long long)rs->cs.base,
                 (unsigned)rs->cs.selector,
                 (unsigned)rctx->exit_reason);
+            /* [DIAG] Dump 16 bytes from SHM at trampoline GPA */
+            if (g_phy_ram && gpa + 16 <= 0x80000000ULL) {
+                uint8_t *p = g_phy_ram + gpa;
+                fprintf(stderr, "[SLAVE-MEM] GPA=0x%llx bytes:"
+                        " %02x %02x %02x %02x %02x %02x %02x %02x"
+                        " %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                        (unsigned long long)gpa,
+                        p[0],p[1],p[2],p[3],p[4],p[5],p[6],p[7],
+                        p[8],p[9],p[10],p[11],p[12],p[13],p[14],p[15]);
+            }
             dbg_raw++;
         }
     }
@@ -1186,19 +1228,78 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
     };
     timer_settime(ktimer, 0, &its, NULL);
 
-    do {
+    for (;;) {
         ret = ioctl(t_vcpu_fd, KVM_RUN, 0);
         if (ret == 0 && t_kvm_run->exit_reason == KVM_EXIT_MMIO) {
+            /* Intercept LAPIC MMIO (0xfee00000-0xfee00fff).  Without in-kernel
+             * LAPIC bound to this vCPU these exit to userspace.  Emulate
+             * critical registers (especially APIC ID) so the guest kernel
+             * doesn't get confused about which CPU it's running on. */
+            uint64_t pa = t_kvm_run->mmio.phys_addr;
+            if (pa >= 0xfee00000ULL && pa < 0xfee01000ULL) {
+                uint32_t reg_off = (uint32_t)(pa - 0xfee00000ULL);
+                static int lapic_dbg = 0;
+                if (lapic_dbg < 50) {
+                    fprintf(stderr, "[Slave-LAPIC] vcpu=%d %s reg=0x%03x len=%u data=0x",
+                            vcpu_id,
+                            t_kvm_run->mmio.is_write ? "WR" : "RD",
+                            reg_off, t_kvm_run->mmio.len);
+                    for (int bi = t_kvm_run->mmio.len - 1; bi >= 0; bi--)
+                        fprintf(stderr, "%02x", t_kvm_run->mmio.data[bi]);
+                    fprintf(stderr, "\n");
+                    lapic_dbg++;
+                }
+                if (!t_kvm_run->mmio.is_write) {
+                    /* Return proper values for critical LAPIC registers. */
+                    uint32_t val = 0;
+                    switch (reg_off) {
+                    case 0x020: /* APIC ID (bits 31:24 = APIC ID in xAPIC) */
+                        val = ((uint32_t)vcpu_id) << 24;
+                        break;
+                    case 0x030: /* APIC Version */
+                        val = 0x50014; /* version 0x14, max LVT 5 */
+                        break;
+                    case 0x0D0: /* Logical Destination Register */
+                        val = (1U << (vcpu_id & 7)) << 24;
+                        break;
+                    case 0x0E0: /* Destination Format Register */
+                        val = 0xFFFFFFFFU; /* flat model */
+                        break;
+                    case 0x0F0: /* Spurious Interrupt Vector Register */
+                        val = 0x1FF; /* APIC enabled, vector 0xFF */
+                        break;
+                    case 0x300: /* ICR low -- delivery status=idle */
+                        val = 0;
+                        break;
+                    default:
+                        val = 0;
+                        break;
+                    }
+                    memcpy(t_kvm_run->mmio.data, &val, sizeof(val));
+                    if (t_kvm_run->mmio.len < 4)
+                        memset(t_kvm_run->mmio.data + t_kvm_run->mmio.len, 0,
+                               8 - t_kvm_run->mmio.len);
+                }
+                /* Check alarm before re-entering KVM_RUN.  Guest may be in a
+                 * tight LAPIC polling loop (e.g. ICR delivery status) which
+                 * would generate infinite MMIO exits. */
+                if (t_kvm_alarm_fired) break;
+                continue; /* re-enter KVM_RUN */
+            }
             if (wvm_vfio_intercept_mmio(
                     t_kvm_run->mmio.phys_addr,
                     t_kvm_run->mmio.data,
                     t_kvm_run->mmio.len,
                     t_kvm_run->mmio.is_write)) {
+                if (t_kvm_alarm_fired) break;
                 continue;
             }
         }
-        if (ret == 0) break;
-    } while (ret == -1 && errno == EINTR && !t_kvm_alarm_fired);
+        if (ret == 0) break; /* normal exit (IO, HLT, etc.) */
+        if (ret == -1 && errno == EINTR && !t_kvm_alarm_fired)
+            continue; /* signal interrupted, retry */
+        break; /* error or alarm fired */
+    }
 
     /* [DBG] Print KVM_RUN result for first 20 requests */
     {
@@ -1414,6 +1515,29 @@ skip_kvm_run:
         ack_kctx->rip = kregs.rip; ack_kctx->rflags = kregs.rflags;
         memcpy(ack_kctx->sregs_data, &ksregs, sizeof(ksregs));
         ack_kctx->exit_reason = t_kvm_run->exit_reason;
+
+        /* [V30 TSC 同步] 读回 slave 端 KVM_RUN 后的 TSC，带回 master。
+         * slave 执行期间 TSC 自然递增，master 需要这个更新后的值来
+         * 保持 kvmclock 的单调性。 */
+        {
+            struct {
+                struct kvm_msrs info;
+                struct kvm_msr_entry entries[3];
+            } msr_data;
+            memset(&msr_data, 0, sizeof(msr_data));
+            msr_data.info.nmsrs = 3;
+            msr_data.entries[0].index = 0x10;       /* MSR_IA32_TSC */
+            msr_data.entries[1].index = 0x6e0;      /* MSR_IA32_TSCDEADLINE */
+            msr_data.entries[2].index = 0xC0000102;  /* MSR_KERNEL_GS_BASE */
+            if (ioctl(t_vcpu_fd, KVM_GET_MSRS, &msr_data) >= 0) {
+                ack_kctx->tsc_value = msr_data.entries[0].data;
+                ack_kctx->tsc_deadline = msr_data.entries[1].data;
+                ack_kctx->kernel_gs_base = msr_data.entries[2].data;
+                ack_kctx->tsc_valid = 1;
+            } else {
+                ack_kctx->tsc_valid = 0;
+            }
+        }
 
         if (t_kvm_run->exit_reason == KVM_EXIT_IO) {
             ack_kctx->io.direction = t_kvm_run->io.direction;

@@ -71,6 +71,44 @@ static bool g_slave_exec_done;
 static struct wvm_ipc_cpu_run_req g_slave_exec_req;
 static struct wvm_ipc_cpu_run_ack g_slave_exec_ack;
 
+/* ---- Async vCPU-run worker (V33g fix: unblock net thread) ----
+ * V33n fix: worker no longer writes to socket directly.
+ * Instead it stores the result and signals the net thread via SIGUSR2.
+ * Net thread sends MSG_VCPU_EXIT — single-writer on socket, preserving
+ * message ordering and avoiding TCP stream corruption.
+ */
+#include <signal.h>
+#include <pthread.h>
+
+#define WVM_VCPU_DONE_SIGNAL  SIGUSR2
+
+typedef struct {
+    QemuMutex lock;
+    QemuCond  has_work;
+    QemuCond  work_taken;
+    bool      pending;          /* net thread set → worker clears */
+    bool      initialized;
+    /* result: worker stores ack here, net thread reads when done */
+    struct wvm_ipc_cpu_run_ack result_ack;
+    volatile int done;          /* atomic: worker sets 1, net thread clears 0 */
+    pthread_t net_thread_id;    /* for pthread_kill wakeup */
+    /* request fields */
+    struct wvm_ipc_cpu_run_req req;
+    bool      compact_ctx;
+    bool      mode_tcg;
+} WvmVcpuRunWorker;
+
+static WvmVcpuRunWorker g_vcpu_run_worker;
+
+static void wvm_sigusr2_handler(int sig) {
+    /* no-op: sole purpose is to interrupt recvmmsg with EINTR */
+    (void)sig;
+}
+
+/* Forward declaration — defined later in file */
+int wavevm_slave_submit_cpu_run(const struct wvm_ipc_cpu_run_req *req,
+                                struct wvm_ipc_cpu_run_ack *ack);
+
 static void wavevm_slave_exec_sync_init(void)
 {
     qemu_mutex_init(&g_slave_exec_lock);
@@ -80,6 +118,111 @@ static void wavevm_slave_exec_sync_init(void)
     g_slave_exec_done = false;
     memset(&g_slave_exec_req, 0, sizeof(g_slave_exec_req));
     memset(&g_slave_exec_ack, 0, sizeof(g_slave_exec_ack));
+}
+
+/* ---- V33n: Async vCPU-run worker thread ----
+ * Receives MSG_VCPU_RUN requests from net thread, calls the blocking
+ * wavevm_slave_submit_cpu_run(), stores the result and wakes the net
+ * thread via SIGUSR2.  The net thread sends MSG_VCPU_EXIT on the socket
+ * (single-writer guarantee).
+ */
+static void *wavevm_vcpu_run_worker_fn(void *arg)
+{
+    WvmVcpuRunWorker *w = (WvmVcpuRunWorker *)arg;
+    fprintf(stderr, "[WaveVM-Slave] vCPU-run worker thread started\n");
+
+    while (1) {
+        struct wvm_ipc_cpu_run_req req;
+
+        /* Wait for net thread to hand off a MSG_VCPU_RUN */
+        qemu_mutex_lock(&w->lock);
+        while (!w->pending) {
+            qemu_cond_wait(&w->has_work, &w->lock);
+        }
+        memcpy(&req, &w->req, sizeof(req));
+        w->pending = false;
+        qemu_cond_signal(&w->work_taken);   /* tell net thread slot is free */
+        qemu_mutex_unlock(&w->lock);
+
+        /* Blocking call — this is fine, we're on a dedicated thread */
+        struct wvm_ipc_cpu_run_ack full_ack;
+        memset(&full_ack, 0, sizeof(full_ack));
+        wavevm_slave_submit_cpu_run(&req, &full_ack);
+
+        /* Store result for net thread to pick up */
+        memcpy(&w->result_ack, &full_ack, sizeof(full_ack));
+        __atomic_store_n(&w->done, 1, __ATOMIC_RELEASE);
+
+        /* Wake net thread from recvmmsg via SIGUSR2 → EINTR */
+        pthread_kill(w->net_thread_id, WVM_VCPU_DONE_SIGNAL);
+    }
+    return NULL;
+}
+
+static void wavevm_vcpu_run_worker_init(void)
+{
+    WvmVcpuRunWorker *w = &g_vcpu_run_worker;
+    if (w->initialized) return;
+
+    /* Install SIGUSR2 handler (must not be SIG_IGN — need EINTR) */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = wvm_sigusr2_handler;
+    sa.sa_flags = 0;  /* no SA_RESTART — we want recvmmsg to get EINTR */
+    sigaction(WVM_VCPU_DONE_SIGNAL, &sa, NULL);
+
+    qemu_mutex_init(&w->lock);
+    qemu_cond_init(&w->has_work);
+    qemu_cond_init(&w->work_taken);
+    w->pending = false;
+    w->done = 0;
+    w->net_thread_id = pthread_self();  /* called from net thread */
+    w->initialized = true;
+
+    QemuThread worker_thread;
+    qemu_thread_create(&worker_thread, "wvm-vcpu-run",
+                        wavevm_vcpu_run_worker_fn, w,
+                        QEMU_THREAD_DETACHED);
+    fprintf(stderr, "[WaveVM-Slave] vCPU-run worker initialized (net_tid=%lu)\n",
+            (unsigned long)w->net_thread_id);
+}
+
+/* V33n: Net thread sends MSG_VCPU_EXIT when worker signals completion.
+ * Called from net thread only — single-writer guarantee on master_sock. */
+static void wavevm_net_send_vcpu_exit(int master_sock, WvmVcpuRunWorker *w)
+{
+    struct wvm_ipc_cpu_run_ack *ack = &w->result_ack;
+    uint8_t resp_buf[sizeof(struct wvm_header) + sizeof(struct wvm_ipc_cpu_run_ack)];
+    struct wvm_header *rhdr = (struct wvm_header *)resp_buf;
+    void *rpayload = resp_buf + sizeof(struct wvm_header);
+    int resp_len;
+
+    memset(rhdr, 0, sizeof(*rhdr));
+    rhdr->magic = htonl(WVM_MAGIC);
+    rhdr->msg_type = htons(MSG_VCPU_EXIT);
+    rhdr->mode_tcg = w->mode_tcg ? 1 : 0;
+
+    if (w->compact_ctx) {
+        if (w->mode_tcg) {
+            memcpy(rpayload, &ack->ctx.tcg, sizeof(ack->ctx.tcg));
+            rhdr->payload_len = htons(sizeof(ack->ctx.tcg));
+            resp_len = sizeof(struct wvm_header) + sizeof(ack->ctx.tcg);
+        } else {
+            memcpy(rpayload, &ack->ctx.kvm, sizeof(ack->ctx.kvm));
+            rhdr->payload_len = htons(sizeof(ack->ctx.kvm));
+            resp_len = sizeof(struct wvm_header) + sizeof(ack->ctx.kvm);
+        }
+    } else {
+        memcpy(rpayload, ack, sizeof(*ack));
+        rhdr->payload_len = htons(sizeof(*ack));
+        resp_len = sizeof(struct wvm_header) + sizeof(*ack);
+    }
+    rhdr->crc32 = 0;
+    rhdr->crc32 = htonl(calculate_crc32(resp_buf, resp_len));
+
+    if (send(master_sock, resp_buf, resp_len, 0) < 0) {
+        perror("[WaveVM-Slave] net-thread send MSG_VCPU_EXIT");
+    }
 }
 
 static void *wavevm_tcg_kick_thread(void *opaque)
@@ -361,7 +504,9 @@ void wavevm_slave_vcpu_loop(CPUState *cpu)
             WaveVMTcgKickCtx *kick = g_new0(WaveVMTcgKickCtx, 1);
             QemuThread kick_thread;
             kick->cpu = cpu;
-            kick->delay_us = 5000;
+            kick->delay_us = 50000;  /* V31b: 50ms per burst (was 5ms), gives slave
+                                       * enough time to fetch pages via UDP before
+                                       * being kicked out of cpu_exec */
             qemu_thread_create(&kick_thread, "wvm-tcg-kick",
                                wavevm_tcg_kick_thread, kick,
                                QEMU_THREAD_DETACHED);
@@ -709,13 +854,27 @@ static void *wavevm_slave_net_thread(void *arg) {
         msgs[i].msg_hdr.msg_namelen = sizeof(struct sockaddr_in);
     }
 
-    printf("[WaveVM-Slave] Network Loop Active (Engine: %s, FD: %d).\n", 
-           kvm_enabled() ? "KVM" : "TCG", s->master_sock);
+    /* Detect kernel module presence — determines async (Mode A) vs sync (Mode B)
+     * for MSG_VCPU_RUN handling. Mode B sync path avoids cross-node IPI deadlock
+     * caused by async worker holding vCPU while net thread can't deliver IPIs. */
+    bool local_kernel_mode = (access("/dev/wavevm", R_OK | W_OK) == 0);
+
+    printf("[WaveVM-Slave] Network Loop Active (Engine: %s, FD: %d, vcpu_dispatch: %s).\n",
+           kvm_enabled() ? "KVM" : "TCG", s->master_sock,
+           local_kernel_mode ? "async" : "sync");
+
+    WvmVcpuRunWorker *w = &g_vcpu_run_worker;
 
     while (1) {
+        /* V33n: check if worker completed vCPU execution before blocking */
+        if (w->initialized && __atomic_load_n(&w->done, __ATOMIC_ACQUIRE)) {
+            wavevm_net_send_vcpu_exit(s->master_sock, w);
+            __atomic_store_n(&w->done, 0, __ATOMIC_RELEASE);
+        }
+
         int retval = recvmmsg(s->master_sock, msgs, BATCH_SIZE, 0, NULL);
         if (retval < 0) {
-            if (errno == EINTR) continue;
+            if (errno == EINTR) continue;  /* loops back to done-check above */
             perror("recvmmsg");
             break;
         }
@@ -796,7 +955,7 @@ static void *wavevm_slave_net_thread(void *arg) {
                         qemu_mutex_unlock_iothread();
                     }
                 }
-                // 3. 远程执行 (Master -> Slave)
+                // 3. 远程执行 (Master -> Slave) — V33g: async handoff to worker
                 else if (msg_type == MSG_VCPU_RUN) {
                     struct wvm_ipc_cpu_run_req local_req;
                     struct wvm_ipc_cpu_run_req *req = NULL;
@@ -824,29 +983,51 @@ static void *wavevm_slave_net_thread(void *arg) {
                         req = &local_req;
                         compact_ctx_payload = true;
                     }
-                    struct wvm_ipc_cpu_run_ack full_ack;
-                    memset(&full_ack, 0, sizeof(full_ack));
-                    wavevm_slave_submit_cpu_run(req, &full_ack);
-                    if (compact_ctx_payload) {
-                        if (hdr->mode_tcg) {
-                            memcpy(payload, &full_ack.ctx.tcg, sizeof(full_ack.ctx.tcg));
-                            hdr->payload_len = htons(sizeof(full_ack.ctx.tcg));
-                            msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(full_ack.ctx.tcg);
-                        } else {
-                            memcpy(payload, &full_ack.ctx.kvm, sizeof(full_ack.ctx.kvm));
-                            hdr->payload_len = htons(sizeof(full_ack.ctx.kvm));
-                            msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(full_ack.ctx.kvm);
+
+                    if (local_kernel_mode) {
+                        /* Mode A: async worker — net thread must stay free for
+                         * MSG_MEM_WRITE while vCPU executes (kernel page_mkwrite path) */
+                        wavevm_vcpu_run_worker_init();
+
+                        qemu_mutex_lock(&w->lock);
+                        while (w->pending) {
+                            qemu_cond_wait(&w->work_taken, &w->lock);
                         }
+                        memcpy(&w->req, req, sizeof(w->req));
+                        w->compact_ctx = compact_ctx_payload;
+                        w->mode_tcg = hdr->mode_tcg ? 1 : 0;
+                        w->pending = true;
+                        qemu_cond_signal(&w->has_work);
+                        qemu_mutex_unlock(&w->lock);
                     } else {
-                        memcpy(payload, &full_ack, sizeof(full_ack));
-                        hdr->payload_len = htons(sizeof(full_ack));
-                        msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(full_ack);
-                    }
-                    hdr->msg_type = htons(MSG_VCPU_EXIT);
-                    hdr->crc32 = 0;
-                    hdr->crc32 = htonl(calculate_crc32(buf, msgs[i].msg_len));
-                    if (send(s->master_sock, buf, msgs[i].msg_len, 0) < 0) {
-                        perror("[WaveVM-Slave] send MSG_VCPU_EXIT");
+                        /* Mode B: sync path — execute vCPU on net thread directly.
+                         * This ensures IPI delivery (smp_call_function / flush_tlb_all)
+                         * works correctly because vCPU exit and message processing
+                         * are serialized on the same thread. */
+                        struct wvm_ipc_cpu_run_ack full_ack;
+                        memset(&full_ack, 0, sizeof(full_ack));
+                        wavevm_slave_submit_cpu_run(req, &full_ack);
+                        if (compact_ctx_payload) {
+                            if (hdr->mode_tcg) {
+                                memcpy(payload, &full_ack.ctx.tcg, sizeof(full_ack.ctx.tcg));
+                                hdr->payload_len = htons(sizeof(full_ack.ctx.tcg));
+                                msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(full_ack.ctx.tcg);
+                            } else {
+                                memcpy(payload, &full_ack.ctx.kvm, sizeof(full_ack.ctx.kvm));
+                                hdr->payload_len = htons(sizeof(full_ack.ctx.kvm));
+                                msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(full_ack.ctx.kvm);
+                            }
+                        } else {
+                            memcpy(payload, &full_ack, sizeof(full_ack));
+                            hdr->payload_len = htons(sizeof(full_ack));
+                            msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(full_ack);
+                        }
+                        hdr->msg_type = htons(MSG_VCPU_EXIT);
+                        hdr->crc32 = 0;
+                        hdr->crc32 = htonl(calculate_crc32(buf, msgs[i].msg_len));
+                        if (send(s->master_sock, buf, msgs[i].msg_len, 0) < 0) {
+                            perror("[WaveVM-Slave] send MSG_VCPU_EXIT");
+                        }
                     }
                 } else if (msg_type == MSG_PING) {
                     // [FIX] 透传 PING 给 Gateway/Master，由真正的 Owner 回复 ACK
@@ -997,6 +1178,32 @@ static void wavevm_region_add(MemoryListener *listener, MemoryRegionSection *sec
             extern void wavevm_register_ram_block(void *hva, uint64_t size, uint64_t gpa);
             wavevm_register_ram_block(hva, size, start_gpa);
         }
+
+        /* [FIX] BIOS shadow sync for shared-memory backed RAM.
+         *
+         * When QEMU remaps the BIOS area (0xE0000-0xFFFFF) from ROM (pc.bios)
+         * to RAM (ram0) during PAM shadow, the new RAM region's HVA contains
+         * the correct BIOS code (QEMU copies it internally), but the SHM
+         * backing file still has zeros at those offsets.  Slave nodes that
+         * mmap the SHM file will see zeros instead of BIOS code, causing
+         * triple faults when APs try to execute the SIPI trampoline or when
+         * the BSP re-enters the BIOS area after PAM reconfiguration.
+         *
+         * Fix: when a RAM region overlapping 0xC0000-0xFFFFF is added,
+         * memcpy the HVA content into the SHM shadow at the corresponding
+         * offset.  This is a one-time copy that ensures BIOS shadow data
+         * is visible to all processes sharing the SHM file.
+         */
+        if (wavevm_user_mode_enabled()) {
+            extern void wavevm_sync_bios_shadow(uint64_t gpa, uint64_t size, void *hva);
+            uint64_t bios_start = 0xC0000;
+            uint64_t bios_end   = 0x100000;
+            uint64_t region_end = start_gpa + size;
+            if (start_gpa < bios_end && region_end > bios_start) {
+                wavevm_sync_bios_shadow(start_gpa, size, hva);
+            }
+        }
+
         if (start_gpa == 0 && !g_primary_ram_hva) {
             g_primary_ram_hva = hva;
             g_primary_ram_size = size;

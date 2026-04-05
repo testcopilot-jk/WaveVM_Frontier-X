@@ -219,6 +219,16 @@ typedef struct {
     uint64_t r8, r9, r10, r11, r12, r13, r14, r15;
     uint64_t rip, rflags;
     uint8_t sregs_data[512];
+    /* [V30 TSC/kvmclock 同步]
+     * 远程执行后必须把 slave 端的 TSC 值带回 master，否则 master 本地
+     * KVM_RUN 恢复时 kvmclock 算出负 delta，导致内核时间戳溢出到
+     * 18446744071s (接近 UINT64_MAX ns)，Guest 内核 hang 在 X.509
+     * 证书解析等时间敏感路径。 */
+    uint64_t tsc_value;           /* MSR_IA32_TSC (0x10) */
+    uint64_t tsc_deadline;        /* MSR_IA32_TSCDEADLINE (0x6e0) */
+    uint64_t kernel_gs_base;      /* MSR_KERNEL_GS_BASE (0xC0000102) */
+    uint32_t tsc_valid;           /* 非零表示 tsc_value 字段有效 */
+    uint32_t _pad0;               /* 8 字节对齐填充 */
     uint32_t exit_reason;
     struct {
         uint8_t direction;
@@ -235,6 +245,15 @@ typedef struct {
     } mmio;
 } wvm_kvm_context_t;
 
+/* Per-segment descriptor state (mirrors QEMU SegmentCache / KVM kvm_segment) */
+typedef struct {
+    uint64_t base;
+    uint32_t limit;
+    uint32_t selector;
+    uint32_t flags;       /* QEMU SegmentCache.flags (DESC_* bits) */
+    uint32_t _pad;
+} wvm_seg_reg_t;
+
 typedef struct {
     uint64_t regs[16];
     uint64_t eip;
@@ -246,6 +265,11 @@ typedef struct {
     uint64_t fs_base, gs_base;
     uint64_t gdt_base, gdt_limit;
     uint64_t idt_base, idt_limit;
+    /* --- V31: Full segment register state for TCG execution --- */
+    wvm_seg_reg_t segs[6];  /* ES=0, CS=1, SS=2, DS=3, FS=4, GS=5 */
+    wvm_seg_reg_t ldt;
+    wvm_seg_reg_t tr;
+    uint64_t efer;
 } wvm_tcg_context_t;
 
 struct wvm_ipc_cpu_run_req {
@@ -308,30 +332,87 @@ extern int g_ctrl_port;
 #include "crc32.h"
 
 //[V30 异构适配器] 提取并转换 TCG 与 KVM 之间的寄存器状态（含关键段寄存器）
-static void wvm_translate_tcg_to_kvm(wvm_tcg_context_t *t, struct kvm_regs *k, struct kvm_sregs *s) {
+
+/* Helper: convert QEMU SegmentCache.flags (packed) → KVM kvm_segment fields */
+static inline void wvm_seg_to_kvm(const wvm_seg_reg_t *seg, struct kvm_segment *ks) {
+    ks->base     = seg->base;
+    ks->limit    = seg->limit;
+    ks->selector = (uint16_t)seg->selector;
+    /* QEMU flags layout: type[11:8] S[12] DPL[14:13] P[15] AVL[20] L[21] DB[22] G[23] */
+    ks->type    = (seg->flags >> 8) & 0xF;
+    ks->s       = (seg->flags >> 12) & 1;
+    ks->dpl     = (seg->flags >> 13) & 3;
+    ks->present = (seg->flags >> 15) & 1;
+    ks->avl     = (seg->flags >> 20) & 1;
+    ks->l       = (seg->flags >> 21) & 1;
+    ks->db      = (seg->flags >> 22) & 1;
+    ks->g       = (seg->flags >> 23) & 1;
+    ks->unusable = (seg->flags == 0) ? 1 : 0;
+}
+
+/* Helper: convert KVM kvm_segment fields → QEMU SegmentCache.flags (packed) */
+static inline void wvm_kvm_to_seg(const struct kvm_segment *ks, wvm_seg_reg_t *seg) {
+    seg->base     = ks->base;
+    seg->limit    = ks->limit;
+    seg->selector = ks->selector;
+    if (ks->unusable) {
+        seg->flags = 0;
+    } else {
+        seg->flags = ((uint32_t)ks->type << 8)
+                   | ((uint32_t)ks->s    << 12)
+                   | ((uint32_t)ks->dpl  << 13)
+                   | ((uint32_t)ks->present << 15)
+                   | ((uint32_t)ks->avl  << 20)
+                   | ((uint32_t)ks->l    << 21)
+                   | ((uint32_t)ks->db   << 22)
+                   | ((uint32_t)ks->g    << 23);
+    }
+}
+
+static __attribute__((unused)) void wvm_translate_tcg_to_kvm(wvm_tcg_context_t *t, struct kvm_regs *k, struct kvm_sregs *s) {
     k->rax = t->regs[0]; k->rcx = t->regs[1]; k->rdx = t->regs[2]; k->rbx = t->regs[3];
     k->rsp = t->regs[4]; k->rbp = t->regs[5]; k->rsi = t->regs[6]; k->rdi = t->regs[7];
     k->r8  = t->regs[8]; k->r9  = t->regs[9]; k->r10 = t->regs[10];k->r11 = t->regs[11];
     k->r12 = t->regs[12];k->r13 = t->regs[13];k->r14 = t->regs[14];k->r15 = t->regs[15];
     k->rip = t->eip; k->rflags = t->eflags;
-    // 关键段寄存器与控制寄存器映射
+    // 控制寄存器
     s->cr0 = t->cr[0]; s->cr2 = t->cr[2]; s->cr3 = t->cr[3]; s->cr4 = t->cr[4];
-    s->fs.base = t->fs_base; s->gs.base = t->gs_base;
     s->gdt.base = t->gdt_base; s->gdt.limit = t->gdt_limit;
     s->idt.base = t->idt_base; s->idt.limit = t->idt_limit;
+    s->efer = t->efer;
+    // V31: 完整段寄存器（ES=0 CS=1 SS=2 DS=3 FS=4 GS=5）
+    wvm_seg_to_kvm(&t->segs[0], &s->es);
+    wvm_seg_to_kvm(&t->segs[1], &s->cs);
+    wvm_seg_to_kvm(&t->segs[2], &s->ss);
+    wvm_seg_to_kvm(&t->segs[3], &s->ds);
+    wvm_seg_to_kvm(&t->segs[4], &s->fs);
+    wvm_seg_to_kvm(&t->segs[5], &s->gs);
+    wvm_seg_to_kvm(&t->ldt, &s->ldt);
+    wvm_seg_to_kvm(&t->tr,  &s->tr);
 }
 
-static void wvm_translate_kvm_to_tcg(struct kvm_regs *k, struct kvm_sregs *s, wvm_tcg_context_t *t) {
+static __attribute__((unused)) void wvm_translate_kvm_to_tcg(struct kvm_regs *k, struct kvm_sregs *s, wvm_tcg_context_t *t) {
     t->regs[0] = k->rax; t->regs[1] = k->rcx; t->regs[2] = k->rdx; t->regs[3] = k->rbx;
     t->regs[4] = k->rsp; t->regs[5] = k->rbp; t->regs[6] = k->rsi; t->regs[7] = k->rdi;
     t->regs[8] = k->r8;  t->regs[9] = k->r9;  t->regs[10]= k->r10; t->regs[11]= k->r11;
     t->regs[12]= k->r12; t->regs[13]= k->r13; t->regs[14]= k->r14; t->regs[15]= k->r15;
     t->eip = k->rip; t->eflags = k->rflags;
-    // 关键段寄存器与控制寄存器映射
+    // 控制寄存器
     t->cr[0] = s->cr0; t->cr[2] = s->cr2; t->cr[3] = s->cr3; t->cr[4] = s->cr4;
-    t->fs_base = s->fs.base; t->gs_base = s->gs.base;
     t->gdt_base = s->gdt.base; t->gdt_limit = s->gdt.limit;
     t->idt_base = s->idt.base; t->idt_limit = s->idt.limit;
+    t->efer = s->efer;
+    // V31: 完整段寄存器
+    wvm_kvm_to_seg(&s->es, &t->segs[0]);
+    wvm_kvm_to_seg(&s->cs, &t->segs[1]);
+    wvm_kvm_to_seg(&s->ss, &t->segs[2]);
+    wvm_kvm_to_seg(&s->ds, &t->segs[3]);
+    wvm_kvm_to_seg(&s->fs, &t->segs[4]);
+    wvm_kvm_to_seg(&s->gs, &t->segs[5]);
+    wvm_kvm_to_seg(&s->ldt, &t->ldt);
+    wvm_kvm_to_seg(&s->tr,  &t->tr);
+    // 保持 legacy 兼容
+    t->fs_base = s->fs.base; t->gs_base = s->gs.base;
 }
 
 #endif // WAVEVM_PROTOCOL_H

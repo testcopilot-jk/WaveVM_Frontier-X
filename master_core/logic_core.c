@@ -21,6 +21,7 @@
     #include <linux/spinlock.h>
     #include <linux/delay.h>
     #include <linux/string.h>
+    #include <linux/printk.h>
     
     typedef spinlock_t pthread_mutex_t;
     #define pthread_mutex_init(l, a) spin_lock_init(l)
@@ -44,6 +45,19 @@
     #include <pthread.h>
     #include <string.h>
     #include <sys/mman.h>
+    #include <stdio.h>
+#endif
+
+#ifdef __KERNEL__
+    #define WVM_LOG_ERR(fmt, ...) printk(KERN_WARNING fmt, ##__VA_ARGS__)
+#else
+    #define WVM_LOG_ERR(fmt, ...) fprintf(stderr, fmt, ##__VA_ARGS__)
+#endif
+
+#ifdef __GNUC__
+#define WVM_UNUSED __attribute__((unused))
+#else
+#define WVM_UNUSED
 #endif
 
 #ifdef __KERNEL__
@@ -112,7 +126,7 @@ static struct {
 #define MAX_LOCAL_VIEW 1024  // 本地感知的邻居上限
 #define GOSSIP_INTERVAL_US 60000000 // 60s 心跳一次 (测试压制心跳洪泛)
 #define VIEW_SYNC_INTERVAL_US 2000000 // 2秒同步一次全量视图
-static uint64_t g_last_view_sync_us = 0;
+static uint64_t g_last_view_sync_us WVM_UNUSED = 0;
 
 static void add_gossip_to_aggregator(uint32_t target_node_id, uint8_t state, uint32_t epoch);
 static void flush_gossip_aggregator(void);
@@ -206,7 +220,7 @@ static void copyset_set(copyset_t *cs, uint32_t node_id) {
     cs->bits[node_id / 64] |= (1UL << (node_id % 64));
 }
 
-static uint32_t g_cpu_route_table[WVM_CPU_ROUTE_TABLE_SIZE]; 
+static uint32_t g_cpu_route_table[WVM_CPU_ROUTE_TABLE_SIZE];
 
 /* 
  * [物理意图] 建立 vCPU 索引与物理计算节点 ID 之间的静态/动态映射表。
@@ -220,6 +234,13 @@ void wvm_set_cpu_mapping(int vcpu_index, uint32_t slave_id) {
     }
 }
 
+uint32_t wvm_get_cpu_mapping_raw(int vcpu_index) {
+    if (vcpu_index >= 0 && vcpu_index < WVM_CPU_ROUTE_TABLE_SIZE) {
+        return g_cpu_route_table[vcpu_index];
+    }
+    return WVM_NODE_AUTO_ROUTE;
+}
+
 uint32_t wvm_get_compute_slave_id(int vcpu_index) {
     if (vcpu_index >= 0 && vcpu_index < WVM_CPU_ROUTE_TABLE_SIZE) {
         uint32_t raw = g_cpu_route_table[vcpu_index];
@@ -229,6 +250,10 @@ uint32_t wvm_get_compute_slave_id(int vcpu_index) {
         return WVM_ENCODE_ID(g_my_vm_id, raw);
     }
     return WVM_NODE_AUTO_ROUTE;
+}
+
+const uint32_t* wvm_get_cpu_route_table(void) {
+    return g_cpu_route_table;
 }
 
 /* 
@@ -1141,9 +1166,9 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
             // 直接从本地目录内存拷贝
             memcpy(page_buffer, page->base_page_data, 4096);
             if (version_out) *version_out = page->version;
-            fprintf(stderr, "[Page Fault] local gpa=%#llx ver=%#llx\n",
-                    (unsigned long long)gpa,
-                    (unsigned long long)page->version);
+            WVM_LOG_ERR("[Page Fault] local gpa=%#llx ver=%#llx\n",
+                        (unsigned long long)gpa,
+                        (unsigned long long)page->version);
             
             // [V29] 既然由于缺页进来了，说明本地之前可能被设为 Invalid
             // 我们需要把自己加入订阅者列表，确保未来收到 Push
@@ -1189,19 +1214,19 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
     // 首次发送
     g_ops->send_packet(buffer, pkt_len, dir_node);
     last_send = start_total;
-    fprintf(stderr, "[Page Fault] remote gpa=%#llx dir=%u rid=%llu\n",
-            (unsigned long long)gpa,
-            dir_node,
-            (unsigned long long)rid);
+    WVM_LOG_ERR("[Page Fault] remote gpa=%#llx dir=%u rid=%llu\n",
+                (unsigned long long)gpa,
+                dir_node,
+                (unsigned long long)rid);
 
     int success = 0;
     while (1) {
         // 检查是否完成
         if (g_ops->check_req_status(rid) == 1) {
             success = 1;
-            fprintf(stderr, "[Page Fault Ack] gpa=%#llx rid=%llu\n",
-                    (unsigned long long)gpa,
-                    (unsigned long long)rid);
+            WVM_LOG_ERR("[Page Fault Ack] gpa=%#llx rid=%llu\n",
+                        (unsigned long long)gpa,
+                        (unsigned long long)rid);
             break;
         }
         
@@ -1233,10 +1258,10 @@ int wvm_handle_page_fault_logic(uint64_t gpa, void *page_buffer, uint64_t *versi
         }
     }
     if (!success) {
-        fprintf(stderr, "[Page Fault Timeout] gpa=%#llx dir=%u rid=%llu\n",
-                (unsigned long long)gpa,
-                dir_node,
-                (unsigned long long)rid);
+        WVM_LOG_ERR("[Page Fault Timeout] gpa=%#llx dir=%u rid=%llu\n",
+                    (unsigned long long)gpa,
+                    dir_node,
+                    (unsigned long long)rid);
     }
 
     g_ops->free_req_id(rid);
@@ -1270,7 +1295,7 @@ static void handle_prophet_metadata_update(uint64_t gpa_start, uint64_t len) {
  *  ABI 语义指纹识别器
  * 隐患规避：DF方向检查、整页对齐修剪、最小阈值过滤。
  */
-void wvm_prophet_abi_scanner(wvm_kvm_context_t *ctx) {
+static void wvm_prophet_abi_scanner(wvm_kvm_context_t *ctx) {
     // 1. 方向安全检查：x86 DF位 (Bit 10)。如果 DF=1 (递减)，绝对不加速。
     if (ctx->rflags & (1 << 10)) return;
 
@@ -1335,8 +1360,8 @@ void wvm_prophet_abi_scanner(wvm_kvm_context_t *ctx) {
 int wvm_rpc_call(uint16_t msg_type, void *payload, int len, uint32_t target_id, void *rx_buffer, int rx_len) {
     { static int __rpc_dbg=0;
       if (__rpc_dbg < 10) {
-          fprintf(stderr, "[RPC-CALL] msg=%u len=%d target=%u\n",
-                  (unsigned)msg_type, len, (unsigned)target_id);
+          WVM_LOG_ERR("[RPC-CALL] msg=%u len=%d target=%u\n",
+                      (unsigned)msg_type, len, (unsigned)target_id);
           __rpc_dbg++;
       }
     }
@@ -1701,6 +1726,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                     uint32_t commit_epoch = GET_EPOCH(commit_version);
                     uint32_t commit_counter = GET_COUNTER(commit_version);
                     uint32_t local_epoch = GET_EPOCH(page->version);
+                    (void)local_epoch;
                     uint32_t local_counter = GET_COUNTER(page->version);
             
                     // 1. Epoch 必须与 Directory 当前 Epoch 一致

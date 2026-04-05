@@ -115,10 +115,11 @@ struct u_req_ctx_t {
 };
 static struct u_req_ctx_t g_u_req_ctx[MAX_INFLIGHT_REQS];
 static int g_nonblock_recv = 0;
-static int g_poll_timeout_ms = -1;
+static int g_poll_timeout_ms = 100;   /* [V30 FIX] 默认 100ms，不再是 -1 (无限阻塞) */
 static int g_rx_thread_count = 4;
-static int g_disable_reuseport = 0;
+static int g_disable_reuseport = 0;   /* 保留环境变量覆盖能力，但共享 socket 下此项无效 */
 static uint64_t g_id_counter = 0;
+static int g_shared_rx_sockfd = -1;   /* [V30] 共享 RX socket，thread 0 创建，其余线程共享 */
 
 // --- 内存池 (Slab Allocator) ---
 typedef struct {
@@ -744,42 +745,59 @@ static void handle_ipc_rpc_passthrough(int qemu_fd, void *data, uint32_t len) {
  */
 static void* rx_thread_loop(void *arg) {
     long thread_idx = (long)arg;
-    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0) {
-        perror("RX socket create failed");
-        return NULL;
-    }
-    
-    // 设置非阻塞
-    int flags = fcntl(sockfd, F_GETFL, 0);
-    fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
-    
-    // 开启端口复用
-    int opt = 1;
-    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    if (!g_disable_reuseport) setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+    int sockfd;
 
-    struct sockaddr_in bind_addr = { 
-        .sin_family=AF_INET, 
-        .sin_port=htons(g_local_port), 
-        .sin_addr.s_addr=INADDR_ANY 
-    };
-    
-    if (bind(sockfd, (struct sockaddr*)&bind_addr, sizeof(bind_addr)) < 0) {
-        perror("User backend RX bind failed");
-        close(sockfd);
-        return NULL;
-    }
+    /* [V30 共享 Socket 架构]
+     * Thread 0 创建并 bind socket，其余线程等待后共享同一个 fd。
+     * 多线程对同一个 UDP socket 调 recvmmsg 在 Linux 下是安全的：
+     * 内核 sk_lock 保证每个 datagram 只被一个线程收到。
+     * 这消除了 SO_REUSEPORT 导致的响应路由错乱问题。 */
     if (thread_idx == 0) {
-        fprintf(stderr, "[TX-SOCK] bound port=%u\n", (unsigned)g_local_port);
-    }
+        sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (sockfd < 0) {
+            perror("RX socket create failed");
+            return NULL;
+        }
 
-    // 线程 0 负责提供全局发送 Socket
-    if (thread_idx == 0) {
+        int flags = fcntl(sockfd, F_GETFL, 0);
+        fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+
+        int opt = 1;
+        setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+        /* 不再使用 SO_REUSEPORT：单 socket 共享模型不需要它 */
+
+        int rcvbuf = 4 * 1024 * 1024; /* 4MB 接收缓冲区，减少高并发丢包 */
+        setsockopt(sockfd, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
+
+        struct sockaddr_in bind_addr = {
+            .sin_family=AF_INET,
+            .sin_port=htons(g_local_port),
+            .sin_addr.s_addr=INADDR_ANY
+        };
+
+        if (bind(sockfd, (struct sockaddr*)&bind_addr, sizeof(bind_addr)) < 0) {
+            perror("User backend RX bind failed");
+            close(sockfd);
+            return NULL;
+        }
+        fprintf(stderr, "[V30-RX] Thread 0: bound port=%u, shared socket fd=%d\n",
+                (unsigned)g_local_port, sockfd);
+
+        /* 发布共享 socket 给其他线程和 TX 路径 */
         pthread_mutex_lock(&g_init_lock);
+        g_shared_rx_sockfd = sockfd;
         g_tx_socket = sockfd;
-        pthread_cond_signal(&g_init_cond);
+        pthread_cond_broadcast(&g_init_cond);
         pthread_mutex_unlock(&g_init_lock);
+    } else {
+        /* 非 thread-0：等待 thread 0 完成 socket 创建 */
+        pthread_mutex_lock(&g_init_lock);
+        while (g_shared_rx_sockfd < 0) {
+            pthread_cond_wait(&g_init_cond, &g_init_lock);
+        }
+        sockfd = g_shared_rx_sockfd;
+        pthread_mutex_unlock(&g_init_lock);
+        fprintf(stderr, "[V30-RX] Thread %ld: sharing socket fd=%d\n", thread_idx, sockfd);
     }
 
     // recvmmsg 缓冲区
@@ -787,10 +805,9 @@ static void* rx_thread_loop(void *arg) {
     struct iovec iovecs[BATCH_SIZE];
     struct sockaddr_in src_addrs[BATCH_SIZE];
     uint8_t *buffer_pool = malloc(BATCH_SIZE * WVM_MAX_PACKET_SIZE);
-    
+
     if (!buffer_pool) {
         perror("RX buffer pool malloc failed");
-        close(sockfd);
         return NULL;
     }
 
@@ -810,8 +827,8 @@ static void* rx_thread_loop(void *arg) {
     while (1) {
         if (poll(&pfd, 1, g_poll_timeout_ms) <= 0) continue;
 
-        int n = recvmmsg(sockfd, msgs, BATCH_SIZE, g_nonblock_recv ? MSG_DONTWAIT : 0, NULL);
-        if (n <= 0) { if (g_nonblock_recv && (errno == EAGAIN || errno == EWOULDBLOCK)) usleep(100); continue; }
+        int n = recvmmsg(sockfd, msgs, BATCH_SIZE, MSG_DONTWAIT, NULL);
+        if (n <= 0) { if (errno == EAGAIN || errno == EWOULDBLOCK) continue; usleep(100); continue; }
 
         for (int i = 0; i < n; i++) {        
             uint8_t *base_ptr = (uint8_t *)iovecs[i].iov_base; // 基准地址
@@ -1148,9 +1165,9 @@ int user_backend_init(int my_node_id, int port) {
     queue_init(&g_fast_queue);
     queue_init(&g_slow_queue);
 
-    // Test parameters
-    g_nonblock_recv = (getenv("WVM_NONBLOCK_RECV") != NULL);
-    g_disable_reuseport = (getenv("WVM_DISABLE_REUSEPORT") != NULL);
+    // Test parameters (环境变量可覆盖编译时默认值)
+    /* WVM_NONBLOCK_RECV: 已废弃，V30 始终使用 MSG_DONTWAIT */
+    /* WVM_DISABLE_REUSEPORT: 已废弃，V30 共享 socket 不再使用 SO_REUSEPORT */
     {
         const char *pt = getenv("WVM_POLL_TIMEOUT_MS");
         if (pt) g_poll_timeout_ms = atoi(pt);
@@ -1159,6 +1176,8 @@ int user_backend_init(int my_node_id, int port) {
         const char *rc = getenv("WVM_RX_THREAD_COUNT");
         if (rc) { int v = atoi(rc); if (v >= 1 && v <= 16) g_rx_thread_count = v; }
     }
+    fprintf(stderr, "[V30-Init] rx_threads=%d poll_timeout=%dms (shared socket)\n",
+            g_rx_thread_count, g_poll_timeout_ms);
 
     // 启动 RX 线程 (根据 CPU 核心数动态调整，这里演示用 4)
     for (long i = 0; i < g_rx_thread_count; i++) {

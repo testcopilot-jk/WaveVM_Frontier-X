@@ -14,6 +14,7 @@
  */
 #include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/version.h>
 #include <linux/init.h>
 #include <linux/fs.h>
 #include <linux/mm.h>
@@ -32,10 +33,14 @@
 #include <linux/sched.h>
 #include <linux/sched/signal.h>
 #include <linux/atomic.h>
-#include <asm/barrier.h>    
+#include <asm/barrier.h>
 #include <linux/spinlock.h>
 #include <linux/percpu.h>
-#include <asm/unaligned.h> 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,1,0)
+#include <linux/unaligned.h>
+#else
+#include <asm/unaligned.h>
+#endif
 #include <linux/kthread.h>
 #include <linux/wait.h>
 #include <asm/byteorder.h>
@@ -47,7 +52,6 @@
 #include <linux/rcupdate.h>
 #include <linux/workqueue.h>
 #include <linux/cpu.h>
-#include <linux/version.h>
 
 #include "../common_include/wavevm_ioctl.h"
 #include "../common_include/wavevm_protocol.h"
@@ -59,7 +63,9 @@
 #define TX_SLOT_SIZE 65535
 
 // [Fix] Multi-VM: 引用全局 vm_id，用于 composite ID 编码
-extern uint8_t g_my_vm_id;
+// In kernel module context, define it here (main_wrapper.c is userspace-only)
+uint8_t g_my_vm_id = 0;
+EXPORT_SYMBOL(g_my_vm_id);
 
 // 定义并初始化 mapping 锁
 static struct rw_semaphore g_mapping_sem; 
@@ -1329,7 +1335,16 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
         if (!WVM_IS_VALID_TARGET(target)) {
             target = wvm_get_compute_slave_id(req.vcpu_index);
         }
-        if (!WVM_IS_VALID_TARGET(target)) return -ENODEV;
+        if (!WVM_IS_VALID_TARGET(target)) {
+            static int dbg_nodev = 0;
+            if (dbg_nodev < 5) {
+                uint32_t raw = wvm_get_cpu_mapping_raw(req.vcpu_index);
+                printk(KERN_WARNING "[wavevm] REMOTE_RUN cpu=%d raw_route=%u resolved=%u => ENODEV\n",
+                       req.vcpu_index, raw, target);
+                dbg_nodev++;
+            }
+            return -ENODEV;
+        }
 
         int ctx_len = req.mode_tcg ? sizeof(req.ctx.tcg) : sizeof(req.ctx.kvm);
         int ret = wvm_rpc_call(MSG_VCPU_RUN, &req.ctx, ctx_len, target, &ack, sizeof(ack));
@@ -1414,6 +1429,10 @@ static long wvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg) {
 
         for (uint32_t i = 0; i < head.count; i++) {
             wvm_set_cpu_mapping((int)(head.start_index + i), buf[i]);
+        }
+        if (head.start_index == 0 && head.count >= 3) {
+            printk(KERN_INFO "[wavevm] CPU route table updated: [0]=%u [1]=%u [2]=%u (total chunk=%u)\n",
+                   buf[0], buf[1], buf[2], head.count);
         }
         vfree(buf);
         break;

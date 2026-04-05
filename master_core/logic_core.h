@@ -55,10 +55,13 @@ void wvm_logic_broadcast_rpc(void *full_pkt_data, int full_pkt_len, uint16_t msg
 
 // 计算任务路由 (V27 遗留，用于 RPC 调度)
 uint32_t wvm_get_compute_slave_id(int vcpu_index);
+uint32_t wvm_get_cpu_mapping_raw(int vcpu_index);
+
+// 导出 CPU 路由表（供内核态注入）
+const uint32_t* wvm_get_cpu_route_table(void);
 
 void wvm_set_mem_mapping(int slot, uint32_t value);
 
 void wvm_set_cpu_mapping(int vcpu_index, uint32_t slave_id);
 
 #endif // LOGIC_CORE_H
-
