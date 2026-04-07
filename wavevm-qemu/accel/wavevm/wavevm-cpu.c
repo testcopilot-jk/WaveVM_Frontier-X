@@ -50,6 +50,7 @@ static void wvm_halt_wake_nop_handler(int sig) { (void)sig; }
 #define MAX_VCPUS 64
 static int ap_did_local_sipi[MAX_VCPUS] = {0};
 static int ap_did_os_sipi[MAX_VCPUS] = {0};
+static gint64 ap_halt_probe_us[MAX_VCPUS] = {0};
 
 static void wavevm_try_import_split_from_peer(int sock)
 {
@@ -225,6 +226,15 @@ static bool wavevm_valid_mmio_exit(const struct kvm_run *run)
            run->mmio.len == 4 || run->mmio.len == 8;
 }
 
+static inline uint32_t wavevm_lapic_reg32(const struct kvm_lapic_state *lapic, uint32_t off)
+{
+    uint32_t v = 0;
+    if (off + sizeof(v) <= sizeof(lapic->regs)) {
+        memcpy(&v, &lapic->regs[off], sizeof(v));
+    }
+    return v;
+}
+
 /* Keep local APIC/interrupt state and only import architectural sregs fields. */
 static void wavevm_apply_arch_sregs(struct kvm_sregs *dst,
                                     const struct kvm_sregs *src)
@@ -318,6 +328,21 @@ static void wavevm_remote_exec(CPUState *cpu) {
                 if (mp.mp_state == KVM_MP_STATE_HALTED &&
                     cpu->cpu_index < MAX_VCPUS &&
                     ap_did_os_sipi[cpu->cpu_index]) {
+                    if (cpu->interrupt_request == 0 && !cpu_has_work(cpu)) {
+                        gint64 now_us = g_get_monotonic_time();
+                        gint64 *last_probe = &ap_halt_probe_us[cpu->cpu_index];
+
+                        /* Pending LAPIC timer/IPI on an in-kernel irqchip may
+                         * not surface in interrupt_request until we re-enter
+                         * KVM_RUN once. Avoid the old busy self-spin, but keep
+                         * a throttled local probe so parked APs can observe a
+                         * legitimate wake source after remote execution. */
+                        if (*last_probe != 0 && (now_us - *last_probe) < 100000) {
+                            cpu->halted = 1;
+                            return;
+                        }
+                        *last_probe = now_us;
+                    }
 
                     /* HALT-WAKE: Pipeline #40 approach with critical fix.
                      *
@@ -369,7 +394,7 @@ static void wavevm_remote_exec(CPUState *cpu) {
                                                  &hw_timer) == 0);
                     if (timer_ok) {
                         struct itimerspec its = {0};
-                        its.it_value.tv_sec = 2; /* 2 seconds */
+                        its.it_value.tv_nsec = 100 * 1000 * 1000; /* 100ms */
                         timer_settime(hw_timer, 0, &its, NULL);
                     }
 
@@ -389,8 +414,9 @@ static void wavevm_remote_exec(CPUState *cpu) {
                     ioctl(cpu->kvm_fd, KVM_GET_MP_STATE, &mp);
                     if (halt_wake_dbg[ci] < 20) {
                         fprintf(stderr, "[WVM-HALT-WAKE] cpu=%d ret=%d "
-                                "mp=%d halted=%d\n",
-                                ci, wr, mp.mp_state, cpu->halted);
+                                "mp=%d halted=%d irq=0x%x has_work=%d\n",
+                                ci, wr, mp.mp_state, cpu->halted,
+                                cpu->interrupt_request, cpu_has_work(cpu));
                         halt_wake_dbg[ci]++;
                     }
 
@@ -1021,6 +1047,51 @@ static void wavevm_remote_exec(CPUState *cpu) {
         kctx->r14 = kregs.r14; kctx->r15 = kregs.r15;
         kctx->rip = kregs.rip; kctx->rflags = kregs.rflags;
         memcpy(kctx->sregs_data, &ksregs, sizeof(ksregs));
+        {
+            struct kvm_lapic_state klapic;
+            if (ioctl(cpu->kvm_fd, KVM_GET_LAPIC, &klapic) >= 0) {
+                memcpy(kctx->lapic_data, &klapic, sizeof(klapic));
+                kctx->lapic_valid = 1;
+            } else {
+                kctx->lapic_valid = 0;
+            }
+        }
+        {
+            struct kvm_vcpu_events kev;
+            if (ioctl(cpu->kvm_fd, KVM_GET_VCPU_EVENTS, &kev) >= 0) {
+                memcpy(kctx->vcpu_events_data, &kev, sizeof(kev));
+                kctx->vcpu_events_valid = 1;
+            } else {
+                kctx->vcpu_events_valid = 0;
+            }
+        }
+        {
+            struct kvm_fpu fpu;
+            if (ioctl(cpu->kvm_fd, KVM_GET_FPU, &fpu) >= 0) {
+                memcpy(kctx->fpu_data, &fpu, sizeof(fpu));
+                kctx->fpu_valid = 1;
+            } else {
+                kctx->fpu_valid = 0;
+            }
+        }
+        {
+            struct kvm_xcrs xcrs;
+            if (ioctl(cpu->kvm_fd, KVM_GET_XCRS, &xcrs) >= 0) {
+                memcpy(kctx->xcrs_data, &xcrs, sizeof(xcrs));
+                kctx->xcrs_valid = 1;
+            } else {
+                kctx->xcrs_valid = 0;
+            }
+        }
+        {
+            struct kvm_mp_state mp;
+            if (ioctl(cpu->kvm_fd, KVM_GET_MP_STATE, &mp) >= 0) {
+                kctx->mp_state = mp.mp_state;
+                kctx->mp_state_valid = 1;
+            } else {
+                kctx->mp_state_valid = 0;
+            }
+        }
 
         /* [V30 TSC 同步] 读取 master 本地 TSC 并携带到 slave，
          * slave 执行完后会把更新后的 TSC 带回来。
@@ -1060,6 +1131,21 @@ static void wavevm_remote_exec(CPUState *cpu) {
                 size_t io_bytes = (size_t)run->io.size * run->io.count;
                 if (io_bytes > sizeof(kctx->io.data)) io_bytes = sizeof(kctx->io.data);
                 memcpy(kctx->io.data, (uint8_t *)run + run->io.data_offset, io_bytes);
+                {
+                    static int io_send_dbg[MAX_VCPUS] = {0};
+                    int ci = cpu->cpu_index < MAX_VCPUS ? cpu->cpu_index : 0;
+                    if (io_send_dbg[ci] < 40) {
+                        fprintf(stderr,
+                                "[WVM-IO-SEND] cpu=%d port=0x%x dir=%u size=%u count=%u data0=0x%02x\n",
+                                cpu->cpu_index,
+                                kctx->io.port,
+                                kctx->io.direction,
+                                kctx->io.size,
+                                kctx->io.count,
+                                kctx->io.data[0]);
+                        io_send_dbg[ci]++;
+                    }
+                }
             }
         } else if (run->exit_reason == KVM_EXIT_MMIO) {
             kctx->mmio.phys_addr = run->mmio.phys_addr;
@@ -1072,6 +1158,25 @@ static void wavevm_remote_exec(CPUState *cpu) {
     } else {
         req.mode_tcg = 1;
         wvm_tcg_get_state(cpu, &req.ctx.tcg);
+    }
+
+    {
+        static int send_dbg[MAX_VCPUS] = {0};
+        int ci = cpu->cpu_index < MAX_VCPUS ? cpu->cpu_index : 0;
+        if (!req.mode_tcg && send_dbg[ci] < 20) {
+            fprintf(stderr,
+                    "[WVM-SEND] cpu=%d rip=0x%llx rax=0x%llx rdx=0x%llx mp_valid=%u mp=%u lapic=%u vcpu_events=%u tsc=%u\n",
+                    cpu->cpu_index,
+                    (unsigned long long)req.ctx.kvm.rip,
+                    (unsigned long long)req.ctx.kvm.rax,
+                    (unsigned long long)req.ctx.kvm.rdx,
+                    req.ctx.kvm.mp_state_valid,
+                    req.ctx.kvm.mp_state,
+                    req.ctx.kvm.lapic_valid,
+                    req.ctx.kvm.vcpu_events_valid,
+                    req.ctx.kvm.tsc_valid);
+            send_dbg[ci]++;
+        }
     }
 
     // 2. IPC 发送 (wvm_ipc_header + wvm_ipc_cpu_run_req)
@@ -1122,6 +1227,40 @@ static void wavevm_remote_exec(CPUState *cpu) {
                 ack_dbg[ci]++;
             }
         }
+        if (kctx->exit_reason == KVM_EXIT_HLT) {
+            static int hlt_ack_dbg[MAX_VCPUS] = {0};
+            int ci = cpu->cpu_index < MAX_VCPUS ? cpu->cpu_index : 0;
+            if (hlt_ack_dbg[ci] < 20) {
+                const struct kvm_vcpu_events *kev =
+                    (const struct kvm_vcpu_events *)kctx->vcpu_events_data;
+                fprintf(stderr,
+                        "[WVM-HLT-LAPIC] cpu=%d lapic=%u mp_valid=%u mp=%u vcpu_events=%u int_inj=%u int_nr=%u int_soft=%u int_shadow=%u exc_pend=%u nmi_pend=%u",
+                        cpu->cpu_index,
+                        kctx->lapic_valid,
+                        kctx->mp_state_valid,
+                        kctx->mp_state_valid ? kctx->mp_state : 0xffffffffu,
+                        kctx->vcpu_events_valid,
+                        kctx->vcpu_events_valid ? kev->interrupt.injected : 0,
+                        kctx->vcpu_events_valid ? kev->interrupt.nr : 0,
+                        kctx->vcpu_events_valid ? kev->interrupt.soft : 0,
+                        kctx->vcpu_events_valid ? kev->interrupt.shadow : 0,
+                        kctx->vcpu_events_valid ? kev->exception.pending : 0,
+                        kctx->vcpu_events_valid ? kev->nmi.pending : 0);
+                if (kctx->lapic_valid) {
+                    const struct kvm_lapic_state *lapic =
+                        (const struct kvm_lapic_state *)kctx->lapic_data;
+                    fprintf(stderr,
+                            " lvt=0x%08x init=0x%08x cur=0x%08x div=0x%08x svr=0x%08x",
+                            wavevm_lapic_reg32(lapic, 0x320),
+                            wavevm_lapic_reg32(lapic, 0x380),
+                            wavevm_lapic_reg32(lapic, 0x390),
+                            wavevm_lapic_reg32(lapic, 0x3e0),
+                            wavevm_lapic_reg32(lapic, 0x0f0));
+                }
+                fprintf(stderr, "\n");
+                hlt_ack_dbg[ci]++;
+            }
+        }
 
         kregs.rax = kctx->rax; kregs.rbx = kctx->rbx; kregs.rcx = kctx->rcx;
         kregs.rdx = kctx->rdx; kregs.rsi = kctx->rsi; kregs.rdi = kctx->rdi;
@@ -1130,7 +1269,30 @@ static void wavevm_remote_exec(CPUState *cpu) {
         kregs.r11 = kctx->r11; kregs.r12 = kctx->r12; kregs.r13 = kctx->r13;
         kregs.r14 = kctx->r14; kregs.r15 = kctx->r15;
         kregs.rip = kctx->rip; kregs.rflags = kctx->rflags;
-        
+        if (kctx->lapic_valid) {
+            struct kvm_lapic_state klapic;
+            memcpy(&klapic, kctx->lapic_data, sizeof(klapic));
+            ioctl(cpu->kvm_fd, KVM_SET_LAPIC, &klapic);
+        }
+        if (kctx->vcpu_events_valid) {
+            struct kvm_vcpu_events kev;
+            memcpy(&kev, kctx->vcpu_events_data, sizeof(kev));
+            ioctl(cpu->kvm_fd, KVM_SET_VCPU_EVENTS, &kev);
+        }
+        if (kctx->fpu_valid) {
+            struct kvm_fpu fpu;
+            memcpy(&fpu, kctx->fpu_data, sizeof(fpu));
+            ioctl(cpu->kvm_fd, KVM_SET_FPU, &fpu);
+        }
+        if (kctx->xcrs_valid) {
+            struct kvm_xcrs xcrs;
+            memcpy(&xcrs, kctx->xcrs_data, sizeof(xcrs));
+            ioctl(cpu->kvm_fd, KVM_SET_XCRS, &xcrs);
+        }
+        if (kctx->mp_state_valid) {
+            struct kvm_mp_state mp = { .mp_state = kctx->mp_state };
+            ioctl(cpu->kvm_fd, KVM_SET_MP_STATE, &mp);
+        }
         ioctl(cpu->kvm_fd, KVM_GET_SREGS, &ksregs);
         wavevm_apply_arch_sregs(&ksregs, (const struct kvm_sregs *)kctx->sregs_data);
         ioctl(cpu->kvm_fd, KVM_SET_SREGS, &ksregs);
@@ -1187,6 +1349,15 @@ static void wavevm_remote_exec(CPUState *cpu) {
             qemu_mutex_unlock_iothread();
             /* IO IN: copy device response for next request serialization */
             if (!is_write) {
+                static int io_replay_dbg[MAX_VCPUS] = {0};
+                int ci = cpu->cpu_index < MAX_VCPUS ? cpu->cpu_index : 0;
+                if (io_replay_dbg[ci] < 40) {
+                    fprintf(stderr,
+                            "[WVM-IO-REPLAY] cpu=%d port=0x%x size=%u count=%u data0=0x%02x\n",
+                            cpu->cpu_index, port, kctx->io.size, kctx->io.count,
+                            io_buf[0]);
+                    io_replay_dbg[ci]++;
+                }
                 memcpy(kctx->io.data, io_buf, io_bytes);
                 if (run->io.data_offset >= sizeof(struct kvm_run) &&
                     run->io.data_offset + io_bytes <= 12288) {
@@ -1199,9 +1370,26 @@ static void wavevm_remote_exec(CPUState *cpu) {
             hwaddr addr = kctx->mmio.phys_addr;
             int mmio_wr = kctx->mmio.is_write;
             unsigned len = kctx->mmio.len;
+            bool lapic_mmio = (addr >= 0xfee00000ULL && addr < 0xfee01000ULL);
             if (len != 1 && len != 2 && len != 4 && len != 8) { return; }
             if (mmio_wr) {
                 memcpy(mmio_buf, kctx->mmio.data, len);
+            }
+            if (lapic_mmio) {
+                static int lapic_replay_dbg[MAX_VCPUS];
+                int ci = cpu->cpu_index < MAX_VCPUS ? cpu->cpu_index : 0;
+                if (lapic_replay_dbg[ci] < 80) {
+                    fprintf(stderr,
+                            "[WVM-MMIO-REPLAY] cpu=%d pa=0x%llx wr=%d len=%u data=0x",
+                            cpu->cpu_index,
+                            (unsigned long long)addr,
+                            mmio_wr, len);
+                    for (int bi = (int)len - 1; bi >= 0; bi--) {
+                        fprintf(stderr, "%02x", kctx->mmio.data[bi]);
+                    }
+                    fprintf(stderr, "\n");
+                    lapic_replay_dbg[ci]++;
+                }
             }
             qemu_mutex_lock_iothread();
             address_space_rw(&address_space_memory, addr, MEMTXATTRS_UNSPECIFIED,
@@ -1216,14 +1404,37 @@ static void wavevm_remote_exec(CPUState *cpu) {
             run->mmio.is_write = mmio_wr;
         }
         /* [FIX] HLT: halt the vCPU so QEMU waits for timer interrupt.
-         * Also set master's KVM mp_state to HALTED so the halted-poll loop
-         * does not mistake the stale RUNNABLE state for a new SIPI. */
+         *
+         * But if the slave already returned a pending injected interrupt
+         * (for example, a No-IRQCHIP LAPIC timer synthesized into
+         * vcpu_events.interrupt), forcing HALTED here would immediately
+         * bury that wake source again. Keep the vCPU RUNNABLE in that case
+         * so the next local KVM entry can consume the interrupt. */
         else if (kctx->exit_reason == KVM_EXIT_HLT) {
-            cpu->halted = 1;
-            cpu->exception_index = EXCP_HLT;
-            {
-                struct kvm_mp_state halt_mp = { .mp_state = KVM_MP_STATE_HALTED };
-                ioctl(cpu->kvm_fd, KVM_SET_MP_STATE, &halt_mp);
+            bool keep_runnable = false;
+
+            if (kctx->vcpu_events_valid) {
+                const struct kvm_vcpu_events *kev =
+                    (const struct kvm_vcpu_events *)kctx->vcpu_events_data;
+                keep_runnable = kev->interrupt.injected || kev->interrupt.nr;
+            }
+
+            if (keep_runnable) {
+                X86CPU *x86cpu = X86_CPU(cpu);
+                cpu->halted = 0;
+                cpu->exception_index = 0;
+                x86cpu->env.mp_state = KVM_MP_STATE_RUNNABLE;
+                {
+                    struct kvm_mp_state run_mp = { .mp_state = KVM_MP_STATE_RUNNABLE };
+                    ioctl(cpu->kvm_fd, KVM_SET_MP_STATE, &run_mp);
+                }
+            } else {
+                cpu->halted = 1;
+                cpu->exception_index = EXCP_HLT;
+                {
+                    struct kvm_mp_state halt_mp = { .mp_state = KVM_MP_STATE_HALTED };
+                    ioctl(cpu->kvm_fd, KVM_SET_MP_STATE, &halt_mp);
+                }
             }
         }
     }
@@ -1535,6 +1746,15 @@ static void *wavevm_cpu_thread_fn(void *arg) {
                             }
                             cpu_synchronize_state(cpu);
                             continue;
+                        } else if (cpu->cpu_index < MAX_VCPUS &&
+                                   ap_did_local_sipi[cpu->cpu_index] &&
+                                   ap_did_os_sipi[cpu->cpu_index] &&
+                                   mp.mp_state == KVM_MP_STATE_HALTED) {
+                            /* Post-OS-SIPI idle APs should use QEMU's normal
+                             * halted wakeup path. Spinning here on MP state
+                             * can miss kick/interrupt driven wakeups and trap
+                             * the AP in a HALT-WAKE loop forever. */
+                            cpu->halted = 1;
                         } else {
                             /* Still waiting (non-KVM or pre-BIOS-SIPI) */
                             static int poll_dbg = 0;

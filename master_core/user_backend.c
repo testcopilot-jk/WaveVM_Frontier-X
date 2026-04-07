@@ -866,6 +866,18 @@ static void* rx_thread_loop(void *arg) {
 
                 if (received_crc == calculated_crc) {
                     uint32_t msg_epoch = ntohl(hdr->epoch);
+                    if (msg_type == MSG_VCPU_RUN) {
+                        static int __rx_vcpu_run = 0;
+                        if (__rx_vcpu_run < 20) {
+                            u_log("[RX VCPU_RUN] src_port=%u target=%u slave=%u req=%llu p_len=%u",
+                                  (unsigned)ntohs(src_addrs[i].sin_port),
+                                  (unsigned)ntohl(hdr->target_id),
+                                  (unsigned)ntohl(hdr->slave_id),
+                                  (unsigned long long)rid,
+                                  (unsigned)p_len);
+                            __rx_vcpu_run++;
+                        }
+                    }
                     if (msg_type == MSG_HEARTBEAT) {
                         uint64_t hb_rid = WVM_NTOHLL(hdr->req_id);
                         u_log("[HB RX] src_port=%u src_id=%u target_id=%u epoch=%u local=%u",
@@ -1009,6 +1021,12 @@ static void* rx_thread_loop(void *arg) {
                                 u_log("[RX VCPU_EXIT] matched rid=%llu -> status=1",
                                       (unsigned long long)rid);
                             }
+                        } else if (msg_type == MSG_VCPU_EXIT) {
+                            u_log("[RX VCPU_EXIT] unmatched rid=%llu idx=%u slot_full_id=%llu has_buf=%d",
+                                  (unsigned long long)rid,
+                                  (unsigned)idx,
+                                  (unsigned long long)g_u_req_ctx[idx].full_id,
+                                  g_u_req_ctx[idx].rx_buffer ? 1 : 0);
                         }
                         pthread_mutex_unlock(&g_u_req_ctx[idx].lock);
 

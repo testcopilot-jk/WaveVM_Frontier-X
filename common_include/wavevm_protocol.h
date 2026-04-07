@@ -214,6 +214,8 @@ struct wvm_ipc_write_req {
     uint32_t len;
 };
 
+#define WVM_EXIT_PREEMPT 0x10000u
+
 typedef struct {
     uint64_t rax, rbx, rcx, rdx, rsi, rdi, rsp, rbp;
     uint64_t r8, r9, r10, r11, r12, r13, r14, r15;
@@ -229,6 +231,23 @@ typedef struct {
     uint64_t kernel_gs_base;      /* MSR_KERNEL_GS_BASE (0xC0000102) */
     uint32_t tsc_valid;           /* 非零表示 tsc_value 字段有效 */
     uint32_t _pad0;               /* 8 字节对齐填充 */
+    /* In-kernel LAPIC state must move with remote KVM execution, otherwise
+     * post-SIPI parked APs lose timer/IPI wake state when the vCPU context
+     * returns to the master-side KVM instance. */
+    uint8_t lapic_data[sizeof(struct kvm_lapic_state)];
+    uint32_t lapic_valid;
+    uint32_t _pad1;
+    uint8_t vcpu_events_data[sizeof(struct kvm_vcpu_events)];
+    uint32_t vcpu_events_valid;
+    uint32_t _pad2;
+    uint8_t fpu_data[sizeof(struct kvm_fpu)];
+    uint32_t fpu_valid;
+    uint32_t _pad3;
+    uint8_t xcrs_data[sizeof(struct kvm_xcrs)];
+    uint32_t xcrs_valid;
+    uint32_t _pad4;
+    uint32_t mp_state;
+    uint32_t mp_state_valid;
     uint32_t exit_reason;
     struct {
         uint8_t direction;
@@ -416,4 +435,3 @@ static __attribute__((unused)) void wvm_translate_kvm_to_tcg(struct kvm_regs *k,
 }
 
 #endif // WAVEVM_PROTOCOL_H
-

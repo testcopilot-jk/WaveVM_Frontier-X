@@ -219,6 +219,16 @@ static void wavevm_net_send_vcpu_exit(int master_sock, WvmVcpuRunWorker *w)
     }
     rhdr->crc32 = 0;
     rhdr->crc32 = htonl(calculate_crc32(resp_buf, resp_len));
+    {
+        static int __worker_ack = 0;
+        if (__worker_ack < 20) {
+            fprintf(stderr,
+                    "[WaveVM-Slave] worker ack send mode=%u status=%d compact=%d len=%d\n",
+                    w->mode_tcg ? 1 : 0, ack->status,
+                    w->compact_ctx ? 1 : 0, resp_len);
+            __worker_ack++;
+        }
+    }
 
     if (send(master_sock, resp_buf, resp_len, 0) < 0) {
         perror("[WaveVM-Slave] net-thread send MSG_VCPU_EXIT");
@@ -316,13 +326,16 @@ static void wavevm_slave_import_ctx(CPUState *cpu,
                                     const struct wvm_ipc_cpu_run_req *req,
                                     bool local_is_tcg)
 {
-    if (req->mode_tcg == local_is_tcg) {
-        if (local_is_tcg) {
-            wvm_tcg_set_state(cpu, (wvm_tcg_context_t *)&req->ctx.tcg);
-        } else {
-            struct kvm_regs kregs;
-            struct kvm_sregs ksregs;
-            const wvm_kvm_context_t *kctx = &req->ctx.kvm;
+        if (req->mode_tcg == local_is_tcg) {
+            if (local_is_tcg) {
+                wvm_tcg_set_state(cpu, (wvm_tcg_context_t *)&req->ctx.tcg);
+            } else {
+                struct kvm_regs kregs;
+                struct kvm_sregs ksregs;
+                struct kvm_lapic_state klapic;
+                struct kvm_vcpu_events kev;
+                struct kvm_mp_state mp;
+                const wvm_kvm_context_t *kctx = &req->ctx.kvm;
             kregs.rax = kctx->rax; kregs.rbx = kctx->rbx; kregs.rcx = kctx->rcx;
             kregs.rdx = kctx->rdx; kregs.rsi = kctx->rsi; kregs.rdi = kctx->rdi;
             kregs.rsp = kctx->rsp; kregs.rbp = kctx->rbp;
@@ -331,9 +344,21 @@ static void wavevm_slave_import_ctx(CPUState *cpu,
             kregs.r14 = kctx->r14; kregs.r15 = kctx->r15;
             kregs.rip = kctx->rip; kregs.rflags = kctx->rflags;
             memcpy(&ksregs, kctx->sregs_data, sizeof(ksregs));
-            kvm_vcpu_ioctl(cpu, KVM_SET_SREGS, &ksregs);
-            kvm_vcpu_ioctl(cpu, KVM_SET_REGS, &kregs);
-        }
+                if (kctx->lapic_valid) {
+                    memcpy(&klapic, kctx->lapic_data, sizeof(klapic));
+                    kvm_vcpu_ioctl(cpu, KVM_SET_LAPIC, &klapic);
+                }
+                if (kctx->vcpu_events_valid) {
+                    memcpy(&kev, kctx->vcpu_events_data, sizeof(kev));
+                    kvm_vcpu_ioctl(cpu, KVM_SET_VCPU_EVENTS, &kev);
+                }
+                if (kctx->mp_state_valid) {
+                    mp.mp_state = kctx->mp_state;
+                    kvm_vcpu_ioctl(cpu, KVM_SET_MP_STATE, &mp);
+                }
+                kvm_vcpu_ioctl(cpu, KVM_SET_SREGS, &ksregs);
+                kvm_vcpu_ioctl(cpu, KVM_SET_REGS, &kregs);
+            }
     } else if (local_is_tcg) {
         wvm_tcg_context_t t_ctx;
         struct kvm_regs kregs;
@@ -366,17 +391,38 @@ static void wavevm_slave_export_ctx(CPUState *cpu,
     ack->status = 0;
     ack->mode_tcg = req->mode_tcg;
 
-    if (req->mode_tcg == local_is_tcg) {
-        if (local_is_tcg) {
-            wvm_tcg_get_state(cpu, &ack->ctx.tcg);
-            ack->ctx.tcg.exit_reason = cpu->exception_index;
-        } else {
-            struct kvm_regs kregs;
-            struct kvm_sregs ksregs;
-            wvm_kvm_context_t *kctx = &ack->ctx.kvm;
-            kvm_vcpu_ioctl(cpu, KVM_GET_REGS, &kregs);
-            kvm_vcpu_ioctl(cpu, KVM_GET_SREGS, &ksregs);
-            kctx->rax = kregs.rax; kctx->rbx = kregs.rbx; kctx->rcx = kregs.rcx;
+        if (req->mode_tcg == local_is_tcg) {
+            if (local_is_tcg) {
+                wvm_tcg_get_state(cpu, &ack->ctx.tcg);
+                ack->ctx.tcg.exit_reason = cpu->exception_index;
+            } else {
+                struct kvm_regs kregs;
+                struct kvm_sregs ksregs;
+                struct kvm_lapic_state klapic;
+                struct kvm_vcpu_events kev;
+                struct kvm_mp_state mp;
+                wvm_kvm_context_t *kctx = &ack->ctx.kvm;
+                kvm_vcpu_ioctl(cpu, KVM_GET_REGS, &kregs);
+                kvm_vcpu_ioctl(cpu, KVM_GET_SREGS, &ksregs);
+                if (kvm_vcpu_ioctl(cpu, KVM_GET_LAPIC, &klapic) >= 0) {
+                    memcpy(kctx->lapic_data, &klapic, sizeof(klapic));
+                    kctx->lapic_valid = 1;
+                } else {
+                    kctx->lapic_valid = 0;
+                }
+                if (kvm_vcpu_ioctl(cpu, KVM_GET_VCPU_EVENTS, &kev) >= 0) {
+                    memcpy(kctx->vcpu_events_data, &kev, sizeof(kev));
+                    kctx->vcpu_events_valid = 1;
+                } else {
+                    kctx->vcpu_events_valid = 0;
+                }
+                if (kvm_vcpu_ioctl(cpu, KVM_GET_MP_STATE, &mp) >= 0) {
+                    kctx->mp_state = mp.mp_state;
+                    kctx->mp_state_valid = 1;
+                } else {
+                    kctx->mp_state_valid = 0;
+                }
+                kctx->rax = kregs.rax; kctx->rbx = kregs.rbx; kctx->rcx = kregs.rcx;
             kctx->rdx = kregs.rdx; kctx->rsi = kregs.rsi; kctx->rdi = kregs.rdi;
             kctx->rsp = kregs.rsp; kctx->rbp = kregs.rbp;
             kctx->r8  = kregs.r8;  kctx->r9  = kregs.r9;  kctx->r10 = kregs.r10;

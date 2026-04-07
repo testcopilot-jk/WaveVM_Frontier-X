@@ -269,6 +269,7 @@ static void handle_ipc_fault(int qemu_fd, struct wvm_ipc_fault_req* req) {
 
 static void handle_ipc_cpu_run(int qemu_fd, struct wvm_ipc_cpu_run_req* req) {
     struct wvm_ipc_cpu_run_ack ack;
+    int rpc_ret = 0;
     { static int __ipc_run=0;
       if (__ipc_run < 10) {
           fprintf(stderr, "[IPC VCPU_RUN] vcpu=%u mode=%u slave_id=%u\n",
@@ -283,17 +284,42 @@ static void handle_ipc_cpu_run(int qemu_fd, struct wvm_ipc_cpu_run_req* req) {
         ack.status = -ENODEV;
     } else if (req->mode_tcg) {
         /* [FIX] TCG: rx_buffer = &ack (完整结构体)，统一 8 字节偏移修复。 */
-        int rpc_ret = wvm_rpc_call(MSG_VCPU_RUN, &req->ctx,
+        rpc_ret = wvm_rpc_call(MSG_VCPU_RUN, &req->ctx,
             sizeof(req->ctx.tcg),
             req->slave_id, &ack, sizeof(ack));
         if (rpc_ret < 0) ack.status = rpc_ret;
         ack.mode_tcg = req->mode_tcg;
     } else {
+        static int __ipc_kvm_ctx = 0;
+        if (__ipc_kvm_ctx < 20) {
+            fprintf(stderr,
+                    "[IPC KVM CTX] vcpu=%u rip=0x%llx rax=0x%llx rdx=0x%llx mp_valid=%u mp=%u lapic=%u vcpu_events=%u tsc=%u\n",
+                    req->vcpu_index,
+                    (unsigned long long)req->ctx.kvm.rip,
+                    (unsigned long long)req->ctx.kvm.rax,
+                    (unsigned long long)req->ctx.kvm.rdx,
+                    req->ctx.kvm.mp_state_valid,
+                    req->ctx.kvm.mp_state,
+                    req->ctx.kvm.lapic_valid,
+                    req->ctx.kvm.vcpu_events_valid,
+                    req->ctx.kvm.tsc_valid);
+            __ipc_kvm_ctx++;
+        }
         /* [FIX] KVM: rx_buffer = &ack (完整结构体)，修复 8 字节偏移。 */
-        int rpc_ret = wvm_rpc_call(MSG_VCPU_RUN, &req->ctx,
+        rpc_ret = wvm_rpc_call(MSG_VCPU_RUN, &req->ctx,
             sizeof(req->ctx.kvm),
             req->slave_id, &ack, sizeof(ack));
         if (rpc_ret < 0) ack.status = rpc_ret;
+    }
+    {
+        static int __ipc_run_ret = 0;
+        if (__ipc_run_ret < 20) {
+            fprintf(stderr,
+                    "[IPC VCPU_RUN RET] vcpu=%u mode=%u target=%u rpc_ret=%d ack_status=%d ack_mode=%u\n",
+                    req->vcpu_index, req->mode_tcg, (unsigned)req->slave_id,
+                    rpc_ret, ack.status, ack.mode_tcg);
+            __ipc_run_ret++;
+        }
     }
     write_exact(qemu_fd, &ack, sizeof(ack));
 }
