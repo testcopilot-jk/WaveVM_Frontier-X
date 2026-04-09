@@ -17998,10 +17998,10 @@ int wavevm_blk_interceptor(uint64_t sector, QEMUIOVector *qiov, int is_write)
 **文件**: `wavevm-qemu/qemu-wavevm.diff`
 
 ```diff
-diff --git a/hw/block/virtio-blk.c b/hw/block/virtio-blk.c
+diff --git aa/hw/block/virtio-blk.c bb/hw/block/virtio-blk.c
 index bac2d6fa2..98e0b5502 100644
---- a/hw/block/virtio-blk.c
-+++ b/hw/block/virtio-blk.c
+--- aa/hw/block/virtio-blk.c
++++ bb/hw/block/virtio-blk.c
 @@ -26,6 +26,8 @@
  #include "hw/virtio/virtio-blk.h"
  #include "dataplane/virtio-blk.h"
@@ -18025,10 +18025,10 @@ index bac2d6fa2..98e0b5502 100644
              virtio_blk_req_complete(req, VIRTIO_BLK_S_IOERR);
              block_acct_invalid(blk_get_stats(s->blk),
 
-diff --git a/hw/meson.build b/hw/meson.build
+diff --git aa/hw/meson.build bb/hw/meson.build
 index 010de7219..e2cd60b30 100644
---- a/hw/meson.build
-+++ b/hw/meson.build
+--- aa/hw/meson.build
++++ bb/hw/meson.build
 @@ -39,6 +39,7 @@ subdir('usb')
  subdir('vfio')
  subdir('virtio')
@@ -18037,20 +18037,14 @@ index 010de7219..e2cd60b30 100644
  subdir('xen')
  subdir('xenpv')
  
-diff --git a/hw/wavevm/meson.build b/hw/wavevm/meson.build
-new file mode 100644
-index 000000000..1494f023f
---- /dev/null
-+++ b/hw/wavevm/meson.build
-@@ -0,0 +1,3 @@
-+softmmu_ss.add(files(
-+  'wavevm-block-hook.c',
-+))
-diff --git a/accel/meson.build b/accel/meson.build
+
+
+
+diff --git aa/accel/meson.build bb/accel/meson.build
 index b26cca227..f3f6252f0 100644
---- a/accel/meson.build
-+++ b/accel/meson.build
-@@ -3,6 +3,7 @@
+--- aa/accel/meson.build
++++ bb/accel/meson.build
+@@ -3,6 +3,7 @@ softmmu_ss.add(files('accel.c'))
  subdir('qtest')
  subdir('kvm')
  subdir('tcg')
@@ -18058,73 +18052,15 @@ index b26cca227..f3f6252f0 100644
  subdir('xen')
  subdir('stubs')
  
-diff --git a/accel/wavevm/meson.build b/accel/wavevm/meson.build
-new file mode 100644
-index 000000000..68adef81c
---- /dev/null
-+++ b/accel/wavevm/meson.build
-@@ -0,0 +1,10 @@
-+wavevm_ss = ss.source_set()
-+wavevm_ss.add(files(
-+  'wavevm-all.c',
-+  'wavevm-cpu.c',
-+  'wavevm-tcg.c',
-+  'wavevm-user-mem.c',
-+  '../../hw/wavevm/wavevm-mem.c',
-+))
-+
-+specific_ss.add_all(when: ['CONFIG_SOFTMMU', 'CONFIG_POSIX'], if_true: wavevm_ss)
-diff --git a/accel/wavevm/wavevm-accel.h b/accel/wavevm/wavevm-accel.h
-new file mode 100644
-index 000000000..2c90c9447
---- /dev/null
-+++ b/accel/wavevm/wavevm-accel.h
-@@ -0,0 +1,41 @@
-+#pragma once
-+
-+#include "qemu/osdep.h"
-+#include "qom/object.h"
-+#include "sysemu/accel.h"
-+#include "qemu/thread.h"
-+
-+/*
-+ * Shared WaveVM accelerator definitions (used across wavevm-*.c files).
-+ * Keep this header minimal: it only defines the accelerator state and
-+ * identifiers needed by other compilation units.
-+ */
-+
-+#define TYPE_WAVEVM_ACCEL "wavevm-accel"
-+#define WAVEVM_ACCEL(obj) OBJECT_CHECK(WaveVMAccelState, (obj), TYPE_WAVEVM_ACCEL)
-+
-+typedef enum {
-+    WVM_MODE_KERNEL,
-+    WVM_MODE_USER,
-+} WvmMode;
-+
-+typedef struct WaveVMAccelState {
-+    AccelState parent_obj;
-+    int dev_fd;
-+    int sync_sock;
-+    int ipc_sock;
-+    WvmMode mode;
-+    QemuThread sync_thread;
-+    QemuThread ipc_thread;
-+    QemuThread irq_thread;
-+    bool sync_thread_running;
-+    QemuThread net_thread;
-+    int master_sock;
-+
-+    /* [FIX-F1] Block IO 持久连接：避免每次 IO 都 connect()+pthread_create() 导致线程爆炸 */
-+    int block_io_sock;               /* 持久 IPC 连接，-1 = 未初始化 */
-+    QemuMutex block_io_lock;         /* 序列化 Block IO 请求（同一时刻只允许一个 IO 在途） */
-+} WaveVMAccelState;
-+
-+extern int g_wvm_local_split;
-+
-diff --git a/hw/acpi/cpu.c b/hw/acpi/cpu.c
+
+
+
+
+
+diff --git aa/hw/acpi/cpu.c bb/hw/acpi/cpu.c
 index f099b5092..3da9023a8 100644
---- a/hw/acpi/cpu.c
-+++ b/hw/acpi/cpu.c
+--- aa/hw/acpi/cpu.c
++++ bb/hw/acpi/cpu.c
 @@ -349,9 +349,24 @@ void build_cpus_aml(Aml *table, MachineState *machine, CPUHotplugFeatures opts,
      MachineClass *mc = MACHINE_GET_CLASS(machine);
      const CPUArchIdList *arch_ids = mc->possible_cpu_arch_ids(machine);
@@ -18176,32 +18112,167 @@ index f099b5092..3da9023a8 100644
          }
          aml_append(cpus_dev, method);
  
-diff --git a/accel/kvm/kvm-all.c b/accel/kvm/kvm-all.c
-index 059e80dfb..bb4d116b1 100644
---- a/accel/kvm/kvm-all.c
-+++ b/accel/kvm/kvm-all.c
-@@ -2591,7 +2591,7 @@ int kvm_cpu_exec(CPUState *cpu)
+
+diff --git aa/accel/kvm/kvm-all.c bb/accel/kvm/kvm-all.c
+index baaa54249..bb4d116b1 100644
+--- aa/accel/kvm/kvm-all.c
++++ bb/accel/kvm/kvm-all.c
+@@ -356,6 +356,13 @@ static int kvm_set_user_memory_region(KVMMemoryListener *kml, KVMSlot *slot, boo
+     mem.guest_phys_addr = slot->start_addr;
+     mem.userspace_addr = (unsigned long)slot->ram;
+     mem.flags = slot->flags;
++    fprintf(stderr,
++            "[KVM-MEM] set_user_memory slot=%d as_id=%d new=%d gpa=%#" PRIx64
++            " size=%#" PRIx64 " hva=%p flags=%#x old_flags=%#x\n",
++            mem.slot, kml->as_id, new,
++            (uint64_t)mem.guest_phys_addr,
++            (uint64_t)slot->memory_size,
++            slot->ram, mem.flags, slot->old_flags);
+ 
+     if (slot->memory_size && !new && (mem.flags ^ slot->old_flags) & KVM_MEM_READONLY) {
+         /* Set the slot size to 0 before setting the slot to the desired
+@@ -564,6 +571,13 @@ static void kvm_log_start(MemoryListener *listener,
+     KVMMemoryListener *kml = container_of(listener, KVMMemoryListener, listener);
+     int r;
+ 
++    fprintf(stderr,
++            "[KVM-MEM] log_start mr=%s gpa=%#" PRIx64 " size=%#" PRIx64
++            " old=%#x new=%#x\n",
++            section->mr && section->mr->name ? section->mr->name : "(null)",
++            (uint64_t)section->offset_within_address_space,
++            (uint64_t)int128_get64(section->size),
++            old, new);
+     if (old != 0) {
+         return;
+     }
+@@ -581,6 +595,13 @@ static void kvm_log_stop(MemoryListener *listener,
+     KVMMemoryListener *kml = container_of(listener, KVMMemoryListener, listener);
+     int r;
+ 
++    fprintf(stderr,
++            "[KVM-MEM] log_stop mr=%s gpa=%#" PRIx64 " size=%#" PRIx64
++            " old=%#x new=%#x\n",
++            section->mr && section->mr->name ? section->mr->name : "(null)",
++            (uint64_t)section->offset_within_address_space,
++            (uint64_t)int128_get64(section->size),
++            old, new);
+     if (new != 0) {
+         return;
+     }
+@@ -1151,6 +1172,17 @@ static void kvm_set_phys_mem(KVMMemoryListener *kml,
+         return;
+     }
+ 
++    if (add) {
++        fprintf(stderr,
++                "[KVM-MEM] region_add mr=%s gpa=%#" PRIx64 " size=%#" PRIx64
++                " offset_as=%#" PRIx64 " offset_mr=%#" PRIx64 "\n",
++                mr->name ? mr->name : "(null)",
++                (uint64_t)start_addr,
++                (uint64_t)size,
++                (uint64_t)section->offset_within_address_space,
++                (uint64_t)section->offset_within_region);
++    }
++
+     /* use aligned delta to align the ram address */
+     ram = memory_region_get_ram_ptr(mr) + section->offset_within_region +
+           (start_addr - section->offset_within_address_space);
+@@ -1188,6 +1220,20 @@ static void kvm_set_phys_mem(KVMMemoryListener *kml,
+     /* register the new slot */
+     do {
+         slot_size = MIN(kvm_max_slot_size, size);
++        mem = kvm_lookup_matching_slot(kml, start_addr, slot_size);
++        if (mem && mem->memory_size && mem->ram == ram) {
++            mem->flags = kvm_mem_flags(mr);
++            err = kvm_slot_update_flags(kml, mem, section->mr);
++            if (err) {
++                fprintf(stderr, "%s: error updating slot flags: %s\n",
++                        __func__, strerror(-err));
++                abort();
++            }
++            start_addr += slot_size;
++            ram += slot_size;
++            size -= slot_size;
++            continue;
++        }
+         mem = kvm_alloc_slot(kml);
+         mem->memory_size = slot_size;
+         mem->start_addr = start_addr;
+@@ -1221,6 +1267,11 @@ static void kvm_region_add(MemoryListener *listener,
+ {
+     KVMMemoryListener *kml = container_of(listener, KVMMemoryListener, listener);
+ 
++    fprintf(stderr,
++            "[KVM-MEM] region_add cb mr=%s gpa=%#" PRIx64 " size=%#" PRIx64 "\n",
++            section->mr && section->mr->name ? section->mr->name : "(null)",
++            (uint64_t)section->offset_within_address_space,
++            (uint64_t)int128_get64(section->size));
+     memory_region_ref(section->mr);
+     kvm_set_phys_mem(kml, section, true);
+ }
+@@ -1230,6 +1281,11 @@ static void kvm_region_del(MemoryListener *listener,
+ {
+     KVMMemoryListener *kml = container_of(listener, KVMMemoryListener, listener);
+ 
++    fprintf(stderr,
++            "[KVM-MEM] region_del cb mr=%s gpa=%#" PRIx64 " size=%#" PRIx64 "\n",
++            section->mr && section->mr->name ? section->mr->name : "(null)",
++            (uint64_t)section->offset_within_address_space,
++            (uint64_t)int128_get64(section->size));
+     kvm_set_phys_mem(kml, section, false);
+     memory_region_unref(section->mr);
+ }
+@@ -1342,6 +1398,9 @@ void kvm_memory_listener_register(KVMState *s, KVMMemoryListener *kml,
+ {
+     int i;
+ 
++    fprintf(stderr,
++            "[KVM-MEM] listener_register kml=%p as=%p as_id=%d nr_slots=%d\n",
++            kml, as, as_id, s->nr_slots);
+     qemu_mutex_init(&kml->slots_lock);
+     kml->slots = g_malloc0(s->nr_slots * sizeof(KVMSlot));
+     kml->as_id = as_id;
+@@ -2453,6 +2512,10 @@ int kvm_cpu_exec(CPUState *cpu)
+ {
+     struct kvm_run *run = cpu->kvm_run;
+     int ret, run_ret;
++    static int kvm_io_count = 0;
++    static int kvm_mmio_count = 0;
++    static int kvm_other_count = 0;
++    static int kvm_log_counter = 0;
+ 
+     DPRINTF("kvm_cpu_exec()\n");
+ 
+@@ -2527,6 +2590,12 @@ int kvm_cpu_exec(CPUState *cpu)
+         switch (run->exit_reason) {
          case KVM_EXIT_IO:
-             DPRINTF("handle_io
-");
-             kvm_io_count++;
--            if (kvm_io_count <= 20 || (kvm_io_count % 10000 == 0)) {
+             DPRINTF("handle_io\n");
++            kvm_io_count++;
 +            if (kvm_io_count <= 500 || (kvm_io_count % 10000 == 0)) {
-                 fprintf(stderr, "[KVM-IO] cpu=%d port=0x%x dir=%d sz=%d cnt=%d total_io=%d mmio=%d other=%d
-",
-                         cpu->cpu_index, run->io.port, run->io.direction, run->io.size, run->io.count,
-                         kvm_io_count, kvm_mmio_count, kvm_other_count);
-@@ -2621,6 +2621,15 @@ int kvm_cpu_exec(CPUState *cpu)
++                fprintf(stderr, "[KVM-IO] cpu=%d port=0x%x dir=%d sz=%d cnt=%d total_io=%d mmio=%d other=%d\n",
++                        cpu->cpu_index, run->io.port, run->io.direction, run->io.size, run->io.count,
++                        kvm_io_count, kvm_mmio_count, kvm_other_count);
++            }
+             /* Called outside BQL */
+             kvm_handle_io(run->io.port, attrs,
+                           (uint8_t *)run + run->io.data_offset,
+@@ -2537,6 +2606,7 @@ int kvm_cpu_exec(CPUState *cpu)
+             break;
+         case KVM_EXIT_MMIO:
+             DPRINTF("handle_mmio\n");
++            kvm_mmio_count++;
+             /* Called outside BQL */
+             address_space_rw(&address_space_memory,
+                              run->mmio.phys_addr, attrs,
+@@ -2551,6 +2621,15 @@ int kvm_cpu_exec(CPUState *cpu)
              break;
          case KVM_EXIT_SHUTDOWN:
-             DPRINTF("shutdown
-");
+             DPRINTF("shutdown\n");
 +            {
 +                struct kvm_regs sd_kr; struct kvm_sregs sd_sr;
 +                ioctl(cpu->kvm_fd, KVM_GET_REGS, &sd_kr);
 +                ioctl(cpu->kvm_fd, KVM_GET_SREGS, &sd_sr);
-+                fprintf(stderr, "[KVM-SHUTDOWN] cpu=%d rip=0x%llx cs=0x%x/0x%llx rfl=0x%llx io=%d mmio=%d
-",
++                fprintf(stderr, "[KVM-SHUTDOWN] cpu=%d rip=0x%llx cs=0x%x/0x%llx rfl=0x%llx io=%d mmio=%d\n",
 +                        cpu->cpu_index, (unsigned long long)sd_kr.rip,
 +                        sd_sr.cs.selector, (unsigned long long)sd_sr.cs.base,
 +                        (unsigned long long)sd_kr.rflags, kvm_io_count, kvm_mmio_count);
@@ -18209,7 +18280,7 @@ index 059e80dfb..bb4d116b1 100644
              qemu_system_reset_request(SHUTDOWN_CAUSE_GUEST_RESET);
              ret = EXCP_INTERRUPT;
              break;
-@@ -2674,6 +2683,130 @@ int kvm_cpu_exec(CPUState *cpu)
+@@ -2604,6 +2683,130 @@ int kvm_cpu_exec(CPUState *cpu)
      return ret;
  }
  
@@ -18261,8 +18332,7 @@ index 059e80dfb..bb4d116b1 100644
 +                ret = EXCP_INTERRUPT;
 +                break;
 +            }
-+            fprintf(stderr, "error: kvm halt-wake run failed %s
-",
++            fprintf(stderr, "error: kvm halt-wake run failed %s\n",
 +                    strerror(-run_ret));
 +            ret = -1;
 +            break;
@@ -18303,8 +18373,7 @@ index 059e80dfb..bb4d116b1 100644
 +            ret = EXCP_INTERRUPT;
 +            break;
 +        case KVM_EXIT_UNKNOWN:
-+            fprintf(stderr, "KVM halt-wake: unknown exit %" PRIx64 "
-",
++            fprintf(stderr, "KVM halt-wake: unknown exit %" PRIx64 "\n",
 +                    (uint64_t)run->hw.hardware_exit_reason);
 +            ret = -1;
 +            break;
@@ -18342,7 +18411,7 @@ index 059e80dfb..bb4d116b1 100644
  int kvm_ioctl(KVMState *s, int type, ...)
  {
      int ret;
-@@ -3026,7 +3159,7 @@ void kvm_remove_all_breakpoints(CPUState *cpu)
+@@ -2956,7 +3159,7 @@ void kvm_remove_all_breakpoints(CPUState *cpu)
  }
  #endif /* !KVM_CAP_SET_GUEST_DEBUG */
  
@@ -18352,10 +18421,10 @@ index 059e80dfb..bb4d116b1 100644
      KVMState *s = kvm_state;
      struct kvm_signal_mask *sigmask;
 
-diff --git a/accel/kvm/kvm-cpus.h b/accel/kvm/kvm-cpus.h
+diff --git aa/accel/kvm/kvm-cpus.h bb/accel/kvm/kvm-cpus.h
 index 3df732b81..b3108f463 100644
---- a/accel/kvm/kvm-cpus.h
-+++ b/accel/kvm/kvm-cpus.h
+--- aa/accel/kvm/kvm-cpus.h
++++ bb/accel/kvm/kvm-cpus.h
 @@ -11,11 +11,14 @@
  #define KVM_CPUS_H
  
@@ -18371,6 +18440,85 @@ index 3df732b81..b3108f463 100644
  void kvm_destroy_vcpu(CPUState *cpu);
  void kvm_cpu_synchronize_post_reset(CPUState *cpu);
  void kvm_cpu_synchronize_post_init(CPUState *cpu);
+
+diff --git aa/hw/vfio/pci.c bb/hw/vfio/pci.c
+index 51dc37369..54ad22546 100644
+--- aa/hw/vfio/pci.c
++++ bb/hw/vfio/pci.c
+@@ -21,6 +21,7 @@
+ #include "qemu/osdep.h"
+ #include <linux/vfio.h>
+ #include <sys/ioctl.h>
++#include <libgen.h>
+ 
+ #include "hw/hw.h"
+ #include "hw/pci/msi.h"
+
+--- a/accel/wavevm/meson.build
++++ b/accel/wavevm/meson.build
+@@ -0,0 +1,10 @@
++wavevm_ss = ss.source_set()
++wavevm_ss.add(files(
++  'wavevm-all.c',
++  'wavevm-cpu.c',
++  'wavevm-tcg.c',
++  'wavevm-user-mem.c',
++  '../../hw/wavevm/wavevm-mem.c',
++))
++
++specific_ss.add_all(when: ['CONFIG_SOFTMMU', 'CONFIG_POSIX'], if_true: wavevm_ss)
+
+--- a/accel/wavevm/wavevm-accel.h
++++ b/accel/wavevm/wavevm-accel.h
+@@ -0,0 +1,41 @@
++#pragma once
++
++#include "qemu/osdep.h"
++#include "qom/object.h"
++#include "sysemu/accel.h"
++#include "qemu/thread.h"
++
++/*
++ * Shared WaveVM accelerator definitions (used across wavevm-*.c files).
++ * Keep this header minimal: it only defines the accelerator state and
++ * identifiers needed by other compilation units.
++ */
++
++#define TYPE_WAVEVM_ACCEL "wavevm-accel"
++#define WAVEVM_ACCEL(obj) OBJECT_CHECK(WaveVMAccelState, (obj), TYPE_WAVEVM_ACCEL)
++
++typedef enum {
++    WVM_MODE_KERNEL,
++    WVM_MODE_USER,
++} WvmMode;
++
++typedef struct WaveVMAccelState {
++    AccelState parent_obj;
++    int dev_fd;
++    int sync_sock;
++    int ipc_sock;
++    WvmMode mode;
++    QemuThread sync_thread;
++    QemuThread ipc_thread;
++    QemuThread irq_thread;
++    bool sync_thread_running;
++    QemuThread net_thread;
++    int master_sock;
++
++    /* [FIX-F1] Block IO 持久连接：避免每次 IO 都 connect()+pthread_create() 导致线程爆炸 */
++    int block_io_sock;               /* 持久 IPC 连接，-1 = 未初始化 */
++    QemuMutex block_io_lock;         /* 序列化 Block IO 请求（同一时刻只允许一个 IO 在途） */
++} WaveVMAccelState;
++
++extern int g_wvm_local_split;
++
+
+--- a/hw/wavevm/meson.build
++++ b/hw/wavevm/meson.build
+@@ -0,0 +1,3 @@
++softmmu_ss.add(files(
++  'wavevm-block-hook.c',
++))
 ```
 
 ### Step 9: 优化的网关 (Gateway)
@@ -19786,7 +19934,7 @@ print("\n" + "=" * 60)
 print("[2/5] Comparing Gemini.md file blocks vs workspace...")
 print("=" * 60)
 
-results = {"pass": [], "fail": [], "missing_ws": [], "missing_gm": []}
+results = {"pass": [], "fail": [], "missing_ws": [], "missing_gm": [], "qemu_diff_fail": []}
 
 for path, code in sorted(blocks.items()):
     ws_path = os.path.join(WORKSPACE, path)
@@ -19898,22 +20046,24 @@ if diff_content:
     )
 
     if r.stdout.strip():
+        real_diffs = []
         for line in r.stdout.strip().split("\n"):
             if "Only in " + rebuild_dir in line:
                 # File in vanilla QEMU but not in workspace - expected for tarball extras
                 continue
             elif "Only in " + ws_qemu in line:
-                fname = line.split(": ")[-1] if ": " in line else line
+                if "__pycache__" in line:
+                    continue
                 print(f"  [EXTRA_WS] {line}")
+                real_diffs.append(line)
             elif "differ" in line.lower():
                 print(f"  [DIFFER] {line}")
-        # Count real diffs
-        real_diffs = [l for l in r.stdout.strip().split("\n")
-                      if "differ" in l.lower() or ("Only in " + ws_qemu in l)]
+                real_diffs.append(line)
         if not real_diffs:
             print("  All QEMU files IDENTICAL (only tarball extras differ)")
         else:
             print(f"\n  {len(real_diffs)} differences found")
+            results["qemu_diff_fail"] = real_diffs
     else:
         print("  All QEMU files IDENTICAL")
 else:
@@ -19966,6 +20116,7 @@ print("=" * 60)
 print(f"  File blocks PASS:       {len(results['pass'])}")
 print(f"  File blocks FAIL:       {len(results['fail'])}")
 print(f"  Missing from workspace: {len(results['missing_ws'])}")
+print(f"  QEMU diff FAIL:         {len(results['qemu_diff_fail'])}")
 if results['fail']:
     print(f"\n  FAILED files:")
     for f in results['fail']:
@@ -19974,8 +20125,12 @@ if results['missing_ws']:
     print(f"\n  Missing from workspace:")
     for f in results['missing_ws']:
         print(f"    - {f}")
+if results['qemu_diff_fail']:
+    print(f"\n  QEMU rebuild differs from workspace:")
+    for f in results['qemu_diff_fail']:
+        print(f"    - {f}")
 
-overall = "PASS" if len(results['fail']) == 0 and len(results['missing_ws']) == 0 else "FAIL"
+overall = "PASS" if len(results['fail']) == 0 and len(results['missing_ws']) == 0 and len(results['qemu_diff_fail']) == 0 else "FAIL"
 print(f"\n  Overall: {overall}")
 ```
 
