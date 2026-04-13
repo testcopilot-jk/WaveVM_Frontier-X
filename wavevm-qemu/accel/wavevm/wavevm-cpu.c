@@ -51,6 +51,10 @@ static void wvm_halt_wake_nop_handler(int sig) { (void)sig; }
 static int ap_did_local_sipi[MAX_VCPUS] = {0};
 static int ap_did_os_sipi[MAX_VCPUS] = {0};
 static gint64 ap_halt_probe_us[MAX_VCPUS] = {0};
+/* HLT exit with an injected LAPIC timer/interrupt needs one local KVM
+ * re-entry so the pending event can be consumed instead of being replayed
+ * as the same HLT loop again. */
+static int ap_hlt_pending_irq[MAX_VCPUS] = {0};
 
 static void wavevm_try_import_split_from_peer(int sock)
 {
@@ -328,16 +332,15 @@ static void wavevm_remote_exec(CPUState *cpu) {
                 if (mp.mp_state == KVM_MP_STATE_HALTED &&
                     cpu->cpu_index < MAX_VCPUS &&
                     ap_did_os_sipi[cpu->cpu_index]) {
-                    if (cpu->interrupt_request == 0 && !cpu_has_work(cpu)) {
+                    bool hlt_pending_irq = ap_hlt_pending_irq[cpu->cpu_index];
+
+                    if (!hlt_pending_irq &&
+                        cpu->interrupt_request == 0 &&
+                        !cpu_has_work(cpu)) {
                         gint64 now_us = g_get_monotonic_time();
                         gint64 *last_probe = &ap_halt_probe_us[cpu->cpu_index];
 
-                        /* Pending LAPIC timer/IPI on an in-kernel irqchip may
-                         * not surface in interrupt_request until we re-enter
-                         * KVM_RUN once. Avoid the old busy self-spin, but keep
-                         * a throttled local probe so parked APs can observe a
-                         * legitimate wake source after remote execution. */
-                        if (*last_probe != 0 && (now_us - *last_probe) < 100000) {
+                        if (*last_probe != 0 && (now_us - *last_probe) < 5000000) {
                             cpu->halted = 1;
                             return;
                         }
@@ -371,6 +374,10 @@ static void wavevm_remote_exec(CPUState *cpu) {
                                 ci, mp.mp_state);
                     }
 
+                    bool had_wake_source = hlt_pending_irq ||
+                                            (cpu->interrupt_request != 0 ||
+                                             cpu_has_work(cpu));
+
                     /* Set RUNNABLE so AP executes idle loop naturally.
                      * The idle loop will HLT, and KVM handles that
                      * internally when kvm_halt_in_kernel() is true. */
@@ -394,7 +401,7 @@ static void wavevm_remote_exec(CPUState *cpu) {
                                                  &hw_timer) == 0);
                     if (timer_ok) {
                         struct itimerspec its = {0};
-                        its.it_value.tv_nsec = 100 * 1000 * 1000; /* 100ms */
+                        its.it_value.tv_sec = 5;  /* give the guest more room to service timers */
                         timer_settime(hw_timer, 0, &its, NULL);
                     }
 
@@ -421,9 +428,13 @@ static void wavevm_remote_exec(CPUState *cpu) {
                     }
 
                     if (mp.mp_state == KVM_MP_STATE_RUNNABLE ||
+                        had_wake_source ||
                         (!cpu->halted && mp.mp_state != KVM_MP_STATE_HALTED)) {
                         /* AP was woken by IPI and is doing real work.
                          * Sync state and dispatch to slave. */
+                        if (ci < MAX_VCPUS) {
+                            ap_hlt_pending_irq[ci] = 0;
+                        }
                         cpu->halted = 0;
                         {
                             X86CPU *x86cpu = X86_CPU(cpu);
@@ -436,6 +447,9 @@ static void wavevm_remote_exec(CPUState *cpu) {
                     } else {
                         /* AP is still idle (processed timer ticks but no
                          * real work). Return and retry next iteration. */
+                        if (ci < MAX_VCPUS) {
+                            ap_hlt_pending_irq[ci] = 0;
+                        }
                         cpu->halted = 1;
                         return;
                     }
@@ -1403,6 +1417,16 @@ static void wavevm_remote_exec(CPUState *cpu) {
             run->mmio.len = len;
             run->mmio.is_write = mmio_wr;
         }
+        else if (kctx->exit_reason == WVM_EXIT_PREEMPT) {
+            X86CPU *x86cpu = X86_CPU(cpu);
+            cpu->halted = 0;
+            cpu->exception_index = 0;
+            x86cpu->env.mp_state = KVM_MP_STATE_RUNNABLE;
+            {
+                struct kvm_mp_state run_mp = { .mp_state = KVM_MP_STATE_RUNNABLE };
+                ioctl(cpu->kvm_fd, KVM_SET_MP_STATE, &run_mp);
+            }
+        }
         /* [FIX] HLT: halt the vCPU so QEMU waits for timer interrupt.
          *
          * But if the slave already returned a pending injected interrupt
@@ -1411,24 +1435,31 @@ static void wavevm_remote_exec(CPUState *cpu) {
          * bury that wake source again. Keep the vCPU RUNNABLE in that case
          * so the next local KVM entry can consume the interrupt. */
         else if (kctx->exit_reason == KVM_EXIT_HLT) {
-            bool keep_runnable = false;
+            int ci = cpu->cpu_index < MAX_VCPUS ? cpu->cpu_index : 0;
+            bool keep_pending_irq = false;
 
             if (kctx->vcpu_events_valid) {
                 const struct kvm_vcpu_events *kev =
                     (const struct kvm_vcpu_events *)kctx->vcpu_events_data;
-                keep_runnable = kev->interrupt.injected || kev->interrupt.nr;
+                keep_pending_irq = kev->interrupt.injected || kev->interrupt.nr;
             }
 
-            if (keep_runnable) {
+            if (keep_pending_irq) {
                 X86CPU *x86cpu = X86_CPU(cpu);
                 cpu->halted = 0;
                 cpu->exception_index = 0;
                 x86cpu->env.mp_state = KVM_MP_STATE_RUNNABLE;
+                if (ci < MAX_VCPUS) {
+                    ap_hlt_pending_irq[ci] = 1;
+                }
                 {
                     struct kvm_mp_state run_mp = { .mp_state = KVM_MP_STATE_RUNNABLE };
                     ioctl(cpu->kvm_fd, KVM_SET_MP_STATE, &run_mp);
                 }
             } else {
+                if (ci < MAX_VCPUS) {
+                    ap_hlt_pending_irq[ci] = 0;
+                }
                 cpu->halted = 1;
                 cpu->exception_index = EXCP_HLT;
                 {
