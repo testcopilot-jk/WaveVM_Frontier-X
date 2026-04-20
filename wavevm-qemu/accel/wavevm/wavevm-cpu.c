@@ -23,6 +23,7 @@
 #include "qemu/thread.h"
 #include "qemu/guest-random.h"
 #include "tcg/tcg.h"
+#include "hw/i386/apic_internal.h"
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <netinet/in.h>
@@ -718,84 +719,107 @@ static void wavevm_remote_exec(CPUState *cpu) {
 
             qemu_mutex_unlock_iothread();  /* restore lock-unheld for caller */
             ap_did_local_sipi[ci] = 1;
-            fprintf(stderr, "[WVM-TCG-SIPI] cpu=%d BIOS trampoline done, AP parked\n",
+            cpu->halted = 1;
+            fprintf(stderr, "[WVM-TCG-SIPI] cpu=%d BIOS trampoline done, AP staged for OS SIPI\n",
                     cpu->cpu_index);
-            return;  /* Don't dispatch yet — wait for OS SIPI */
+            return;  /* parked until OS SIPI wakes us */
         }
 
-        /* 2. Post-BIOS-SIPI: AP is parked, waiting for OS INIT+SIPI */
-        if (!ap_did_os_sipi[ci]) {
+        /* 2. Post-BIOS-SIPI: AP is parked, waiting for OS INIT+SIPI.
+         * KVM keeps using the KVM-only path above. This fallback is for
+         * TCG only, so the two backends each handle OS-SIPI in their own
+         * execution model without conflicting with each other. */
+        if (!kvm_enabled() && !ap_did_os_sipi[ci]) {
             X86CPU *x86cpu = X86_CPU(cpu);
             CPUState *cs = CPU(x86cpu);
 
-            /* Check for OS-level SIPI (Linux sends INIT+SIPI to APs) */
-            if (cs->interrupt_request & CPU_INTERRUPT_SIPI) {
-                fprintf(stderr, "[WVM-TCG-SIPI] cpu=%d OS SIPI pending\n", cpu->cpu_index);
-                do_cpu_sipi(x86cpu);
-                cs->interrupt_request &= ~CPU_INTERRUPT_INIT;  /* same INIT fix */
-
-                /* Run OS trampoline locally (Linux SMP init) */
-                fprintf(stderr, "[WVM-TCG-SIPI] cpu=%d running OS trampoline locally\n",
+            if (cs->interrupt_request & CPU_INTERRUPT_INIT) {
+                fprintf(stderr, "[WVM-TCG-SIPI] cpu=%d OS INIT pending, reinitializing APIC\n",
                         cpu->cpu_index);
-                cpu->halted = 0;
+                do_cpu_init(x86cpu);
+            }
 
-                int tramp_iters = 0;
-                const int max_tramp_iters = 500;  /* OS trampoline may be longer */
-                qemu_mutex_lock_iothread();
-                while (tramp_iters < max_tramp_iters) {
-                    qemu_mutex_unlock_iothread();
-                    cpu_exec_start(cpu);
-                    int tr = cpu_exec(cpu);
-                    cpu_exec_end(cpu);
-                    qemu_mutex_lock_iothread();
-
-                    if (tr == EXCP_INTERRUPT) {
-                        continue;  /* kicked by sibling's atomic step */
-                    }
-
-                    if (tr == EXCP_ATOMIC) {
-                        qemu_mutex_unlock_iothread();
-                        cpu_exec_step_atomic(cpu);
-                        qemu_mutex_lock_iothread();
-                        continue;
-                    }
-
-                    tramp_iters++;
-
-                    if (cpu->halted || tr == EXCP_HLT) {
-                        cpu->halted = 1;
-                        fprintf(stderr, "[WVM-TCG-SIPI] cpu=%d OS trampoline done after %d iters\n",
-                                cpu->cpu_index, tramp_iters);
-                        break;
-                    }
-                    if (tr != EXCP_HALTED && tr != EXCP_HLT) {
-                        fprintf(stderr, "[WVM-TCG-SIPI] cpu=%d OS trampoline unexpected tr=0x%x "
-                                "at iter=%d\n", cpu->cpu_index, (unsigned)tr, tramp_iters);
-                    }
+            if (!(cs->interrupt_request & CPU_INTERRUPT_SIPI)) {
+                static int os_wait_dbg = 0;
+                APICCommonState *apic = APIC_COMMON(X86_CPU(cpu)->apic_state);
+                if (os_wait_dbg < 20) {
+                    fprintf(stderr, "[WVM-TCG-SIPI] cpu=%d waiting for OS SIPI\n",
+                            cpu->cpu_index);
+                    fprintf(stderr, "[WVM-TCG-SIPI] cpu=%d irq=0x%x halted=%d wait_for_sipi=%d sipi_vector=0x%x\n",
+                            cpu->cpu_index, cs->interrupt_request, cpu->halted,
+                            apic ? apic->wait_for_sipi : -1,
+                            apic ? apic->sipi_vector : -1);
+                    os_wait_dbg++;
                 }
-                if (tramp_iters >= max_tramp_iters) {
-                    fprintf(stderr, "[WVM-TCG-SIPI] cpu=%d OS trampoline timeout after %d iters\n",
-                            cpu->cpu_index, max_tramp_iters);
-                    cpu->halted = 1;
+                if (apic && !apic->wait_for_sipi) {
+                    fprintf(stderr, "[WVM-TCG-SIPI] cpu=%d inferring OS SIPI from APIC state\n",
+                            cpu->cpu_index);
+                    cs->interrupt_request |= CPU_INTERRUPT_SIPI;
+                } else {
+                cpu->halted = 1;
+                return;
                 }
+            }
 
-                ap_did_os_sipi[ci] = 1;
-                fprintf(stderr, "[WVM-TCG-SIPI] cpu=%d OS trampoline done, ready for remote dispatch\n",
-                        cpu->cpu_index);
-                qemu_mutex_unlock_iothread();  /* restore lock-unheld for caller */
+            if (!(cs->interrupt_request & CPU_INTERRUPT_SIPI)) {
+                cpu->halted = 1;
                 return;
             }
 
-            /* No OS SIPI yet — AP stays parked.
-             * Only SIPI can advance the AP to the next stage.
-             * Ignore POLL/HARD interrupts here — they cause
-             * useless wake-up storms (28K+ per run). */
-            {
-                X86CPU *x86cpu = X86_CPU(cpu);
-                CPUState *cs = CPU(x86cpu);
-                cs->interrupt_request &= ~CPU_INTERRUPT_POLL;
+            fprintf(stderr, "[WVM-TCG-SIPI] cpu=%d OS SIPI pending\n", cpu->cpu_index);
+            do_cpu_sipi(x86cpu);
+            cs->interrupt_request &= ~CPU_INTERRUPT_INIT;  /* same INIT fix */
+
+            /* Run OS trampoline locally (Linux SMP init) */
+            fprintf(stderr, "[WVM-TCG-SIPI] cpu=%d running OS trampoline locally\n",
+                    cpu->cpu_index);
+            cpu->halted = 0;
+
+            int tramp_iters = 0;
+            const int max_tramp_iters = 500;  /* OS trampoline may be longer */
+            qemu_mutex_lock_iothread();
+            while (tramp_iters < max_tramp_iters) {
+                qemu_mutex_unlock_iothread();
+                cpu_exec_start(cpu);
+                int tr = cpu_exec(cpu);
+                cpu_exec_end(cpu);
+                qemu_mutex_lock_iothread();
+
+                if (tr == EXCP_INTERRUPT) {
+                    continue;  /* kicked by sibling's atomic step */
+                }
+
+                if (tr == EXCP_ATOMIC) {
+                    qemu_mutex_unlock_iothread();
+                    cpu_exec_step_atomic(cpu);
+                    qemu_mutex_lock_iothread();
+                    continue;
+                }
+
+                tramp_iters++;
+
+                if (cpu->halted || tr == EXCP_HLT) {
+                    cpu->halted = 1;
+                    fprintf(stderr, "[WVM-TCG-SIPI] cpu=%d OS trampoline done after %d iters\n",
+                            cpu->cpu_index, tramp_iters);
+                    break;
+                }
+                if (tr != EXCP_HALTED && tr != EXCP_HLT) {
+                    fprintf(stderr, "[WVM-TCG-SIPI] cpu=%d OS trampoline unexpected tr=0x%x "
+                            "at iter=%d\n", cpu->cpu_index, (unsigned)tr, tramp_iters);
+                }
             }
-            cpu->halted = 1;
+            if (tramp_iters >= max_tramp_iters) {
+                fprintf(stderr, "[WVM-TCG-SIPI] cpu=%d OS trampoline timeout after %d iters\n",
+                        cpu->cpu_index, max_tramp_iters);
+                cpu->halted = 1;
+            }
+
+            ap_did_os_sipi[ci] = 1;
+            cpu->halted = 0;
+            fprintf(stderr, "[WVM-TCG-SIPI] cpu=%d OS trampoline done, ready for remote dispatch\n",
+                    cpu->cpu_index);
+            qemu_mutex_unlock_iothread();  /* restore lock-unheld for caller */
             return;
         }
 
@@ -1212,6 +1236,13 @@ static void wavevm_remote_exec(CPUState *cpu) {
     // 4. 反序列化 CPU 状态
     if (ack.mode_tcg) {
         wvm_tcg_set_state(cpu, &ack.ctx.tcg);
+        if (ack.ctx.tcg.exit_reason == WVM_EXIT_PREEMPT) {
+            /* TCG worker time-slice / exit-request preemption.
+             * Do not treat this as a parkable HLT; keep the AP runnable so
+             * it can re-enter remote dispatch and make forward progress. */
+            cpu->halted = 0;
+            cpu->exception_index = 0;
+        }
     } else {
         struct kvm_regs kregs;
         struct kvm_sregs ksregs;
@@ -1687,9 +1718,8 @@ static void *wavevm_cpu_thread_fn(void *arg) {
                                 its.it_value.tv_sec = 5;
                                 timer_settime(os_sipi_timer, 0, &its, NULL);
 
-                                /* Run AP: KVM_RUN in HALTED state waits for
-                                 * interrupt. INIT+SIPI wakes it, AP executes
-                                 * Linux trampoline locally until HLT or timer. */
+                /* Run AP locally: wait for INIT+SIPI, then execute the
+                 * Linux trampoline until HLT or timer. */
                                 cpu->halted = 0;
                                 int os_r = kvm_cpu_exec(cpu);
 
@@ -1801,10 +1831,23 @@ static void *wavevm_cpu_thread_fn(void *arg) {
                             continue;
                         }
                     }
-                    /* AP is halted (from remote HLT or local trampoline HLT).
+                    /* AP is halted (from remote HLT, local trampoline HLT,
+                     * or TCG SIPI-wait between BIOS and OS trampolines).
                      * Stay parked until an external interrupt (IPI) wakes it.
                      * This is the normal AP parking state after BIOS SMP init. */
                     {
+                    /* TCG has no MP-state backend to keep a runnable AP in
+                     * the KVM-style wait path. Once the OS SIPI has been
+                     * completed, a still-runnable AP must fall through back
+                     * to remote dispatch instead of being re-parked here.
+                     * Keep this branch KVM-neutral and only bypass parking for
+                     * TCG APs that already finished OS SIPI. */
+                    if (!kvm_enabled() &&
+                        cpu->cpu_index < MAX_VCPUS &&
+                        ap_did_os_sipi[cpu->cpu_index]) {
+                        cpu->halted = 0;
+                        continue;
+                    }
                     /* In TCG mode, also wake on SIPI/INIT (software APIC
                      * delivers these as interrupt_request bits, not via
                      * KVM MP state).  KVM path: only HARD|POLL needed
@@ -1822,6 +1865,18 @@ static void *wavevm_cpu_thread_fn(void *arg) {
                         fprintf(stderr, "[WVM-WAKE] cpu=%d woken by interrupt (irq=0x%x)\n",
                                 cpu->cpu_index, cpu->interrupt_request);
                     } else {
+                        if (!kvm_enabled() &&
+                            cpu->cpu_index < MAX_VCPUS &&
+                            ap_did_local_sipi[cpu->cpu_index] &&
+                            !ap_did_os_sipi[cpu->cpu_index]) {
+                            static int tcg_wait_dbg[MAX_VCPUS] = {0};
+                            if (tcg_wait_dbg[cpu->cpu_index] < 20) {
+                                fprintf(stderr, "[WVM-TCG-WAIT] cpu=%d irq=0x%x halted=%d\n",
+                                        cpu->cpu_index, cpu->interrupt_request,
+                                        cpu->halted);
+                                tcg_wait_dbg[cpu->cpu_index]++;
+                            }
+                        }
                         /* No interrupt: stay halted, yield CPU */
                         qemu_mutex_unlock_iothread();
                         g_usleep(50000);  /* 50ms poll */

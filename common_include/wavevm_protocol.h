@@ -289,6 +289,8 @@ typedef struct {
     wvm_seg_reg_t ldt;
     wvm_seg_reg_t tr;
     uint64_t efer;
+    uint32_t interrupt_request;
+    uint32_t halted;
 } wvm_tcg_context_t;
 
 struct wvm_ipc_cpu_run_req {

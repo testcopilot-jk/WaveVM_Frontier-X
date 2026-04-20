@@ -440,6 +440,11 @@ static int raw_send(tx_node_t *node) {
     hdr->epoch = htonl(g_curr_epoch);
     hdr->node_state = g_my_node_state;
     hdr->target_id = htonl(node->target_id);
+    /* Preserve the original requestor/source across hops.
+     * WVM_ENCODE_ID(vm=0,node=0) is a valid ID and equals 0, so zero must
+     * not be treated as an "uninitialized" sentinel here.
+     * Callers are expected to initialize slave_id before the first send.
+     */
     
     // 重新计算 CRC（因为 Header 变了）
     hdr->crc32 = 0;

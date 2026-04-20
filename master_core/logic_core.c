@@ -136,6 +136,7 @@ void handle_rpc_batch_execution(void *payload, uint32_t len);
 #define INITIAL_RETRY_DELAY_US 50000      // 50ms
 #define MAX_RETRY_DELAY_US     500000     // 500ms
 #define TOTAL_TIMEOUT_US      20000000    // 20s
+#define TCG_TOTAL_TIMEOUT_US 600000000    // 600s for slow remote TCG bringup
 
 // --- 目录表定义 ---
 #ifdef __KERNEL__
@@ -628,7 +629,7 @@ static uint64_t g_last_gossip_us = 0;
 static uint64_t g_state_start_us = 0;
 
 // 配置参数：严格遵循物理时延
-#define HEARTBEAT_TIMEOUT_US 180000000 // 180秒未收到心跳则判定 Fail-in-place (测试)
+#define HEARTBEAT_TIMEOUT_US 600000000 // 600秒未收到心跳则判定 Fail-in-place (TCG慢启动保护)
 #define WARMING_DURATION_US  10000000 // 预热态持续10秒，同步元数据
 #define GOSSIP_FANOUT        3        // 每次随机向3个邻居扩散
 
@@ -1399,6 +1400,8 @@ int wvm_rpc_call(uint16_t msg_type, void *payload, int len, uint32_t target_id, 
     if (msg_type == MSG_VCPU_RUN) {
         hdr->mode_tcg = (len == (int)sizeof(wvm_tcg_context_t)) ? 1 : 0;
     }
+    const uint64_t total_timeout_us =
+        (msg_type == MSG_VCPU_RUN && hdr->mode_tcg) ? TCG_TOTAL_TIMEOUT_US : TOTAL_TIMEOUT_US;
     
     if (payload && len > 0) {
         memcpy(buffer + sizeof(*hdr), payload, len);
@@ -1418,7 +1421,7 @@ int wvm_rpc_call(uint16_t msg_type, void *payload, int len, uint32_t target_id, 
         g_ops->touch_watchdog();
 
         // 检查总超时
-        if (g_ops->time_diff_us(start_total) > TOTAL_TIMEOUT_US) {
+        if (g_ops->time_diff_us(start_total) > total_timeout_us) {
             if (g_ops->log) {
                 g_ops->log("[RPC Timeout] Type: %d, Target: %d, RID: %llu", 
                            msg_type, target_id, (unsigned long long)rid);
@@ -1617,7 +1620,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
             ack->msg_type = htons(MSG_MEM_ACK);
             ack->payload_len = htons(pl_size);
             ack->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
-            ack->target_id = hdr->slave_id;
+            ack->target_id = htonl(hdr->slave_id);
             ack->req_id = hdr->req_id; // 必须回传请求ID
             ack->qos_level = 0; // 大包走慢车道
 
@@ -1846,7 +1849,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                     ack_hdr->msg_type = htons(MSG_MEM_ACK);
                     ack_hdr->payload_len = 0;
                     ack_hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
-                    ack_hdr->target_id = hdr->slave_id;
+                    ack_hdr->target_id = htonl(hdr->slave_id);
                     ack_hdr->req_id = hdr->req_id; // 关键：回传请求 ID
                     ack_hdr->qos_level = 1;        // 控制信令走快车道
 
@@ -1910,7 +1913,7 @@ void wvm_logic_process_packet(struct wvm_header *hdr, void *payload, uint32_t so
                 ack_hdr->msg_type = htons(MSG_MEM_ACK); // 回复类型
                 ack_hdr->payload_len = 0;
                 ack_hdr->slave_id = htonl(WVM_ENCODE_ID(g_my_vm_id, g_my_node_id));
-                ack_hdr->target_id = hdr->slave_id;
+                ack_hdr->target_id = htonl(hdr->slave_id);
                 ack_hdr->req_id = hdr->req_id; // 关键：原样回传 SYNC_MAGIC
                 ack_hdr->qos_level = 1;        // 必须走快车道，否则 AIMD 会误判延迟
                 ack_hdr->epoch = htonl(g_curr_epoch);

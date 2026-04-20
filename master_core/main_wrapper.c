@@ -283,12 +283,22 @@ static void handle_ipc_cpu_run(int qemu_fd, struct wvm_ipc_cpu_run_req* req) {
     if (!WVM_IS_VALID_TARGET(req->slave_id)) {
         ack.status = -ENODEV;
     } else if (req->mode_tcg) {
-        /* [FIX] TCG: rx_buffer = &ack (完整结构体)，统一 8 字节偏移修复。 */
+        /*
+         * TCG remote run returns a compact payload: only wvm_tcg_context_t.
+         * Do not read it back as a full wvm_ipc_cpu_run_ack, otherwise status
+         * and the restored CPU state are interpreted from the wrong layout.
+         */
+        wvm_tcg_context_t tcg_ack;
+        memset(&tcg_ack, 0, sizeof(tcg_ack));
         rpc_ret = wvm_rpc_call(MSG_VCPU_RUN, &req->ctx,
             sizeof(req->ctx.tcg),
-            req->slave_id, &ack, sizeof(ack));
+            req->slave_id, &tcg_ack, sizeof(tcg_ack));
         if (rpc_ret < 0) ack.status = rpc_ret;
-        ack.mode_tcg = req->mode_tcg;
+        else {
+            ack.status = 0;
+            ack.mode_tcg = 1;
+            memcpy(&ack.ctx.tcg, &tcg_ack, sizeof(tcg_ack));
+        }
     } else {
         static int __ipc_kvm_ctx = 0;
         if (__ipc_kvm_ctx < 20) {

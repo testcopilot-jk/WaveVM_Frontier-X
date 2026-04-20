@@ -3,8 +3,18 @@ set -euo pipefail
 ROOT=/workspaces/WaveVM_Frontier-X
 ART_DIR="$ROOT/artifacts/tmp/fract-tcg-test-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$ART_DIR"
+SSH_PORT="${SSH_PORT:-2227}"
 
 mount -o remount,size=8G /dev/shm
+
+if ! command -v genisoimage >/dev/null 2>&1; then
+  echo "FATAL: genisoimage not found" >&2
+  exit 1
+fi
+if ! command -v sshpass >/dev/null 2>&1; then
+  echo "FATAL: sshpass not found" >&2
+  exit 1
+fi
 
 # === NODE config (for masters — g_gateways[] points to local sidecars) ===
 CFG="$ART_DIR/fract_2node.conf"
@@ -40,6 +50,23 @@ cat > "$ART_DIR/l2_routes.txt" <<'EOCFG'
 ROUTE 0 1 127.0.0.1 19320
 ROUTE 1 1 127.0.0.1 19420
 EOCFG
+
+# Minimal NoCloud seed to make Cirros start dropbear without metadata service.
+SEED_DIR="$ART_DIR/cidata"
+SEED_ISO="$ART_DIR/cidata.iso"
+mkdir -p "$SEED_DIR"
+cat > "$SEED_DIR/meta-data" <<'EOF'
+instance-id: iid-local01
+local-hostname: wavevm-ci
+dsmode: local
+EOF
+cat > "$SEED_DIR/user-data" <<'EOF'
+#cloud-config
+ssh_pwauth: true
+disable_root: false
+EOF
+genisoimage -quiet -output "$SEED_ISO" -volid cidata -joliet -rock \
+  "$SEED_DIR/user-data" "$SEED_DIR/meta-data"
 
 # === Kill old processes ===
 pkill -f "wavevm_node_master" 2>/dev/null || true
@@ -94,13 +121,14 @@ sleep 8
 
 echo "=== Starting QEMU (TCG mode, no KVM) ==="
 (env PATH="$QPATH" WVM_INSTANCE_ID=0 stdbuf -oL -eL "$ROOT/wavevm-qemu/build-native/qemu-system-x86_64" \
-  -accel wavevm -machine q35 -m 3072 -smp 3 \
+  -accel wavevm -machine q35,smm=off -m 3072 -smp 3 \
   -object memory-backend-ram,id=ram0,size=2048M \
   -object memory-backend-ram,id=ram1,size=1024M \
   -numa node,memdev=ram0,cpus=0-1,nodeid=0 \
   -numa node,memdev=ram1,cpus=2,nodeid=1 \
-  -drive file="$ROOT/artifacts/images/cirros-0.6.2-x86_64-disk.img",if=virtio,format=qcow2 \
-  -netdev user,id=ne,hostfwd=tcp::2226-:22 -device e1000,netdev=ne \
+  -drive file="$ROOT/artifacts/images/cirros-0.6.2-x86_64-disk.img",if=virtio,format=qcow2,snapshot=on \
+  -drive file="$SEED_ISO",if=virtio,format=raw,media=cdrom,readonly=on \
+  -netdev user,id=ne,hostfwd=tcp::${SSH_PORT}-:22 -device e1000,netdev=ne \
   -display none -vga none \
   -serial file:"$ART_DIR/vm-serial.log" -monitor none) >"$ART_DIR/vm.log" 2>&1 &
 Q=$!
@@ -123,8 +151,37 @@ for p in GL2 GL1A GL1B GSA GSB S0 S1 M0 M1 Q; do
 done
 
 echo ""
-echo "=== Checking port 2226 ==="
-ss -tln | grep 2226 || echo "  Port 2226 not listening"
+echo "=== Checking port ${SSH_PORT} ==="
+ss -tln | grep "${SSH_PORT}" || echo "  Port ${SSH_PORT} not listening"
+
+echo ""
+echo "=== Real SSH login check ==="
+SSH_CMD=(sshpass -p gocubsgo ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p "${SSH_PORT}" cirros@127.0.0.1)
+SSH_LOGIN=0
+for i in $(seq 1 30); do
+  if "${SSH_CMD[@]}" "echo guest-ssh-ok" >/dev/null 2>&1; then
+    SSH_LOGIN=1
+    break
+  fi
+  sleep 2
+done
+echo "SSH_LOGIN=$SSH_LOGIN"
+if [ "$SSH_LOGIN" -ne 1 ]; then
+  echo "FATAL: guest SSH login failed" >&2
+  exit 1
+fi
+
+echo ""
+echo "=== Guest NUMA topology ==="
+"${SSH_CMD[@]}" "ls -la /sys/devices/system/node/; cat /sys/devices/system/node/node*/cpulist; cat /sys/devices/system/node/node*/meminfo | head -30" \
+  2>/dev/null | tee "$ART_DIR/vm_numa.txt"
+if grep -q "node0" "$ART_DIR/vm_numa.txt" && grep -q "node1" "$ART_DIR/vm_numa.txt" && grep -q "MemTotal" "$ART_DIR/vm_numa.txt"; then
+  echo "NUMA_OK=1"
+else
+  echo "NUMA_OK=0"
+  echo "FATAL: guest NUMA topology check failed" >&2
+  exit 1
+fi
 
 echo ""
 echo "=== vCPU distribution ==="
@@ -138,7 +195,7 @@ echo "master1: $(grep -c 'RPC timeout' "$ART_DIR/master1.log" 2>/dev/null || ech
 
 echo ""
 echo "=== SSH banner check ==="
-timeout 5 bash -c 'echo "" | nc 127.0.0.1 2226' 2>/dev/null || echo "  (no banner / timeout)"
+timeout 5 bash -c "echo \"\" | nc 127.0.0.1 ${SSH_PORT}" 2>/dev/null || echo "  (no banner / timeout)"
 
 echo ""
 echo "=== Checking for crashes ==="

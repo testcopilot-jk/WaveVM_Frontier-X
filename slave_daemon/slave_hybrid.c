@@ -958,7 +958,7 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
         /* ACK must originate from this slave node and target the requester. */
         ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
-        ack_hdr.target_id = hdr->slave_id;  /* already in network byte order */
+        ack_hdr.target_id = htonl(hdr->slave_id);
         ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
 
         struct wvm_ipc_cpu_run_ack ack;
@@ -1002,7 +1002,7 @@ void handle_kvm_run_stateless(int sockfd, struct sockaddr_in *client, struct wvm
         ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
         /* ACK must originate from this slave node and target the requester. */
         ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
-        ack_hdr.target_id = hdr->slave_id;  /* already in network byte order */
+        ack_hdr.target_id = htonl(hdr->slave_id);
         ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
 
         struct wvm_ipc_cpu_run_ack ack;
@@ -1652,7 +1652,7 @@ skip_kvm_run:
     ack_hdr.payload_len = htons(sizeof(struct wvm_ipc_cpu_run_ack));
     /* ACK must originate from this slave node and target the requester. */
     ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
-    ack_hdr.target_id = hdr->slave_id;  /* already in network byte order */
+        ack_hdr.target_id = htonl(hdr->slave_id);
     ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
     
     struct wvm_ipc_cpu_run_ack *ack = (struct wvm_ipc_cpu_run_ack *)payload;
@@ -1889,7 +1889,7 @@ void handle_kvm_mem(int sockfd, struct sockaddr_in *client, struct wvm_header *h
         ack_hdr.msg_type = htons(MSG_MEM_ACK);
         ack_hdr.payload_len = htons(4096);
         ack_hdr.slave_id = htonl(WVM_ENCODE_ID(g_slave_vm_id, (uint32_t)g_base_id));
-        ack_hdr.target_id = hdr->slave_id;  /* already in network byte order */
+    ack_hdr.target_id = htonl(hdr->slave_id);
         ack_hdr.req_id = WVM_HTONLL(hdr->req_id);
 
         uint8_t tx[sizeof(ack_hdr) + 4096];
@@ -2185,14 +2185,20 @@ void* kvm_worker_thread(void *arg) {
                 void *net_payload_ptr = bufs[i] + sizeof(struct wvm_header);
     
                 if (local_req.mode_tcg) {
-                    // 安全检查：防止 payload 长度不足导致越界
-                    if (h->payload_len >= sizeof(wvm_tcg_context_t)) {
-                        memcpy(&local_req.ctx.tcg, net_payload_ptr, sizeof(wvm_tcg_context_t));
-                    }
+                    /* Backward compatibility: accept compact/short TCG payloads.
+                     * Older senders may omit tail fields; zero-fill the rest so
+                     * the restored CPU state stays well-defined. */
+                    size_t copy_len = h->payload_len < sizeof(wvm_tcg_context_t)
+                                    ? (size_t)h->payload_len
+                                    : sizeof(wvm_tcg_context_t);
+                    memset(&local_req.ctx.tcg, 0, sizeof(wvm_tcg_context_t));
+                    memcpy(&local_req.ctx.tcg, net_payload_ptr, copy_len);
                 } else {
-                    if (h->payload_len >= sizeof(wvm_kvm_context_t)) {
-                        memcpy(&local_req.ctx.kvm, net_payload_ptr, sizeof(wvm_kvm_context_t));
-                    }
+                    size_t copy_len = h->payload_len < sizeof(wvm_kvm_context_t)
+                                    ? (size_t)h->payload_len
+                                    : sizeof(wvm_kvm_context_t);
+                    memset(&local_req.ctx.kvm, 0, sizeof(wvm_kvm_context_t));
+                    memcpy(&local_req.ctx.kvm, net_payload_ptr, copy_len);
                 }
 
                 // 3. 调用核心执行函数
