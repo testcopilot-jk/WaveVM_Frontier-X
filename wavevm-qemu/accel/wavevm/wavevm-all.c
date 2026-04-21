@@ -550,11 +550,9 @@ void wavevm_slave_vcpu_loop(CPUState *cpu)
             WaveVMTcgKickCtx *kick = g_new0(WaveVMTcgKickCtx, 1);
             QemuThread kick_thread;
             kick->cpu = cpu;
-            kick->delay_us = 30000000; /* TCG needs a much longer uninterrupted slice
-                                       * than KVM to get past trampoline / HLT
-                                       * transitions; keep this TCG-only and avoid
-                                       * preempting the worker before it can make
-                                       * forward progress. */
+            kick->delay_us = 50000;  /* V31b: 50ms per burst (was 5ms), gives slave
+                                       * enough time to fetch pages via UDP before
+                                       * being kicked out of cpu_exec */
             qemu_thread_create(&kick_thread, "wvm-tcg-kick",
                                wavevm_tcg_kick_thread, kick,
                                QEMU_THREAD_DETACHED);
@@ -1018,17 +1016,15 @@ static void *wavevm_slave_net_thread(void *arg) {
                         local_req.slave_id = ntohl(hdr->slave_id);
 
                         if (hdr->mode_tcg) {
-                            size_t copy_len = actual_payload < (int)sizeof(wvm_tcg_context_t)
-                                            ? (size_t)actual_payload
-                                            : sizeof(wvm_tcg_context_t);
-                            memset(&local_req.ctx.tcg, 0, sizeof(wvm_tcg_context_t));
-                            memcpy(&local_req.ctx.tcg, payload, copy_len);
+                            if (actual_payload < (int)sizeof(wvm_tcg_context_t)) {
+                                continue;
+                            }
+                            memcpy(&local_req.ctx.tcg, payload, sizeof(wvm_tcg_context_t));
                         } else {
-                            size_t copy_len = actual_payload < (int)sizeof(wvm_kvm_context_t)
-                                            ? (size_t)actual_payload
-                                            : sizeof(wvm_kvm_context_t);
-                            memset(&local_req.ctx.kvm, 0, sizeof(wvm_kvm_context_t));
-                            memcpy(&local_req.ctx.kvm, payload, copy_len);
+                            if (actual_payload < (int)sizeof(wvm_kvm_context_t)) {
+                                continue;
+                            }
+                            memcpy(&local_req.ctx.kvm, payload, sizeof(wvm_kvm_context_t));
                         }
                         req = &local_req;
                         compact_ctx_payload = true;
@@ -1049,39 +1045,34 @@ static void *wavevm_slave_net_thread(void *arg) {
                         w->pending = true;
                         qemu_cond_signal(&w->has_work);
                         qemu_mutex_unlock(&w->lock);
-                        } else {
-                            /* Mode B: sync path — execute vCPU on net thread directly.
-                             * This ensures IPI delivery (smp_call_function / flush_tlb_all)
-                             * works correctly because vCPU exit and message processing
-                             * are serialized on the same thread. */
-                            struct wvm_ipc_cpu_run_ack full_ack;
-                            memset(&full_ack, 0, sizeof(full_ack));
-                            wavevm_slave_submit_cpu_run(req, &full_ack);
-                            if (compact_ctx_payload) {
-                                if (hdr->mode_tcg) {
-                                    memcpy(payload, &full_ack.ctx.tcg, sizeof(full_ack.ctx.tcg));
-                                    hdr->payload_len = htons(sizeof(full_ack.ctx.tcg));
-                                    msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(full_ack.ctx.tcg);
-                                } else {
-                                    memcpy(payload, &full_ack.ctx.kvm, sizeof(full_ack.ctx.kvm));
-                                    hdr->payload_len = htons(sizeof(full_ack.ctx.kvm));
-                                    msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(full_ack.ctx.kvm);
-                                }
+                    } else {
+                        /* Mode B: sync path — execute vCPU on net thread directly.
+                         * This ensures IPI delivery (smp_call_function / flush_tlb_all)
+                         * works correctly because vCPU exit and message processing
+                         * are serialized on the same thread. */
+                        struct wvm_ipc_cpu_run_ack full_ack;
+                        memset(&full_ack, 0, sizeof(full_ack));
+                        wavevm_slave_submit_cpu_run(req, &full_ack);
+                        if (compact_ctx_payload) {
+                            if (hdr->mode_tcg) {
+                                memcpy(payload, &full_ack.ctx.tcg, sizeof(full_ack.ctx.tcg));
+                                hdr->payload_len = htons(sizeof(full_ack.ctx.tcg));
+                                msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(full_ack.ctx.tcg);
                             } else {
-                                memcpy(payload, &full_ack, sizeof(full_ack));
-                                hdr->payload_len = htons(sizeof(full_ack));
-                                msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(full_ack);
+                                memcpy(payload, &full_ack.ctx.kvm, sizeof(full_ack.ctx.kvm));
+                                hdr->payload_len = htons(sizeof(full_ack.ctx.kvm));
+                                msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(full_ack.ctx.kvm);
                             }
-                            /* Response must go back to the original requester, not
-                             * keep the hop-local destination from the inbound RUN.
-                             * Preserve current node as source so upstream routing can
-                             * match the ACK against the requester slot. */
-                            hdr->target_id = htonl(req->slave_id);
-                            hdr->msg_type = htons(MSG_VCPU_EXIT);
-                            hdr->crc32 = 0;
-                            hdr->crc32 = htonl(calculate_crc32(buf, msgs[i].msg_len));
-                            if (send(s->master_sock, buf, msgs[i].msg_len, 0) < 0) {
-                                perror("[WaveVM-Slave] send MSG_VCPU_EXIT");
+                        } else {
+                            memcpy(payload, &full_ack, sizeof(full_ack));
+                            hdr->payload_len = htons(sizeof(full_ack));
+                            msgs[i].msg_len = sizeof(struct wvm_header) + sizeof(full_ack);
+                        }
+                        hdr->msg_type = htons(MSG_VCPU_EXIT);
+                        hdr->crc32 = 0;
+                        hdr->crc32 = htonl(calculate_crc32(buf, msgs[i].msg_len));
+                        if (send(s->master_sock, buf, msgs[i].msg_len, 0) < 0) {
+                            perror("[WaveVM-Slave] send MSG_VCPU_EXIT");
                         }
                     }
                 } else if (msg_type == MSG_PING) {

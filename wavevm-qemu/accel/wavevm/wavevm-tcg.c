@@ -57,8 +57,6 @@ void wvm_tcg_get_state(CPUState *cpu, wvm_tcg_context_t *ctx) {
     ctx->tr.selector  = env->tr.selector;
     ctx->tr.flags     = env->tr.flags;
     ctx->efer         = env->efer;
-    ctx->interrupt_request = cpu->interrupt_request;
-    ctx->halted = cpu->halted;
 }
 
 // Import state from network packet to QEMU TCG
@@ -151,10 +149,6 @@ void wvm_tcg_set_state(CPUState *cpu, wvm_tcg_context_t *ctx) {
     env->gdt.limit = ctx->gdt_limit;
     env->idt.base = ctx->idt_base;
     env->idt.limit = ctx->idt_limit;
-
-    cpu->interrupt_request = ctx->interrupt_request;
-    cpu->halted = ctx->halted;
-    cpu->exception_index = ctx->exit_reason;
 }
 
 #else
@@ -170,3 +164,4 @@ void wvm_tcg_set_state(CPUState *cpu, wvm_tcg_context_t *ctx) {
 }
 
 #endif
+
