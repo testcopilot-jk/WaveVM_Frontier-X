@@ -1894,15 +1894,26 @@ void* kvm_worker_thread(void *arg) {
                 void *net_payload_ptr = bufs[i] + sizeof(struct wvm_header);
     
                 if (local_req.mode_tcg) {
-                    // 安全检查：防止 payload 长度不足导致越界
-                    if (h->payload_len >= sizeof(wvm_tcg_context_t)) {
-                        memcpy(&local_req.ctx.tcg, net_payload_ptr, sizeof(wvm_tcg_context_t));
+                    size_t copy_len = h->payload_len;
+                    if (copy_len > sizeof(wvm_tcg_context_t)) {
+                        copy_len = sizeof(wvm_tcg_context_t);
                     }
+                    memcpy(&local_req.ctx.tcg, net_payload_ptr, copy_len);
                 } else {
-                    if (h->payload_len >= sizeof(wvm_kvm_context_t)) {
-                        memcpy(&local_req.ctx.kvm, net_payload_ptr, sizeof(wvm_kvm_context_t));
+                    size_t copy_len = h->payload_len;
+                    if (copy_len > sizeof(wvm_kvm_context_t)) {
+                        copy_len = sizeof(wvm_kvm_context_t);
                     }
+                    memcpy(&local_req.ctx.kvm, net_payload_ptr, copy_len);
                 }
+
+                fprintf(stderr,
+                        "[Slave MSG_VCPU_RUN] mode=%u target=%u slave=%u req=%llu len=%d\n",
+                        (unsigned)local_req.mode_tcg,
+                        (unsigned)ntohl(h->target_id),
+                        (unsigned)ntohl(h->slave_id),
+                        (unsigned long long)h->req_id,
+                        h->payload_len);
 
                 // 3. 调用核心执行函数
                 // 传递栈上构造的 local_req 指针
@@ -1961,7 +1972,13 @@ void spawn_tcg_processes(int base_id) {
     tcg_endpoints = malloc(sizeof(slave_endpoint_t) * g_num_cores);
     if (!tcg_endpoints) { perror("malloc endpoints"); exit(1); }
     
-    int internal_base = 20000 + (g_service_port % 1000) * 256;
+    /*
+     * Keep the local TCG proxy sockets inside the valid UDP port range.
+     * The old stride (256) could overflow 16-bit port space for service ports
+     * like 19205, wrapping 72480 -> 6944 and silently colliding with unrelated
+     * sockets. A smaller stride preserves per-node separation without overflow.
+     */
+    int internal_base = 20000 + (g_service_port % 1000) * 32;
     char ram_str[32]; snprintf(ram_str, sizeof(ram_str), "%d", g_ram_mb);
 
     for (long i = 0; i < g_num_cores; i++) {
@@ -2089,14 +2106,23 @@ void* tcg_proxy_thread(void *arg) {
             }
             if (hdr->magic != htonl(WVM_MAGIC)) continue;
 
-            /* In single-host tests gateway packets can also come from 127.0.0.1.
-             * Only treat packets from known TCG endpoint ports as local upstream. */
+            uint16_t msg_type = ntohs(hdr->msg_type);
+            /* In single-host dual-node tests, loopback source ports can belong to
+             * either the local QEMU child or the upstream gateway chain.
+             * For vCPU control traffic, always prefer the downstream slave path on
+             * the slave role so MSG_VCPU_RUN / MSG_VCPU_EXIT cannot get misrouted
+             * back upstream just because the source port is a known TCG endpoint. */
             int from_local_tcg = (src_addrs[i].sin_addr.s_addr == htonl(INADDR_LOOPBACK)) &&
                                  is_local_tcg_endpoint_port(src_addrs[i].sin_port);
+            const char *role_env = getenv("WVM_ROLE");
+            int is_slave_role = (role_env && strcmp(role_env, "SLAVE") == 0);
+            if (is_slave_role &&
+                (msg_type == MSG_VCPU_RUN || msg_type == MSG_VCPU_EXIT)) {
+                from_local_tcg = 0;
+            }
             // 1. Upstream (Local QEMU -> Gateway)
             if (from_local_tcg) {
                 // [VFIO Intercept] TCG 模式下的本地显卡拦截
-                uint16_t msg_type = ntohs(hdr->msg_type);
                 int actual_payload = msgs[i].msg_len - (int)sizeof(struct wvm_header);
                 uint16_t payload_len = ntohs(hdr->payload_len);
                 if (msg_type == MSG_MEM_WRITE) {

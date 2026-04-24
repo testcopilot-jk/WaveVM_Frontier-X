@@ -7,6 +7,13 @@ SSH_PORT="${SSH_PORT:-2227}"
 
 mount -o remount,size=8G /dev/shm
 
+# Align the gateway runtime model with the known-good local fractal sample.
+# This affects only the TCG runner's gateway dispatch model, not KVM code.
+export WVM_GATEWAY_SINGLE_RX=1
+export WVM_GATEWAY_DISABLE_REUSEPORT=1
+export WVM_GATEWAY_USE_RECVFROM=1
+export WVM_GATEWAY_MULTI_QUEUE=0
+
 if ! command -v genisoimage >/dev/null 2>&1; then
   echo "FATAL: genisoimage not found" >&2
   exit 1
@@ -84,24 +91,30 @@ QPATH="$ROOT/wavevm-qemu/build-native:$PATH"
 # === Start 5 gateways (top-down: L2 → L1a/L1b → sidecar_a/sidecar_b) ===
 
 echo "=== Starting L2 gateway (top, full table) ==="
-# L2: listen 19520, upstream 19599 (dummy/none), ctrl 19521
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19520 127.0.0.1 19599 "$ART_DIR/l2_routes.txt" 19521) >"$ART_DIR/gw_l2.log" 2>&1 &
+# Disable learn_route to match the known-good dual-node topology sample.
+# The route tables are static and learning can overwrite the intended chain.
+(env PATH="$QPATH" WVM_GATEWAY_DISABLE_LEARN_ROUTE=1 \
+    stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19520 127.0.0.1 19599 "$ART_DIR/l2_routes.txt" 19521) >"$ART_DIR/gw_l2.log" 2>&1 &
 GL2=$!
 
 echo "=== Starting L1 gateways ==="
 # L1a: listen 19320, upstream L2:19520, ctrl 19321
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19320 127.0.0.1 19520 "$ART_DIR/l1a_routes.txt" 19321) >"$ART_DIR/gw_l1a.log" 2>&1 &
+(env PATH="$QPATH" WVM_GATEWAY_DISABLE_LEARN_ROUTE=1 \
+    stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19320 127.0.0.1 19520 "$ART_DIR/l1a_routes.txt" 19321) >"$ART_DIR/gw_l1a.log" 2>&1 &
 GL1A=$!
 # L1b: listen 19420, upstream L2:19520, ctrl 19421
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19420 127.0.0.1 19520 "$ART_DIR/l1b_routes.txt" 19421) >"$ART_DIR/gw_l1b.log" 2>&1 &
+(env PATH="$QPATH" WVM_GATEWAY_DISABLE_LEARN_ROUTE=1 \
+    stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19420 127.0.0.1 19520 "$ART_DIR/l1b_routes.txt" 19421) >"$ART_DIR/gw_l1b.log" 2>&1 &
 GL1B=$!
 
 echo "=== Starting sidecar gateways ==="
 # Sidecar A: listen 19120, upstream L1a:19320, ctrl 19121
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19120 127.0.0.1 19320 "$ART_DIR/sidecar_a_routes.txt" 19121) >"$ART_DIR/gw_sidecar_a.log" 2>&1 &
+(env PATH="$QPATH" WVM_GATEWAY_DISABLE_LEARN_ROUTE=1 \
+    stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19120 127.0.0.1 19320 "$ART_DIR/sidecar_a_routes.txt" 19121) >"$ART_DIR/gw_sidecar_a.log" 2>&1 &
 GSA=$!
 # Sidecar B: listen 19220, upstream L1b:19420, ctrl 19221
-(env PATH="$QPATH" stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19220 127.0.0.1 19420 "$ART_DIR/sidecar_b_routes.txt" 19221) >"$ART_DIR/gw_sidecar_b.log" 2>&1 &
+(env PATH="$QPATH" WVM_GATEWAY_DISABLE_LEARN_ROUTE=1 \
+    stdbuf -oL -eL "$ROOT/gateway_service/wavevm_gateway" 19220 127.0.0.1 19420 "$ART_DIR/sidecar_b_routes.txt" 19221) >"$ART_DIR/gw_sidecar_b.log" 2>&1 &
 GSB=$!
 
 echo "=== Starting slaves ==="

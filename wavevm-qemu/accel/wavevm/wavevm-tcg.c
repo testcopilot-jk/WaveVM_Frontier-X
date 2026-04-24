@@ -164,4 +164,3 @@ void wvm_tcg_set_state(CPUState *cpu, wvm_tcg_context_t *ctx) {
 }
 
 #endif
-

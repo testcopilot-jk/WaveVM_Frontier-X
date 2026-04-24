@@ -1408,7 +1408,7 @@ int wvm_rpc_call(uint16_t msg_type, void *payload, int len, uint32_t target_id, 
     uint64_t start_total = g_ops->get_time_us();
     uint64_t last_send_time;
     uint64_t current_retry_delay = INITIAL_RETRY_DELAY_US;
-
+    bool is_vcpu_run = (msg_type == MSG_VCPU_RUN);
     // 首次发送
     g_ops->send_packet(buffer, pkt_len, target_id);
     last_send_time = start_total;
@@ -1416,6 +1416,18 @@ int wvm_rpc_call(uint16_t msg_type, void *payload, int len, uint32_t target_id, 
     while (g_ops->check_req_status(rid) != 1) {
         // 喂狗
         g_ops->touch_watchdog();
+
+        if (is_vcpu_run) {
+            if (g_ops->time_diff_us(start_total) > TOTAL_TIMEOUT_US) {
+                if (g_ops->log) {
+                    g_ops->log("[RPC Wait] Type: %d, Target: %d, RID: %llu still inflight",
+                               msg_type, target_id, (unsigned long long)rid);
+                }
+                start_total = g_ops->get_time_us();
+            }
+            usleep(1000);
+            continue;
+        }
 
         // 检查总超时
         if (g_ops->time_diff_us(start_total) > TOTAL_TIMEOUT_US) {

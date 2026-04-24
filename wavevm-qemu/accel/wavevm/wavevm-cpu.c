@@ -23,6 +23,7 @@
 #include "qemu/thread.h"
 #include "qemu/guest-random.h"
 #include "tcg/tcg.h"
+#include "hw/i386/apic_internal.h"
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <netinet/in.h>
@@ -727,6 +728,33 @@ static void wavevm_remote_exec(CPUState *cpu) {
         if (!ap_did_os_sipi[ci]) {
             X86CPU *x86cpu = X86_CPU(cpu);
             CPUState *cs = CPU(x86cpu);
+            APICCommonState *apic = APIC_COMMON(x86cpu->apic_state);
+
+            if (cs->interrupt_request & CPU_INTERRUPT_INIT) {
+                fprintf(stderr, "[WVM-TCG-SIPI] cpu=%d OS INIT pending, reinitializing APIC\n",
+                        cpu->cpu_index);
+                do_cpu_init(x86cpu);
+            }
+
+            /*
+             * TCG does not expose a KVM-style MP state transition here.
+             * After BIOS trampoline, Linux can already have delivered the
+             * second SIPI into the APIC model without leaving
+             * CPU_INTERRUPT_SIPI set on the CPU. Reconstruct that edge from
+             * the APIC wait state so the parked AP can continue into the OS
+             * trampoline instead of sleeping forever.
+             */
+            if (!(cs->interrupt_request & CPU_INTERRUPT_SIPI)) {
+                if (apic && !apic->wait_for_sipi) {
+                    fprintf(stderr, "[WVM-TCG-SIPI] cpu=%d inferring OS SIPI from APIC state\n",
+                            cpu->cpu_index);
+                    cs->interrupt_request |= CPU_INTERRUPT_SIPI;
+                } else {
+                    cs->interrupt_request &= ~CPU_INTERRUPT_POLL;
+                    cpu->halted = 1;
+                    return;
+                }
+            }
 
             /* Check for OS-level SIPI (Linux sends INIT+SIPI to APs) */
             if (cs->interrupt_request & CPU_INTERRUPT_SIPI) {
@@ -1211,7 +1239,16 @@ static void wavevm_remote_exec(CPUState *cpu) {
 
     // 4. 反序列化 CPU 状态
     if (ack.mode_tcg) {
+        /*
+         * TCG remote execution returns architectural state plus the
+         * cpu_exec() stop reason.  Restore both here; otherwise the
+         * master just re-dispatches the same post-trampoline state
+         * forever because cpu->halted/exception_index stay stale.
+         */
         wvm_tcg_set_state(cpu, &ack.ctx.tcg);
+        cpu->exception_index = ack.ctx.tcg.exit_reason;
+        cpu->halted = (ack.ctx.tcg.exit_reason == EXCP_HLT ||
+                       ack.ctx.tcg.exit_reason == EXCP_HALTED);
     } else {
         struct kvm_regs kregs;
         struct kvm_sregs ksregs;

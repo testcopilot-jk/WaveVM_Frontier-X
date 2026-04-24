@@ -484,6 +484,9 @@ int wavevm_slave_submit_cpu_run(const struct wvm_ipc_cpu_run_req *req,
                                 struct wvm_ipc_cpu_run_ack *ack)
 {
     pthread_once(&g_slave_exec_once, wavevm_slave_exec_sync_init);
+    fprintf(stderr, "[WaveVM-Slave] submit cpu_run mode_tcg=%u slave=%u vcpu=%u\n",
+            (unsigned)req->mode_tcg, (unsigned)req->slave_id,
+            (unsigned)req->vcpu_index);
 
     qemu_mutex_lock(&g_slave_exec_lock);
     while (g_slave_exec_pending) {
@@ -1016,10 +1019,11 @@ static void *wavevm_slave_net_thread(void *arg) {
                         local_req.slave_id = ntohl(hdr->slave_id);
 
                         if (hdr->mode_tcg) {
-                            if (actual_payload < (int)sizeof(wvm_tcg_context_t)) {
-                                continue;
-                            }
-                            memcpy(&local_req.ctx.tcg, payload, sizeof(wvm_tcg_context_t));
+                            size_t copy_len = actual_payload < (int)sizeof(wvm_tcg_context_t)
+                                            ? (size_t)actual_payload
+                                            : sizeof(wvm_tcg_context_t);
+                            memset(&local_req.ctx.tcg, 0, sizeof(wvm_tcg_context_t));
+                            memcpy(&local_req.ctx.tcg, payload, copy_len);
                         } else {
                             if (actual_payload < (int)sizeof(wvm_kvm_context_t)) {
                                 continue;
@@ -1050,6 +1054,12 @@ static void *wavevm_slave_net_thread(void *arg) {
                          * This ensures IPI delivery (smp_call_function / flush_tlb_all)
                          * works correctly because vCPU exit and message processing
                          * are serialized on the same thread. */
+                        fprintf(stderr,
+                                "[WaveVM-Slave] recv MSG_VCPU_RUN mode_tcg=%u target=%u rid=%llu len=%d\n",
+                                (unsigned)hdr->mode_tcg,
+                                (unsigned)ntohl(hdr->target_id),
+                                (unsigned long long)WVM_NTOHLL(hdr->req_id),
+                                actual_payload);
                         struct wvm_ipc_cpu_run_ack full_ack;
                         memset(&full_ack, 0, sizeof(full_ack));
                         wavevm_slave_submit_cpu_run(req, &full_ack);
