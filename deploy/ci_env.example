@@ -6,16 +6,16 @@ REDACTED
 -----END OPENSSH PRIVATE KEY-----'
 # export WAVEVM_BB_KEY_020_PATH="$HOME/.ssh/bb_key_020"
 
-export WAVEVM_BB_KEY_019='-----BEGIN OPENSSH PRIVATE KEY-----
+export WAVEVM_BB_KEY_021='-----BEGIN OPENSSH PRIVATE KEY-----
 REDACTED
 -----END OPENSSH PRIVATE KEY-----'
-# export WAVEVM_BB_KEY_019_PATH="$HOME/.ssh/bb_key_019"
+# export WAVEVM_BB_KEY_021_PATH="$HOME/.ssh/bb_key_021"
 
 # Optional CI tokens / auth keys used by helper scripts or CI contexts.
 export WAVEVM_CIRCLECI_TOKEN_020='REDACTED'
-export WAVEVM_CIRCLECI_TOKEN_019='REDACTED'
+export WAVEVM_CIRCLECI_TOKEN_021='REDACTED'
 export WAVEVM_TS_AUTHKEY='REDACTED'
 
 # Optional repo paths used by deploy/ci_trigger.sh
 # export WAVEVM_REPO_020_DIR="/workspaces/wavevm-test-020"
-# export WAVEVM_REPO_019_DIR="/workspaces/wavevm-test-019"
+# export WAVEVM_REPO_021_DIR="/workspaces/wavevm-test-021"

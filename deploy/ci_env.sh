@@ -30,7 +30,7 @@ write_key_from_env_or_path() {
 }
 
 write_key_from_env_or_path WAVEVM_BB_KEY_020 WAVEVM_BB_KEY_020_PATH "${SSH_DIR}/bb_key_020"
-write_key_from_env_or_path WAVEVM_BB_KEY_019 WAVEVM_BB_KEY_019_PATH "${SSH_DIR}/bb_key_019"
+write_key_from_env_or_path WAVEVM_BB_KEY_021 WAVEVM_BB_KEY_021_PATH "${SSH_DIR}/bb_key_021"
 
 cat > "${SSH_DIR}/config" <<'EOF'
 Host bb-jktest020
@@ -40,15 +40,15 @@ Host bb-jktest020
   IdentitiesOnly yes
   StrictHostKeyChecking no
 
-Host bb-jktest019
+Host bb-jktest021
   HostName bitbucket.org
   User git
-  IdentityFile ~/.ssh/bb_key_019
+  IdentityFile ~/.ssh/bb_key_021
   IdentitiesOnly yes
   StrictHostKeyChecking no
 EOF
 chmod 600 "${SSH_DIR}/config"
 
 echo "[INFO] Wrote SSH config to ${SSH_DIR}/config"
-echo "[INFO] Wrote Bitbucket keys to ${SSH_DIR}/bb_key_020 and ${SSH_DIR}/bb_key_019"
+echo "[INFO] Wrote Bitbucket keys to ${SSH_DIR}/bb_key_020 and ${SSH_DIR}/bb_key_021"
 echo "[INFO] Use: export GIT_SSH_COMMAND='ssh -F ${SSH_DIR}/config'"

@@ -4,14 +4,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 REPO_020_DIR="${WAVEVM_REPO_020_DIR:-${ROOT_DIR}/../wavevm-test-020}"
-REPO_019_DIR="${WAVEVM_REPO_019_DIR:-${ROOT_DIR}/../wavevm-test-019}"
+REPO_021_DIR="${WAVEVM_REPO_021_DIR:-${ROOT_DIR}/../wavevm-test-021}"
 
 if [[ ! -d "${REPO_020_DIR}/.git" ]]; then
   echo "[ERROR] 020 repo not found: ${REPO_020_DIR}" >&2
   exit 1
 fi
-if [[ ! -d "${REPO_019_DIR}/.git" ]]; then
-  echo "[ERROR] 019 repo not found: ${REPO_019_DIR}" >&2
+if [[ ! -d "${REPO_021_DIR}/.git" ]]; then
+  echo "[ERROR] 021 repo not found: ${REPO_021_DIR}" >&2
   exit 1
 fi
 
@@ -35,7 +35,7 @@ push_empty_commit() {
 echo "[INFO] triggering 020 pipeline from ${REPO_020_DIR}"
 push_empty_commit "${REPO_020_DIR}" "ci: trigger pipeline for 020"
 
-echo "[INFO] triggering 019 pipeline from ${REPO_019_DIR}"
-push_empty_commit "${REPO_019_DIR}" "ci: trigger pipeline for 019"
+echo "[INFO] triggering 021 pipeline from ${REPO_021_DIR}"
+push_empty_commit "${REPO_021_DIR}" "ci: trigger pipeline for 021"
 
 echo "[INFO] done"
